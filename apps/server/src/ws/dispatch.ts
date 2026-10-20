@@ -454,9 +454,8 @@ async function captureMessage(deps: DispatchDeps, session: Session, thread: Thre
           const rows = searchLinks(deps.db, query, 8);
           confirmation = rows.length ? `Saved links:\n${rows.map((row) => `• ${row.title ?? row.url} — ${row.url}${row.note ? ` · ${row.note}` : ""} [${row.id}]`).join("\n")}` : `No saved links matched${query ? ` “${query}”` : ""}.`;
         } else {
-          const rows = listAgentMemories(deps.db, { scope: "global_user", limit: 50 });
-          const matching = query ? rows.filter((row) => `${row.content} ${row.tags ?? ""}`.toLowerCase().includes(query.toLowerCase())) : rows;
-          confirmation = matching.length ? `Saved memories:\n${matching.slice(0, 8).map((row) => `• ${row.content} [${row.id}]`).join("\n")}` : `No saved memories matched${query ? ` “${query}”` : ""}.`;
+          const matching = listAgentMemories(deps.db, { scope: "global_user", limit: 8, query });
+          confirmation = matching.length ? `Saved memories:\n${matching.map((row) => `• ${row.content} [${row.id}]`).join("\n")}` : `No saved memories matched${query ? ` “${query}”` : ""}.`;
         }
       }
     } else if (memory) {

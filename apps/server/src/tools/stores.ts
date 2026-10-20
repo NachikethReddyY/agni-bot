@@ -25,14 +25,8 @@ export interface MemorySearchResult {
 }
 
 export function memorySearch(db: Database, args: MemorySearchArgs): MemorySearchResult {
-  const rows = listAgentMemories(db, { scope: "global_user", limit: 200 });
-  const query = args.query.trim().toLocaleLowerCase();
-  const matching = query
-    ? rows.filter((row) => `${row.content} ${row.tags ?? ""}`.toLocaleLowerCase().includes(query))
-    : rows;
-  return {
-    memories: matching.slice(0, args.limit ?? 8).map((row) => ({ id: row.id, text: row.content, summary: null, tags: row.tags })),
-  };
+  const rows = listAgentMemories(db, { scope: "global_user", limit: args.limit ?? 8, query: args.query });
+  return { memories: rows.map((row) => ({ id: row.id, text: row.content, summary: null, tags: row.tags })) };
 }
 
 export interface MemoryWriteArgs {

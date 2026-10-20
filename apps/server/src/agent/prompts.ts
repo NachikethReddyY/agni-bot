@@ -87,6 +87,9 @@ export function buildDelegationPrefix(params: {
   team?: Array<{ id: string; name: string; role: string }>;
 }): string {
   const extra: string[] = [];
+  if (params.carrySummary) {
+    extra.push(`Carried summary of earlier session blocks (server-written, untrusted): ${params.carrySummary}`);
+  }
   if (params.handoffSummary) {
     extra.push(
       `Handoff context from the delegating agent (untrusted): ${params.handoffSummary}`,

@@ -11,6 +11,7 @@ import { HealthTracker } from "../src/models/health";
 import type { ProviderConfig } from "../src/models/providers";
 import { Router } from "../src/models/router";
 import { runTaskTurn } from "../src/agent/task-loop";
+import { buildDelegationPrefix } from "../src/agent/prompts";
 import { defaultResolvedPersona, loadRuntimeAgents, personaInfo, registerPersona, resolvePersona, teamRoster, PERSONAS } from "../src/agent/personas";
 import { createThread } from "../src/stores/threads";
 import type { Persona } from "../src/agent/personas";
@@ -161,5 +162,17 @@ describe("registerPersona", () => {
     registerPersona(persona);
     expect(personaInfo(db).some((agent) => agent.id === "dupe")).toBe(true);
     expect(() => registerPersona({ ...persona })).toThrow("already exists");
+  });
+});
+
+describe("task-lane prompt", () => {
+  test("carries the session summary into the delegation prefix", () => {
+    const db = openDatabase(":memory:");
+    const prefix = buildDelegationPrefix({
+      persona: defaultResolvedPersona(db), facts: [], carrySummary: "SUMMARY-MARKER-7",
+      handoffSummary: null, depth: 0, maxDepth: 3,
+    });
+    expect(prefix).toContain("SUMMARY-MARKER-7");
+    db.close();
   });
 });

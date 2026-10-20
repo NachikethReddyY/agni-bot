@@ -46,12 +46,8 @@ export interface RecallFactResult { facts: { id: string; fact: string; summary: 
 export function recallFact(db: Database, args: RecallFactArgs): RecallFactResult {
   const limit = clampLimit(args.limit);
   const scope = args.scope ?? "global_user";
-  const rows = listAgentMemories(db, { scope, agentID: args.agentID ?? null, limit: 200 });
-  const query = args.query?.trim().toLocaleLowerCase();
-  const matching = query
-    ? rows.filter((row) => `${row.content} ${row.tags ?? ""}`.toLocaleLowerCase().includes(query))
-    : rows;
-  return { facts: matching.slice(0, limit).map((row) => ({ id: row.id, fact: row.content, summary: null, tags: row.tags })) };
+  const rows = listAgentMemories(db, { scope, agentID: args.agentID ?? null, limit, query: args.query });
+  return { facts: rows.map((row) => ({ id: row.id, fact: row.content, summary: null, tags: row.tags })) };
 }
 
 export interface ForgetFactArgs { id: string }

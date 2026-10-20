@@ -8,6 +8,7 @@ import {
   rememberFact,
   updateFact,
 } from "../src/tools/facts";
+import { memorySearch } from "../src/tools/stores";
 
 let db: Database | undefined;
 afterEach(() => { db?.close(); db = undefined; });
@@ -62,5 +63,22 @@ describe("durable facts", () => {
     db = openDatabase(":memory:");
     expect(() => rememberFact(db!, { fact: "" })).toThrow();
     expect(() => rememberFact(db!, { fact: "x".repeat(9_000) })).toThrow();
+  });
+});
+
+describe("recall beyond the newest 200", () => {
+  test("recall_fact and memory search still find the oldest of 201 facts", () => {
+    db = openDatabase(":memory:");
+    rememberFact(db, { fact: "oldest needle fact" });
+    for (let i = 0; i < 200; i++) rememberFact(db, { fact: `filler ${i}` });
+    expect(recallFact(db, { query: "needle" }).facts.map((row) => row.fact)).toEqual(["oldest needle fact"]);
+    expect(memorySearch(db, { query: "needle" }).memories.map((row) => row.text)).toEqual(["oldest needle fact"]);
+  });
+
+  test("query wildcards are matched literally", () => {
+    db = openDatabase(":memory:");
+    rememberFact(db, { fact: "battery at 100% now" });
+    rememberFact(db, { fact: "battery at 1000 now" });
+    expect(recallFact(db, { query: "100%" }).facts.map((row) => row.fact)).toEqual(["battery at 100% now"]);
   });
 });

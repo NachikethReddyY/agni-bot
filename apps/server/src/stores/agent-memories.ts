@@ -153,23 +153,21 @@ export function getAgentMemoryByKey(
 
 export function listAgentMemories(
   db: Database,
-  input: { scope?: string; agentID?: string | null; limit?: number } = {},
+  input: { scope?: string; agentID?: string | null; limit?: number; query?: string } = {},
 ): AgentMemoryRow[] {
   const scope = input.scope ?? "agent";
   const agentID = input.agentID === undefined ? null : input.agentID;
   const limit = clampLimit(input.limit);
-  if (agentID === null) {
-    return db
-      .query<AgentMemoryRow, [string, number]>(
-        "SELECT id, scope, agent_id, type, key_slug, content, tags, importance, created_at, updated_at FROM agent_memories WHERE scope = ? AND agent_id IS NULL ORDER BY updated_at DESC, rowid DESC LIMIT ?",
-      )
-      .all(scope, limit);
-  }
+  const query = input.query?.trim();
+  // Match in SQL so the limit applies to matches, not to the newest rows.
+  const params: (string | number)[] = agentID === null ? [scope] : [scope, agentID];
+  if (query) params.push(`%${query.replace(/[\\%_]/g, "\\$&")}%`);
+  params.push(limit);
   return db
-    .query<AgentMemoryRow, [string, string, number]>(
-      "SELECT id, scope, agent_id, type, key_slug, content, tags, importance, created_at, updated_at FROM agent_memories WHERE scope = ? AND agent_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT ?",
+    .query<AgentMemoryRow, (string | number)[]>(
+      `SELECT id, scope, agent_id, type, key_slug, content, tags, importance, created_at, updated_at FROM agent_memories WHERE scope = ? AND agent_id ${agentID === null ? "IS NULL" : "= ?"}${query ? " AND (content || ' ' || COALESCE(tags, '')) LIKE ? ESCAPE '\\'" : ""} ORDER BY updated_at DESC, rowid DESC LIMIT ?`,
     )
-    .all(scope, agentID, limit);
+    .all(...params);
 }
 
 export function deleteAgentMemory(db: Database, id: string): boolean {
