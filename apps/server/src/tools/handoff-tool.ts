@@ -19,7 +19,8 @@ import type { TaskTurnSettings } from "../agent/task-loop";
 import type { Router } from "../models/router";
 import type { GuardrailState } from "../agent/guardrails";
 import { handoff, type HandoffDeps, type HandoffRequest } from "../agent/handoff";
-import { teamRoster } from "../agent/personas";
+import { teamRoster, resolvePersona } from "../agent/personas";
+import { DEFAULT_VISIBILITY, redactForCaller } from "../agent/visibility";
 import { appendChannelMessage, ensureDMChannel } from "../stores/channels";
 
 const objectSchema = (properties: Record<string, unknown>, required: string[]): Record<string, unknown> => ({
@@ -153,13 +154,20 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
       if (result.text.trim()) {
         post("agent", result.agentID, result.text, "normal", undefined, `dm:${result.agentID}`);
       }
+      // The one place the specialist's words cross into another agent's
+      // context, so the one place visibility is applied. A private agent
+      // gives the caller a receipt, not its answer.
+      const visibility = resolvePersona(deps.db, toAgentID)?.visibility ?? DEFAULT_VISIBILITY;
+      const visible = redactForCaller(result.text, toAgentID, deps.currentAgentID, visibility);
       return {
         childTurnID: result.childTurnID,
         agentID: result.agentID,
         agentName: nameOf(result.agentID),
         depth: result.depth,
         stopReason: result.stopReason,
-        text: result.text,
+        text: visible.text,
+        visibility: visible.mode,
+        redacted: visible.redacted,
       };
     },
   });

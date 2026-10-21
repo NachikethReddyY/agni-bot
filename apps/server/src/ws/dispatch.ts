@@ -611,6 +611,9 @@ function taskSnapshot(task: ReturnType<typeof listTasks>[number]): TaskInfo {
     delegateState,
     jobId: task.job_id,
     result: task.result,
+    // The owner sees every result; the flag is here so a client can tell
+    // "no result yet" from "there is a result you may not see".
+    resultRedacted: false,
   };
 }
 

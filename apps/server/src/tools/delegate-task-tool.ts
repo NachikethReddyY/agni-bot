@@ -10,7 +10,8 @@
 import type { Database } from "bun:sqlite";
 import type { ServerFrameBody } from "@agni/protocol";
 import type { ToolRegistry } from "./registry";
-import { teamRoster } from "../agent/personas";
+import { teamRoster, resolvePersona } from "../agent/personas";
+import { DEFAULT_VISIBILITY, redactStoredForCaller } from "../agent/visibility";
 import {
   createDelegationTask,
   setDelegationJob,
@@ -88,7 +89,7 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
         if (args.mode === "wait") {
           const waited = await waitForDelegation(deps.db, existing.id, waitBudget(args.timeoutMs), ctx.signal);
           return {
-            ...taskView(waited.task),
+            ...taskView(waited.task, deps),
             jobID: existing.job_id,
             duplicate: true,
             waitTimedOut: waited.timedOut,
@@ -135,7 +136,7 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
       if (args.mode === "wait") {
         const waited = await waitForDelegation(deps.db, task.id, waitBudget(args.timeoutMs), ctx.signal);
         return {
-          ...taskView(waited.task),
+          ...taskView(waited.task, deps),
           jobID: job.id,
           waitTimedOut: waited.timedOut,
           message: waited.timedOut
@@ -160,13 +161,20 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
 }
 
 /** A delegated task as the model sees it. */
-function taskView(task: TaskRow): Record<string, unknown> {
+function taskView(task: TaskRow, deps: DelegateTaskToolDeps): Record<string, unknown> {
+  // The result of a private agent is a receipt, not text — the same rule the
+  // synchronous handoff applies, so the async path cannot be the weak one.
+  const owner = task.owner_agent_id ?? "";
+  const visibility = owner ? resolvePersona(deps.db, owner)?.visibility ?? DEFAULT_VISIBILITY : DEFAULT_VISIBILITY;
+  const result = redactStoredForCaller(task.result, owner, deps.currentAgentID, visibility);
   return {
     taskID: task.id,
     agentID: task.owner_agent_id,
     goal: task.title,
     state: task.delegate_state,
-    result: task.result,
+    result: result.value,
+    resultRedacted: result.redacted,
+    visibility,
     terminal: task.delegate_state === "done" || task.delegate_state === "failed",
     jobID: task.job_id,
     updatedAt: task.updated_at,
@@ -226,7 +234,7 @@ function registerTaskStatusTool(registry: ToolRegistry, deps: DelegateTaskToolDe
       const taskID = String(args.taskID ?? "").trim();
       const task = getTask(deps.db, taskID);
       if (!task) throw new Error(`no task ${taskID}`);
-      return taskView(task);
+      return taskView(task, deps);
     },
   });
 }
@@ -248,7 +256,7 @@ function registerDelegateWaitTool(registry: ToolRegistry, deps: DelegateTaskTool
     handler: async (args: Record<string, unknown>, ctx) => {
       const taskID = String(args.taskID ?? "").trim();
       const waited = await waitForDelegation(deps.db, taskID, waitBudget(args.timeoutMs), ctx.signal);
-      return { ...taskView(waited.task), waitTimedOut: waited.timedOut };
+      return { ...taskView(waited.task, deps), waitTimedOut: waited.timedOut };
     },
   });
 }
@@ -267,7 +275,7 @@ function registerTaskCancelTool(registry: ToolRegistry, deps: DelegateTaskToolDe
       const taskID = String(args.taskID ?? "").trim();
       const task = cancelDelegation(deps.db, taskID);
       if (!task) throw new Error(`no task ${taskID}`);
-      return { ...taskView(task), cancelled: task.delegate_state === "failed" };
+      return { ...taskView(task, deps), cancelled: task.delegate_state === "failed" };
     },
   });
 }

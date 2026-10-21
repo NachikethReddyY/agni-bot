@@ -195,7 +195,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // Agent-to-agent guardrails: root turn is depth 1; a delegated child turn
   // inherits the parent's state via run.guardrail. Facts ride in the prefix.
   let guardrail = run.guardrail ?? rootGuardrail(persona.id);
-  const facts = run.facts === false ? [] : recallFact(db, { limit: 6 }).facts.map((row) => row.fact);
+  const facts = run.facts === false ? [] : recallFact(db, { limit: 6, callerAgentID: persona.id }).facts.map((row) => row.fact);
   const channelSummary = run.channelID ? getChannelSummary(db, run.channelID)?.summary : null;
   // ASM-002: a short, always-present note of the current topic. It rides in
   // the (semi-static) anchor slot, not the dynamic tail, so it does not break

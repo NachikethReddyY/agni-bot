@@ -13,6 +13,7 @@ import { Router } from "../src/models/router";
 import { runTaskTurn } from "../src/agent/task-loop";
 import { buildDelegationPrefix } from "../src/agent/prompts";
 import { defaultResolvedPersona, loadRuntimeAgents, personaInfo, registerPersona, resolvePersona, teamRoster, PERSONAS } from "../src/agent/personas";
+import { updateAgent } from "../src/tools/update-agent-tool";
 import { createThread } from "../src/stores/threads";
 import type { Persona } from "../src/agent/personas";
 
@@ -77,6 +78,9 @@ describe("an agent creating its own agent", () => {
     expect(db.query<{ role: string }, []>("SELECT role FROM agents WHERE id = 'friday'").get()?.role).toBe("agent");
     // DEL-007: new agents get user-scope memory read-only by default.
     expect(db.query<{ memory_scope: string }, []>("SELECT memory_scope FROM agents WHERE id = 'friday'").get()?.memory_scope).toBe("read");
+    // D-01: and they start at `summary` — the caller learns that it finished
+    // and roughly what it found, not its full working.
+    expect(db.query<{ visibility: string }, []>("SELECT visibility FROM agents WHERE id = 'friday'").get()?.visibility).toBe("summary");
     // In the roster the app receives, and resolvable as a persona.
     const roster = personaInfo(db);
     expect(roster.some((agent) => agent.id === "friday")).toBe(true);
@@ -90,8 +94,7 @@ describe("an agent creating its own agent", () => {
     expect((update?.agents as Array<{ id: string }>).some((agent) => agent.id === "friday")).toBe(true);
   });
 
-  test("unknown tools are dropped and a sensible default set is applied", async () => {
-    db = openDatabase(":memory:");
+  test("unknown tools are dropped and a sensible default set is applied", async () => {    db = openDatabase(":memory:");
     const persona = defaultResolvedPersona(db);
     const thread = createThread(db, persona.id);
     const router = createAgentRouter({
@@ -158,6 +161,21 @@ describe("an agent creating its own agent", () => {
 });
 
 describe("registerPersona", () => {
+  test("the shipped team is shared, and the owner can change it", () => {
+    db = openDatabase(":memory:");
+    // The executive assistant is the owner's proxy: it keeps the full answer
+    // it synthesizes from.
+    expect(resolvePersona(db, "researcher")?.visibility).toBe("shared");
+    expect(resolvePersona(db, "ea")?.visibility).toBe("shared");
+
+    // The owner can make an agent private.
+    const updated = updateAgent(db, { agentID: "researcher", visibility: "private" });
+    expect(updated?.visibility).toBe("private");
+    expect(resolvePersona(db, "researcher")?.visibility).toBe("private");
+    // Put it back: the persona is process-wide state.
+    updateAgent(db, { agentID: "researcher", visibility: "shared" });
+  });
+
   test("adds to the roster and refuses a duplicate id", () => {
     db = openDatabase(":memory:");
     const persona: Persona = { id: "dupe", name: "Dupe", color: "#ffffff", role: "r", systemPromptTemplate: "p", tools: [] };

@@ -105,7 +105,7 @@ accountLabel?, error?, connectedAt?}`.
 | `secret.cancel` | `{requestID, reason}` | The prompt was resolved, expired, cancelled, or its turn stopped. Replayable. |
 | `form.request` | `{requestID, question, options?}` | Ad-hoc question to the user. |
 | `notify` | `{title, body, sound?, threadID?}` | Push-worthy event; Mac opens the referenced thread when clicked. |
-| `agents.update` | `{agents: [{id, name, color?, model?, role?, tools?, onboarded?}]}` | Roster snapshot. `onboarded` is set once the agent has been named, which settles the "what should I call you?" prompt. `role` is what the agent is for, in the owner's words ("inbox manager"). |
+| `agents.update` | `{agents: [{id, name, color?, model?, role?, tools?, onboarded?, visibility?}]}` | Roster snapshot. `onboarded` is set once the agent has been named, which settles the "what should I call you?" prompt. `role` is what the agent is for, in the owner's words ("inbox manager"). `visibility` is what other agents may see of that agent's work: `private` (a receipt only), `summary` (one line) or `shared` (full text). |
 | `thread.list.ok` | `{threads: [{id, agentID, title?, updatedAt}]}` | Answer to `thread.list`; addressed to the requester. |
 | `thread.history.ok` | `{threadID, title?, messages: [{id, role, text, createdAt, turnID?}]}` | Answer to `thread.history`; addressed to the requester. |
 | `conversation.ok` | `{conversationID, agentID, sessionID}` | Answer to `conversation.open`; `sessionID`: the active block, `""` before the first block. Addressed, not replayed. |
@@ -113,7 +113,7 @@ accountLabel?, error?, connectedAt?}`.
 | `conversation.history.ok` | `{conversationID, messages: [{id, role, text, createdAt, turnID?, sessionID?}]}` | Answer to `conversation.history`; addressed to the requester. Clients render a session divider wherever consecutive `sessionID`s differ. |
 | `thread.export.ok` | `{conversationID, url, token, records, createdAt}` | Answer to `thread.export`; addressed to the requester, not replayed. `url` is absolute and served by this daemon at `GET /share/<token>`; the token is the only access control on the file, so it is never logged or replayed. |
 | `job.list.ok` | `{jobs: [...]}` | Answer to `job.list`, `job.set`, or `job.delete`; addressed to the requester. |
-| `task.list.ok` | `{tasks: [...]}` | Task snapshots, including due date, priority, status, and snooze time. |
+| `task.list.ok` | `{tasks: [...]}` | Task snapshots, including due date, priority, status, and snooze time. A delegation task also carries `ownerAgentId`, `origin`, `delegateState`, `jobId`, `result` and `resultRedacted`. The owner sees every result; `resultRedacted` is true when a result exists that this viewer may not see. |
 | `task.update.ok` | `{task: {...}}` | Updated task snapshot after a persisted state change. |
 | `provider.add.ok` | `{providers: [...]}` | Provider metadata after adding a key; contains no credentials. |
 | `presence` | `{state}` | `online \| offline`. |

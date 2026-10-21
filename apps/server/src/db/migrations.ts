@@ -586,4 +586,17 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_agents_memory_scope ON agents(memory_scope);
     `,
   },
+  {
+    id: 21,
+    name: "agents_visibility_defaults",
+    sql: `
+      -- RTE-004: visibility becomes real. The shipped team is \`shared\`: the
+      -- executive assistant is the owner's proxy, so it keeps the full answer
+      -- it synthesizes from. A new agent created at runtime starts at
+      -- \`summary\` (see create_agent) until the owner says otherwise.
+      UPDATE agents SET visibility = 'shared'
+       WHERE id IN ('ea', 'agni', 'researcher', 'coder', 'analyst')
+         AND visibility = 'summary';
+    `,
+  },
 ];

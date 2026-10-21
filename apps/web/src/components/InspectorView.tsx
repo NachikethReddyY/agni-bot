@@ -229,7 +229,6 @@ function TaskRow({ task }: { task: TaskInfo }) {
     .join(" · ");
   const cancellable =
     task.delegateState === "queued" || task.delegateState === "running" || task.delegateState === "needs_input";
-
   return (
     <div className="task-row">
       <div className="task-main">

@@ -14,6 +14,7 @@ import type { Database } from "bun:sqlite";
 import type { ServerFrameBody } from "@agni/protocol";
 import type { ToolRegistry, ToolDefinition } from "./registry";
 import { getPersona, personaInfo, mentionRoster, updatePersona } from "../agent/personas";
+import type { Visibility } from "../agent/visibility";
 
 export interface UpdateAgentDeps {
   db: Database;
@@ -27,6 +28,8 @@ export interface UpdateAgentArgs {
   role?: string;
   /** The system prompt, as a template: `{name}` and `{user}` are substituted. */
   prompt?: string;
+  /** What other agents may see of this agent's work. */
+  visibility?: Visibility;
 }
 
 export interface UpdateAgentResult {
@@ -34,6 +37,7 @@ export interface UpdateAgentResult {
   name: string;
   role: string;
   prompt: string;
+  visibility: Visibility;
 }
 
 export function updateAgent(db: Database, args: UpdateAgentArgs): UpdateAgentResult {
@@ -43,6 +47,7 @@ export function updateAgent(db: Database, args: UpdateAgentArgs): UpdateAgentRes
   const updated = updatePersona(db, id, {
     ...(args.role === undefined ? {} : { role: args.role }),
     ...(args.prompt === undefined ? {} : { prompt: args.prompt }),
+    ...(args.visibility === undefined ? {} : { visibility: args.visibility }),
   });
   if (!updated) throw new Error(`no agent with id "${id}"`);
   return updated;
@@ -67,6 +72,7 @@ export function createUpdateAgentTool(deps: UpdateAgentDeps): ToolDefinition<Upd
       agent_id: stringProp,
       role: { type: "string", minLength: 1, maxLength: 500 },
       prompt: { type: "string", minLength: 1, maxLength: 4_000 },
+      visibility: { type: "string", enum: ["private", "summary", "shared"], description: "What other agents may see of this agent's work." },
     }, ["agent_id"]),
     timeoutMs: 2_000,
     handler: async (args) => {

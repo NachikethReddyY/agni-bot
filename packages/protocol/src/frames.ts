@@ -50,6 +50,11 @@ export const AgentInfoSchema = z.object({
   onboarded: z.boolean().optional(),
   /** Hidden from the sidebar, but still addressable as `@id` / `@name`. */
   hidden: z.boolean().optional(),
+  /**
+   * What the executive assistant may see of this agent's work:
+   * `private` (a receipt only), `summary` (one line) or `shared` (full text).
+   */
+  visibility: z.enum(["private", "summary", "shared"]).optional(),
 });
 export type AgentInfo = z.infer<typeof AgentInfoSchema>;
 
@@ -125,6 +130,11 @@ export const TaskInfoSchema = z.object({
   delegateState: DelegateStateSchema.optional(),
   jobId: z.string().nullable().optional(),
   result: z.string().nullable().optional(),
+  /**
+   * True when the result exists but the viewer may not see it (the owning
+   * agent is private to the caller). The owner always sees the full result.
+   */
+  resultRedacted: z.boolean().optional(),
 });
 export type TaskInfo = z.infer<typeof TaskInfoSchema>;
 

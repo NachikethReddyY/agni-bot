@@ -47,6 +47,14 @@ export function SidebarView() {
         ) : (
           agents.map((agent) => {
             const selected = snapshot.conversation.agentID === agent.id;
+            // A private agent is worth saying out loud: other agents see a
+            // receipt for its work, not the work itself.
+            const visibilityNote =
+              agent.visibility === "private"
+                ? " · private"
+                : agent.visibility === "summary"
+                  ? " · summary"
+                  : "";
             return (
               <button
                 type="button"
@@ -55,11 +63,19 @@ export function SidebarView() {
                 onClick={() => model.selectAgent(agent)}
                 aria-label={`Open ${agent.name} chat`}
                 aria-current={selected ? "true" : undefined}
+                title={
+                  agent.visibility
+                    ? `${agent.name} — other agents see ${agent.visibility} of its work`
+                    : undefined
+                }
               >
                 <SidebarAgentBadge agent={agent} size={36} />
                 <span className="sidebar-row-text">
                   <span className="sidebar-row-title">{agent.name}</span>
-                  <span className="sidebar-row-subtitle">{agent.role ?? agent.model ?? "Assistant"}</span>
+                  <span className="sidebar-row-subtitle">
+                    {agent.role ?? agent.model ?? "Assistant"}
+                    {visibilityNote}
+                  </span>
                 </span>
                 {model.unreadBlocks(agent.id) ? <span className="unread-dot" aria-label="Unread" /> : null}
               </button>

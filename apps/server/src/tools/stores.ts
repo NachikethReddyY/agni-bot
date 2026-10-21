@@ -18,6 +18,8 @@ import { fetchPage } from "./fetch-url";
 export interface MemorySearchArgs {
   query: string;
   limit?: number;
+  /** The agent asking. Scope and visibility are enforced against it. */
+  callerAgentID?: string | null;
 }
 
 export interface MemorySearchResult {
@@ -25,7 +27,12 @@ export interface MemorySearchResult {
 }
 
 export function memorySearch(db: Database, args: MemorySearchArgs): MemorySearchResult {
-  const rows = listAgentMemories(db, { scope: "global_user", limit: args.limit ?? 8, query: args.query });
+  const rows = listAgentMemories(db, {
+    scope: "global_user",
+    limit: args.limit ?? 8,
+    query: args.query,
+    callerAgentID: args.callerAgentID ?? null,
+  });
   return { memories: rows.map((row) => ({ id: row.id, text: row.content, summary: null, tags: row.tags })) };
 }
 

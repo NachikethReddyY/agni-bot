@@ -44,6 +44,27 @@ export interface AgentMemoryInput {
   content: string;
   tags?: string[];
   importance?: number;
+  /** What kind of item this is (`fact` by default). */
+  kind?: string;
+  /**
+   * Who may read this item: `shared` (any agent with scope access),
+   * `summary` (readable, but shown as a one-liner) or `private` (only the
+   * owning agent).
+   */
+  visibility?: string;
+  /** Where the item came from: `user`, `agent`, `tool`, `web`, … */
+  source?: string;
+  /** How sure the writer is, 0..1. */
+  confidence?: number;
+  /** How much this item matters for ranking, 0..1. */
+  salience?: number;
+  /** The session block this item was derived from. */
+  sourceBlockID?: string | null;
+  /** The turns this item was derived from. */
+  sourceTurnIDs?: string[] | null;
+  /** Validity window for temporal facts. */
+  validFrom?: string | null;
+  validTo?: string | null;
 }
 
 function slugify(value: string): string {
@@ -82,6 +103,16 @@ export function normalizeTags(tags: string[] | undefined): string | null {
 function clampImportance(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
+}
+
+function clampConfidence(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 1;
+  return Math.max(0, Math.min(1, value));
+}
+
+/** Only the three known visibilities; anything else is `shared`. */
+export function normalizeMemoryVisibility(value: string | null | undefined): string {
+  return value === "private" || value === "summary" ? value : "shared";
 }
 
 export function putAgentMemory(db: Database, input: AgentMemoryInput): AgentMemoryRow {
@@ -135,19 +166,19 @@ export function putAgentMemory(db: Database, input: AgentMemoryInput): AgentMemo
     importance,
     created_at: timestamp,
     updated_at: timestamp,
-    kind: type,
-    valid_from: timestamp,
-    valid_to: null,
+    kind: input.kind?.trim() || type,
+    valid_from: input.validFrom ?? timestamp,
+    valid_to: input.validTo ?? null,
     supersedes_id: existing?.id ?? null,
-    source_block_id: null,
-    source_turn_ids: null,
+    source_block_id: input.sourceBlockID ?? null,
+    source_turn_ids: input.sourceTurnIDs?.join(",") ?? null,
     last_used_at: null,
     use_count: 0,
     embedding: null,
-    confidence: 1,
-    salience: importance,
-    visibility: "shared",
-    source: "user",
+    confidence: clampConfidence(input.confidence),
+    salience: clampImportance(input.salience ?? importance),
+    visibility: normalizeMemoryVisibility(input.visibility),
+    source: input.source?.trim() || "user",
   };
   db.run(
     `INSERT INTO agent_memories (id, scope, agent_id, type, key_slug, content, tags, importance, created_at, updated_at, kind, valid_from, valid_to, supersedes_id, source_block_id, source_turn_ids, last_used_at, use_count, embedding, confidence, salience, visibility, source)
@@ -208,23 +239,46 @@ export function getAgentMemoryByKey(
 
 export function listAgentMemories(
   db: Database,
-  input: { scope?: string; agentID?: string | null; limit?: number; query?: string } = {},
+  input: { scope?: string; agentID?: string | null; limit?: number; query?: string; callerAgentID?: string | null } = {},
 ): AgentMemoryRow[] {
   const scope = input.scope ?? "agent";
   const agentID = input.agentID === undefined ? null : input.agentID;
-  // MEM-004: scope enforcement lives in the query layer, not in prompts. An
-  // agent-scoped read must name its agent; without one it is an empty result,
-  // never "everything".
+  // MEM-004: scope and visibility are enforced in the query layer, not in
+  // prompts — and through ONE filter, so the two rules cannot drift apart.
+  //
+  //   scope       → `agent` scope is that agent's alone; a global scope
+  //                  holds the owner's facts and the caller's own.
+  //   visibility  → a private row belongs to its owner alone. A row with no
+  //                  agent belongs to the owner of the system (`ea`), the
+  //                  executive assistant acting for the human.
   if (scope === "agent" && !agentID) return [];
+  const caller = input.callerAgentID ?? null;
+  // Another agent never reads another agent's scoped memory.
+  if (scope === "agent" && caller && caller !== agentID) return [];
   const limit = clampLimit(input.limit);
   const query = input.query?.trim();
-  // Match in SQL so the limit applies to matches, not to the newest rows.
-  const params: (string | number)[] = agentID === null ? [scope] : [scope, agentID];
-  if (query) params.push(`%${query.replace(/[\\%_]/g, "\\$&")}%`);
+  const params: (string | number)[] = [];
+  const clauses: string[] = ["scope = ?", "valid_to IS NULL"];
+  params.push(scope);
+  if (scope === "agent") {
+    clauses.push("agent_id = ?");
+    params.push(agentID!);
+  } else {
+    // A global scope holds the shared facts and the caller's own.
+    clauses.push("(agent_id IS NULL OR agent_id = ?)");
+    params.push(caller ?? "");
+  }
+  // Visibility: a private row is for its owner alone.
+  clauses.push("(visibility <> 'private' OR COALESCE(agent_id, 'ea') = ?)");
+  params.push(caller ?? "");
+  if (query) {
+    clauses.push("(content || ' ' || COALESCE(tags, '')) LIKE ? ESCAPE '\\'");
+    params.push(`%${query.replace(/[\\%_]/g, "\\$&")}%`);
+  }
   params.push(limit);
   return db
     .query<AgentMemoryRow, (string | number)[]>(
-      `SELECT ${MEMORY_COLUMNS} FROM agent_memories WHERE scope = ? AND agent_id ${agentID === null ? "IS NULL" : "= ?"} AND valid_to IS NULL${query ? " AND (content || ' ' || COALESCE(tags, '')) LIKE ? ESCAPE '\\'" : ""} ORDER BY updated_at DESC, rowid DESC LIMIT ?`,
+      `SELECT ${MEMORY_COLUMNS} FROM agent_memories WHERE ${clauses.join(" AND ")} ORDER BY updated_at DESC, rowid DESC LIMIT ?`,
     )
     .all(...params);
 }

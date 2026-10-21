@@ -81,7 +81,7 @@ export async function runInstantTurn(
     .filter((message) => message.role === "user" || message.role === "assistant")
     .map((message) => ({ role: message.role as "user" | "assistant", content: message.text }));
   if (history.at(-1)?.role === "user" && history.at(-1)?.content === run.text) history.pop();
-  const facts = run.facts !== false ? recallFact(db, { limit: 6 }).facts.map((row) => row.fact) : [];
+  const facts = run.facts !== false ? recallFact(db, { limit: 6, callerAgentID: run.persona.id }).facts.map((row) => row.fact) : [];
   const messages = buildFastPathMessages({
     persona,
     facts,

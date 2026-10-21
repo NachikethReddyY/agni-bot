@@ -17,6 +17,7 @@ import type { Database } from "bun:sqlite";
 import type { AgentInfo } from "@agni/protocol";
 import { skillsCatalogBlock } from "../tools/skills";
 import { nowISO } from "../util/ids";
+import { DEFAULT_VISIBILITY, normalizeVisibility, type Visibility } from "./visibility";
 
 export interface Persona {
   id: string;
@@ -43,6 +44,13 @@ export interface Persona {
    * still delegate to specialists in the background.
    */
   hidden?: boolean;
+  /**
+   * What another agent may see of this agent's work: `private` (a receipt
+   * only), `summary` (one line) or `shared` (the full text). The executive
+   * assistant is the owner's proxy, so the shipped team is `shared`; a new
+   * agent defaults to `summary` until the owner says otherwise.
+   */
+  visibility?: Visibility;
 }
 
 /** A persona bound to a live agent row, with a prompt ready to send. */
@@ -102,6 +110,7 @@ export const PERSONAS: Persona[] = [
     role: "front desk — replies fast, decides who should do the work, and synthesizes the answers",
     systemPromptTemplate: AGNI_PROMPT_TEMPLATE,
     tools: ["memory_search", "memory_write", "links_search", "link_save", "tasks_list", "task_create", "task_update", "grep", "glob", "read_file", "write_file", "web_search", "web_fetch", "deep_research", "bash", "skills_list", "skills_load", "skills_resource", "mail_search", "mail_read", "mail_send", "remember_fact", "recall_fact", "forget_fact", "handoff", "delegate_task", "delegate_wait", "task_status", "task_cancel", "rename_agent", "create_agent", "share_thread", "job_schedule", "job_list", "job_cancel", "update_agent"],
+    visibility: "shared",
   },
   {
     id: "researcher",
@@ -111,6 +120,7 @@ export const PERSONAS: Persona[] = [
     systemPromptTemplate: "You are {name}, the research specialist for {user}. Gather relevant evidence, distinguish facts from uncertainty, and return concise findings with sources.",
     tools: ["web_search", "web_fetch", "deep_research", "grep", "glob", "read_file", "memory_search", "recall_fact", "handoff", "share_thread"],
     hidden: true,
+    visibility: "shared",
   },
   {
     id: "coder",
@@ -120,6 +130,7 @@ export const PERSONAS: Persona[] = [
     systemPromptTemplate: "You are {name}, the coding specialist for {user}. Inspect the relevant code, make focused changes when requested, and report what changed and how it was verified.",
     tools: ["grep", "glob", "read_file", "write_file", "bash", "skills_list", "skills_load", "skills_resource", "handoff", "share_thread"],
     hidden: true,
+    visibility: "shared",
   },
   {
     id: "analyst",
@@ -129,6 +140,7 @@ export const PERSONAS: Persona[] = [
     systemPromptTemplate: "You are {name}, the analysis specialist for {user}. Compare evidence, identify constraints and risks, and return a compact recommendation to the orchestrator.",
     tools: ["memory_search", "recall_fact", "links_search", "web_search", "web_fetch", "tasks_list", "handoff", "share_thread"],
     hidden: true,
+    visibility: "shared",
   },
 ];
 
@@ -173,7 +185,8 @@ export function loadRuntimeAgents(db: Database): number {
       id: string; name: string; color: string | null; role: string | null; role_detail: string | null;
       display_name: string | null; system_prompt: string | null; avatar_color: string | null; tools: string | null;
       memory_scope: string | null;
-    }, []>("SELECT id, name, color, role, role_detail, display_name, system_prompt, avatar_color, tools, memory_scope FROM agents")
+      visibility: string | null;
+    }, []>("SELECT id, name, color, role, role_detail, display_name, system_prompt, avatar_color, tools, memory_scope, visibility FROM agents")
     .all();
   let loaded = 0;
   for (const row of rows) {
@@ -186,6 +199,7 @@ export function loadRuntimeAgents(db: Database): number {
       systemPromptTemplate: row.system_prompt?.trim() || "You are {name}, an assistant for {user}.",
       tools: parseToolList(row.tools),
       memoryScope: row.memory_scope === "readwrite" ? "readwrite" : "read",
+      visibility: normalizeVisibility(row.visibility),
     };
     registerPersona(persona);
     loaded += 1;
@@ -204,13 +218,14 @@ export function loadRuntimeAgents(db: Database): number {
 export function updatePersona(
   db: Database,
   id: string,
-  changes: { role?: string; prompt?: string },
-): { id: string; name: string; role: string; prompt: string } | undefined {
+  changes: { role?: string; prompt?: string; visibility?: Visibility },
+): { id: string; name: string; role: string; prompt: string; visibility: Visibility } | undefined {
   const persona = getPersona(id);
   if (!persona) return undefined;
   const role = changes.role?.trim();
   const prompt = changes.prompt?.trim();
-  if (!role && !prompt) throw new Error("nothing to change: give a role or a prompt");
+  const visibility = changes.visibility;
+  if (!role && !prompt && !visibility) throw new Error("nothing to change: give a role, a prompt, or a visibility");
   if (role) {
     db.run("UPDATE agents SET role_detail = ?, updated_at = ? WHERE id = ?", [role, nowISO(), persona.id]);
     persona.role = role;
@@ -219,14 +234,19 @@ export function updatePersona(
     db.run("UPDATE agents SET system_prompt = ?, updated_at = ? WHERE id = ?", [prompt, nowISO(), persona.id]);
     persona.systemPromptTemplate = prompt;
   }
-  const row = db.query<{ display_name: string | null; system_prompt: string | null }, [string]>(
-    "SELECT display_name, system_prompt FROM agents WHERE id = ?",
+  if (visibility) {
+    db.run("UPDATE agents SET visibility = ?, updated_at = ? WHERE id = ?", [visibility, nowISO(), persona.id]);
+    persona.visibility = visibility;
+  }
+  const row = db.query<{ display_name: string | null; system_prompt: string | null; visibility: string | null }, [string]>(
+    "SELECT display_name, system_prompt, visibility FROM agents WHERE id = ?",
   ).get(persona.id);
   return {
     id: persona.id,
     name: row?.display_name?.trim() || persona.name,
     role: persona.role,
     prompt: row?.system_prompt?.trim() || persona.systemPromptTemplate,
+    visibility: normalizeVisibility(row?.visibility ?? persona.visibility ?? DEFAULT_VISIBILITY),
   };
 }
 
@@ -285,8 +305,8 @@ export function resolvePersona(db: Database, id: string): ResolvedPersona | unde
   const persona = getPersona(id);
   if (!persona) return undefined;
   const row = db
-    .query<{ display_name: string | null; avatar_color: string | null; system_prompt: string | null; role_detail: string | null; memory_scope: string | null }, [string]>(
-      "SELECT display_name, avatar_color, system_prompt, role_detail, memory_scope FROM agents WHERE id = ?",
+    .query<{ display_name: string | null; avatar_color: string | null; system_prompt: string | null; role_detail: string | null; memory_scope: string | null; visibility: string | null }, [string]>(
+      "SELECT display_name, avatar_color, system_prompt, role_detail, memory_scope, visibility FROM agents WHERE id = ?",
     )
     .get(persona.id);
   const name = row?.display_name?.trim() || persona.name;
@@ -303,6 +323,7 @@ export function resolvePersona(db: Database, id: string): ResolvedPersona | unde
     tools: [...persona.tools],
     memoryScope: (row?.memory_scope ?? persona.memoryScope) === "readwrite" ? "readwrite" : "read",
     systemPrompt: composeSystemPrompt(template, name),
+    visibility: normalizeVisibility(row?.visibility ?? persona.visibility ?? DEFAULT_VISIBILITY),
   };
 }
 
@@ -344,8 +365,8 @@ export function seedAgentPromptTemplates(db: Database): number {
 export function personaInfo(db?: Database, options: { includeHidden?: boolean } = {}): AgentInfo[] {
   return PERSONAS.filter((persona) => options.includeHidden || !persona.hidden).map((persona) => {
     const row = db
-      ?.query<{ display_name: string | null; avatar_color: string | null; onboarded: number; role_detail: string | null }, [string]>(
-        "SELECT display_name, avatar_color, onboarded, role_detail FROM agents WHERE id = ?",
+      ?.query<{ display_name: string | null; avatar_color: string | null; onboarded: number; role_detail: string | null; visibility: string | null }, [string]>(
+        "SELECT display_name, avatar_color, onboarded, role_detail, visibility FROM agents WHERE id = ?",
       )
       .get(persona.id);
     return {
@@ -356,6 +377,7 @@ export function personaInfo(db?: Database, options: { includeHidden?: boolean } 
       role: shortRole(row?.role_detail?.trim() || persona.role),
       tools: [...persona.tools],
       onboarded: (row?.onboarded ?? 0) === 1,
+      visibility: normalizeVisibility(row?.visibility ?? persona.visibility ?? DEFAULT_VISIBILITY),
       ...(persona.hidden ? { hidden: true } : {}),
     };
   });

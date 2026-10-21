@@ -55,6 +55,12 @@ export async function compactChannelHistory(db: Database, router: Router, channe
           type: typeof fact.type === "string" ? fact.type : "fact",
           content: fact.content,
           importance: typeof fact.importance === "number" ? fact.importance : 0.5,
+          // Provenance, at least: a fact derived from a channel sweep is not
+          // something the owner said. The source policy (TAG-002) lands with
+          // the tagger work; until then the provenance is recorded so the
+          // policy has something to read.
+          source: "compaction",
+          sourceBlockID: channelID,
         });
       }
       markMessagesCompacted(db, chunk.map((m) => m.id));

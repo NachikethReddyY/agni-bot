@@ -16,6 +16,10 @@ export interface RememberFactArgs {
   agentID?: string | null;
   tags?: string[];
   importance?: number;
+  /** Who may read this fact later: private | summary | shared. */
+  visibility?: string;
+  /** Where it came from: user | agent | tool | web. */
+  source?: string;
 }
 
 export interface RememberFactResult { id: string; fact: string }
@@ -36,17 +40,32 @@ export function rememberFact(db: Database, args: RememberFactArgs): RememberFact
     content: fact,
     tags,
     importance: args.importance ?? 0.5,
+    visibility: args.visibility,
+    source: args.source ?? "user",
   });
   return { id: row.id, fact: row.content };
 }
 
-export interface RecallFactArgs { query?: string; limit?: number; scope?: string; agentID?: string | null }
+export interface RecallFactArgs {
+  query?: string;
+  limit?: number;
+  scope?: string;
+  agentID?: string | null;
+  /** The agent asking. Scope and visibility are enforced against it. */
+  callerAgentID?: string | null;
+}
 export interface RecallFactResult { facts: { id: string; fact: string; summary: string | null; tags: string | null }[] }
 
 export function recallFact(db: Database, args: RecallFactArgs): RecallFactResult {
   const limit = clampLimit(args.limit);
   const scope = args.scope ?? "global_user";
-  const rows = listAgentMemories(db, { scope, agentID: args.agentID ?? null, limit, query: args.query });
+  const rows = listAgentMemories(db, {
+    scope,
+    agentID: args.agentID ?? null,
+    limit,
+    query: args.query,
+    callerAgentID: args.callerAgentID ?? null,
+  });
   return { facts: rows.map((row) => ({ id: row.id, fact: row.content, summary: null, tags: row.tags })) };
 }
 

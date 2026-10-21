@@ -10,6 +10,7 @@ import type { Database } from "bun:sqlite";
 import type { ServerFrameBody } from "@agni/protocol";
 import type { Persona } from "../agent/personas";
 import { getPersona, personaInfo, mentionRoster, registerPersona, DEFAULT_AGENT_TOOLS } from "../agent/personas";
+import { normalizeVisibility, type Visibility } from "../agent/visibility";
 import { nowISO } from "../util/ids";
 import { MAX_AGENT_NAME_CHARS } from "../agent/identity";
 import type { ToolRegistry } from "./registry";
@@ -55,6 +56,7 @@ export function registerCreateAgentTool(registry: ToolRegistry, deps: CreateAgen
         color: { type: "string", description: "Optional hex color (e.g. '#e05252'). A color is picked if omitted." },
         tools: { type: "array", items: { type: "string" }, description: "Tool names the new agent may use." },
         memoryScope: { type: "string", enum: ["read", "readwrite"], description: "Whether the agent may write user-scope memory. Default read-only." },
+        visibility: { type: "string", enum: ["private", "summary", "shared"], description: "What other agents may see of this agent's work. private = a receipt only, summary = one line, shared = full text. Default summary." },
       },
       required: ["name", "prompt"],
       additionalProperties: false,
@@ -87,13 +89,18 @@ export function registerCreateAgentTool(registry: ToolRegistry, deps: CreateAgen
       // DEL-007: a new agent reads user memory but cannot write it unless the
       // caller explicitly says so.
       const memoryScope: "read" | "readwrite" = args.memoryScope === "readwrite" ? "readwrite" : "read";
-      const persona: Persona = { id, name, color, role, systemPromptTemplate: prompt, tools: finalTools, memoryScope };
+      // D-01: a new agent is `summary` — the caller learns that it finished
+      // and roughly what it found, not its full working.
+      const visibility: Visibility = normalizeVisibility(
+        typeof args.visibility === "string" ? args.visibility : undefined,
+      );
+      const persona: Persona = { id, name, color, role, systemPromptTemplate: prompt, tools: finalTools, memoryScope, visibility };
 
       const now = nowISO();
       db.run(
-        `INSERT INTO agents (id, name, color, role, role_detail, default_name, display_name, system_prompt, avatar_color, onboarded, tools, memory_scope, created_at, updated_at)
-         VALUES (?, ?, ?, 'agent', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
-        [id, name, color, role, name, name, prompt, color, JSON.stringify(finalTools), memoryScope, now, now],
+        `INSERT INTO agents (id, name, color, role, role_detail, default_name, display_name, system_prompt, avatar_color, onboarded, tools, memory_scope, visibility, created_at, updated_at)
+         VALUES (?, ?, ?, 'agent', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+        [id, name, color, role, name, name, prompt, color, JSON.stringify(finalTools), memoryScope, visibility, now, now],
       );
       registerPersona(persona);
       deps.emit({ type: "agents.update", agents: personaInfo(db), mentions: mentionRoster(db) });
@@ -105,6 +112,7 @@ export function registerCreateAgentTool(registry: ToolRegistry, deps: CreateAgen
         color,
         tools: finalTools,
         memoryScope,
+        visibility,
         ...(dropped.length > 0 ? { droppedTools: dropped } : {}),
         promptChars: prompt.length,
       };

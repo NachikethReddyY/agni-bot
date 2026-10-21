@@ -31,6 +31,7 @@
     "landing": "bun --cwd apps/landing dev",
     "test": "bun test apps/server packages/protocol",
     "test:web": "pnpm --filter @agni/client test && pnpm --filter @agni/web test",
+    "scan:canary": "bun scripts/canary-scan.ts",
     "check": "pnpm typecheck && pnpm test:web && bun test apps/server packages/protocol",
     "typecheck": "turbo run typecheck"
   },

@@ -97,6 +97,28 @@ The secret is injected via stdin and a short-lived 0600 askpass file in a 0700
 temp directory; it is removed when the command exits. Output is scrubbed of the
 exact value before it reaches the model.
 
+### Agent visibility
+
+Every agent has a visibility that says what *other* agents may see of its
+work:
+
+- `private` — nothing leaves the agent. Another agent gets a receipt: the
+  task, the state, and the fact that it finished. The work stays in that
+  agent's own conversation, which the owner can open directly.
+- `summary` — the caller gets one bounded line: enough to report an outcome,
+  not the working.
+- `shared` — the caller gets the full text. The shipped team is `shared`
+  (the executive assistant is the owner's proxy), and a new agent created in
+  chat starts at `summary`.
+
+One rule holds it together: every path that can carry another agent's text
+goes through the same redaction helper — tool results, task rows, recall, and
+the logs. A fact is scoped the same way: `scope=agent` memory is unreadable
+by other agents, and a private fact is readable by its owner alone.
+
+Change it with `update_agent` (`visibility: private | summary | shared`) or
+in the app.
+
 ### Smoke test without any keys
 
 ```sh
