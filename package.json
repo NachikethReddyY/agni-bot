@@ -32,7 +32,9 @@
     "test": "bun test apps/server packages/protocol",
     "test:web": "pnpm --filter @agni/client test && pnpm --filter @agni/web test",
     "scan:canary": "bun scripts/canary-scan.ts",
-    "check": "pnpm typecheck && pnpm test:web && bun test apps/server packages/protocol",
+    "eval": "bun evals/run.ts",
+    "eval:nightly": "AGNI_EVAL_NIGHTLY=1 bun evals/run.ts",
+    "check": "pnpm typecheck && pnpm test:web && bun test apps/server packages/protocol && bun run eval",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
