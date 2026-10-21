@@ -158,8 +158,10 @@ is replayable.
 
 ### Attachments (additive v2 extension)
 
-`msg.send.files` carries up to five opaque uploaded attachment IDs. Files must
-have been uploaded by the sending device. Text remains required; the web app
+`msg.send.files` now carries up to five opaque uploaded attachment IDs, rather
+than client filesystem paths. No existing shipped client sent paths before this
+change: the Mac app sends `nil` and the CLI omits the field. Files must have
+been uploaded by the sending device. Text remains required; the web app
 uses "Please review the attached files." for an attachment-only message.
 `msg.new` and history `MessageInfo` objects optionally include `attachments`:
 `{ id, name, mimeType, size, kind: "image" | "text" | "pdf" }[]`.

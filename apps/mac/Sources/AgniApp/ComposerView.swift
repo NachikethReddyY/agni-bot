@@ -138,7 +138,9 @@ struct ComposerView: View {
               .background(Color(hex: 0xF3F3F3), in: Circle())
           }
           .buttonStyle(.plain)
-          .keyboardShortcut(.return, modifiers: .command)
+          // Match the web composer: Return sends, while Shift-Return remains
+          // available to the multiline TextField for a line break.
+          .keyboardShortcut(.return, modifiers: [])
           .disabled(draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
           .help(draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Voice input isn't available yet" : "Send")
           .accessibilityLabel(draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Voice input unavailable" : "Send")
