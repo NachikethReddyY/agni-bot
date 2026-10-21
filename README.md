@@ -119,6 +119,29 @@ by other agents, and a private fact is readable by its owner alone.
 Change it with `update_agent` (`visibility: private | summary | shared`) or
 in the app.
 
+### Search and memory
+
+Facts and the conversation transcript are indexed with SQLite FTS5, so
+recall is a real search rather than a substring match. A search is ranked
+with
+
+```
+score = relevance * recency_decay(last_used_at) * salience * (1 + log(1 + use_count))
+```
+
+and a recall moves `last_used_at` and `use_count`, so the formula reflects
+what actually gets used. Below the confidence floor (`AGNI_MIN_RECALL_SCORE`,
+default `0.15`) nothing is injected — a plausible match that is not good
+enough is still nothing.
+
+The agent can search the transcript itself with `transcript_search`; the
+search respects the same visibility rules as everything else, so a private
+agent's conversation is not searchable from outside.
+
+The slot budgets of the context assembler are configuration:
+`AGNI_SLOT_PINNED_CORE`, `AGNI_SLOT_ANCHOR`, `AGNI_SLOT_LEDGER`,
+`AGNI_SLOT_SUMMARIES`, `AGNI_SLOT_RECALL` (tokens).
+
 ### Smoke test without any keys
 
 ```sh

@@ -636,4 +636,53 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_artifacts_agent ON artifacts(agent_id);
     `,
   },
+  {
+    id: 24,
+    name: "fts_indexes",
+    sql: `
+      -- MEM-003: facts and transcripts are indexed for search. FTS5 with
+      -- external content, kept in sync by triggers, so a write never has to
+      -- remember to update the index. The vector half of hybrid retrieval
+      -- lands with the embeddings (PR 3c); the BLOB column already exists.
+      CREATE VIRTUAL TABLE agent_memories_fts USING fts5(
+        content, tags, key_slug,
+        content='agent_memories', content_rowid='rowid',
+        tokenize='porter unicode61 remove_diacritics 2'
+      );
+      CREATE TRIGGER agent_memories_fts_ai AFTER INSERT ON agent_memories BEGIN
+        INSERT INTO agent_memories_fts(rowid, content, tags, key_slug)
+        VALUES (new.rowid, new.content, new.tags, new.key_slug);
+      END;
+      CREATE TRIGGER agent_memories_fts_ad AFTER DELETE ON agent_memories BEGIN
+        INSERT INTO agent_memories_fts(agent_memories_fts, rowid, content, tags, key_slug)
+        VALUES ('delete', old.rowid, old.content, old.tags, old.key_slug);
+      END;
+      CREATE TRIGGER agent_memories_fts_au AFTER UPDATE ON agent_memories BEGIN
+        INSERT INTO agent_memories_fts(agent_memories_fts, rowid, content, tags, key_slug)
+        VALUES ('delete', old.rowid, old.content, old.tags, old.key_slug);
+        INSERT INTO agent_memories_fts(rowid, content, tags, key_slug)
+        VALUES (new.rowid, new.content, new.tags, new.key_slug);
+      END;
+
+      CREATE VIRTUAL TABLE channel_messages_fts USING fts5(
+        text,
+        content='channel_messages', content_rowid='rowid',
+        tokenize='porter unicode61 remove_diacritics 2'
+      );
+      CREATE TRIGGER channel_messages_fts_ai AFTER INSERT ON channel_messages BEGIN
+        INSERT INTO channel_messages_fts(rowid, text) VALUES (new.rowid, new.text);
+      END;
+      CREATE TRIGGER channel_messages_fts_ad AFTER DELETE ON channel_messages BEGIN
+        INSERT INTO channel_messages_fts(channel_messages_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+      END;
+      CREATE TRIGGER channel_messages_fts_au AFTER UPDATE ON channel_messages BEGIN
+        INSERT INTO channel_messages_fts(channel_messages_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+        INSERT INTO channel_messages_fts(rowid, text) VALUES (new.rowid, new.text);
+      END;
+
+      -- Backfill the indexes for the rows that already exist.
+      INSERT INTO agent_memories_fts(agent_memories_fts) VALUES ('rebuild');
+      INSERT INTO channel_messages_fts(channel_messages_fts) VALUES ('rebuild');
+    `,
+  },
 ];

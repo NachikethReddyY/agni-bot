@@ -28,6 +28,21 @@ export const DEFAULT_SLOT_BUDGETS: SlotBudgets = {
   recall: 1_500,
 };
 
+/**
+ * ASM-007: the budgets are configuration, not constants. They are read once
+ * at boot (the daemon's config) and can be overridden per call, so an eval
+ * can move a number without touching a call site.
+ */
+let activeBudgets: SlotBudgets = { ...DEFAULT_SLOT_BUDGETS };
+
+export function setSlotBudgets(budgets: Partial<SlotBudgets>): void {
+  activeBudgets = { ...DEFAULT_SLOT_BUDGETS, ...budgets };
+}
+
+export function getSlotBudgets(): SlotBudgets {
+  return { ...activeBudgets };
+}
+
 /** Rough chars-per-token used for budget enforcement without a tokenizer. */
 const CHARS_PER_TOKEN = 4;
 
@@ -85,7 +100,7 @@ function block(header: string, body: string): string {
  * capped; empty slots disappear rather than leaving blank headers.
  */
 export function assembleContext(input: AssemblyInput): string {
-  const budgets: SlotBudgets = { ...DEFAULT_SLOT_BUDGETS, ...input.budgets };
+  const budgets: SlotBudgets = { ...activeBudgets, ...input.budgets };
   const blocks: string[] = [];
 
   // pinned_core: the persona and lane header are not budgeted — they are the

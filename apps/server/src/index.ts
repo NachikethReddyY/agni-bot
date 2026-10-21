@@ -30,6 +30,7 @@ import {
 } from "./daemon";
 import { openDatabase } from "./db";
 import { seedAgentPromptTemplates, setOwnerName, loadRuntimeAgents } from "./agent/personas";
+import { setSlotBudgets } from "./context/compiler";
 import { JobRunner } from "./jobs/runner";
 import { registerTurnJob, type TurnJobPayload } from "./jobs/turn";
 import { registerBriefJob } from "./jobs/brief";
@@ -57,6 +58,8 @@ async function serve(): Promise<void> {
   const config = loadConfig();
   const db = openDatabase(config.dbPath);
   setOwnerName(config.userFirstName);
+  // ASM-007: the slot budgets are configuration, applied once at boot.
+  setSlotBudgets(config.slotBudgets ?? {});
   const seeded = seedAgentPromptTemplates(db);
   if (seeded > 0) log.info(`agents: seeded ${seeded} prompt template(s)`);
   // Agents the assistant created at runtime live in the database; the roster
