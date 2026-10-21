@@ -21,6 +21,7 @@ import {
 } from "../stores/agent-memories";
 import { embedText, type EmbedderConfig } from "./embeddings";
 import type { Anchor } from "../context/compiler";
+import { looksDeictic } from "./gate";
 
 /** The confidence floor for automatic retrieval (TUNABLE). */
 export const DEFAULT_MIN_SCORE = 0.15;
@@ -40,9 +41,12 @@ export function rewriteForRetrieval(
   const history = context.history ?? [];
   const anchor = context.anchor ?? null;
   // A message that names its own subject needs no rewrite. A short message
-  // that points back ("explain this") does.
-  const refersBack = /\b(this|that|it|they|those|these|the same|again|earlier|before|above|option \d)\b/i.test(original);
-  if (!refersBack || original.length > 40) return { query: original, rewritten: false };
+  // that points back ("explain this", "and tomorrow?") does — and the gate
+  // and the rewrite have to agree, or a deictic turn loses its referent.
+  const previousUser = [...history].reverse().find((message) => message.role === "user" && message.content.trim());
+  const refersBack = looksDeictic(original, previousUser?.content ?? null);
+  const bare = original.length <= 40;
+  if (!refersBack || !bare) return { query: original, rewritten: false };
   const parts: string[] = [];
   if (anchor?.topic) parts.push(anchor.topic);
   if (anchor?.entities.length) parts.push(anchor.entities.join(" "));

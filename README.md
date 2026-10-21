@@ -115,6 +115,29 @@ script is deleted the moment the run ends. The authorization dialog shows the
 The owner's password is never stored anywhere — not in the Keychain, not in a
 file. The Keychain holds the device token and nothing else.
 
+### The acceptance suite
+
+```sh
+bun run eval           # the deterministic evals
+bun run eval:nightly   # the same, with the nightly policy
+```
+
+Six evals, each measuring a promise the system makes and failing when the
+promise breaks:
+
+| Eval | What it measures |
+|---|---|
+| EVAL-001 | needle recall — facts planted early, found by a vague question after the blocks rolled over |
+| EVAL-002 | the gate's misses, and that the rollover sweep catches them |
+| EVAL-003 | continuity — an ephemeral follow-up keeps its referent |
+| EVAL-004 | leaks — private and scoped content never reaches the caller |
+| EVAL-005 | cost — the retrieval is cheap enough to sit on the turn's path |
+| EVAL-006 | drift — the summary and the source still agree |
+
+They run against an in-memory database and a stub model, so they measure
+the *system* rather than the luck of a provider. The provider-backed checks
+are skipped when there is no key.
+
 ### Seeing what the agent is doing
 
 The sidebar shows a quiet dot next to an agent that is working, waiting for

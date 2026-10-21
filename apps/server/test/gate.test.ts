@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openDatabase } from "../src/db";
-import { bypassesBatch, classifyTurn } from "../src/agent/gate";
+import { bypassesBatch, classifyTurn, looksDeictic } from "../src/agent/gate";
 import { appendChannelMessage, createChannel, listChannelMessages, uncompactedMessages } from "../src/stores/channels";
 
 let db: Database | undefined;
@@ -41,6 +41,16 @@ describe("turn gate", () => {
   test("greetings and acknowledgements are ephemeral", () => {
     expect(classifyTurn("thanks!").salience).toBe("temp");
     expect(classifyTurn("got it").salience).toBe("temp");
+  });
+});
+
+describe("the shared deictic test", () => {
+  test("the gate and the retrieval rewrite agree on what points back", () => {
+    // A bare follow-up points back; a full question does not.
+    expect(looksDeictic("and tomorrow?", "what is the weather in Berlin tomorrow")).toBe(true);
+    expect(looksDeictic("explain this", "the plan for the release")).toBe(true);
+    expect(looksDeictic("what port does postgres listen on by default")).toBe(false);
+    expect(looksDeictic("and tomorrow?")).toBe(false);
   });
 });
 

@@ -34,6 +34,20 @@ const THANKS = /^\s*(thanks|thank you|thx|ty|ok(?:ay)?|got it|sounds good|nice|c
 const SHORT_QUESTION = /^(?:what|when|where|who|which|how|why|is|are|can|could|does|do|did|will|would)\b/i;
 
 /**
+ * Does this message point back at earlier context? The gate and the
+ * retrieval rewrite have to agree on this: a turn the gate calls deictic
+ * and a turn the rewrite leaves alone is a turn that loses its referent.
+ */
+export function looksDeictic(text: string, previousText?: string | null): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  const short = trimmed.length <= 60 && words.length <= 10;
+  if (DEICTIC.test(trimmed)) return true;
+  return short && /^(and|what about|how about|then)\b/i.test(trimmed) && Boolean(previousText);
+}
+
+/**
  * Classify one user turn. `previousText` is the previous user turn, when the
  * caller has it; it is only used to recognise a bare follow-up ("and
  * tomorrow?") as deictic.
@@ -42,7 +56,7 @@ export function classifyTurn(text: string, previousText?: string | null): GateRe
   const trimmed = text.trim();
   const words = trimmed.split(/\s+/).filter(Boolean);
   const short = trimmed.length <= 60 && words.length <= 10;
-  const deictic = DEICTIC.test(trimmed) || (short && /^(and|what about|how about|then)\b/i.test(trimmed) && Boolean(previousText));
+  const deictic = looksDeictic(trimmed, previousText);
 
   if (!trimmed) return { category: "ephemeral", salience: "temp", deictic: false, reason: "empty" };
 
