@@ -4,7 +4,7 @@
  * delivers folds in here, so the reducer is testable without a socket or a
  * window, and the views stay dumb.
  */
-import type { AgentInfo, Decision, MessageInfo, Usage } from "@agni/protocol";
+import type { AgentInfo, Decision, MessageInfo, TaskInfo, Usage } from "@agni/protocol";
 import { parseISO } from "./format.js";
 import { stopReasonExplanation, type IncomingFrame } from "./protocol";
 
@@ -42,6 +42,9 @@ export interface ChatMessage {
   /** The agent this message is about — a handoff notice names its target. */
   toAgentId: string | null;
   uiHint: string | null;
+  /** Set on a question from a delegated task; the answer carries it back. */
+  taskId: string | null;
+  questionId: string | null;
 }
 
 export interface ApprovalRow {
@@ -88,7 +91,9 @@ export type ConversationEffect =
   | { kind: "focusComposer" }
   | { kind: "unread"; threadID: string }
   | { kind: "agentsChanged"; agents: AgentInfo[] }
-  | { kind: "presence"; online: boolean };
+  | { kind: "presence"; online: boolean }
+  | { kind: "taskChanged"; task: TaskInfo }
+  | { kind: "bound"; agentID: string; conversationID: string; sessionID: string; channelID: string };
 
 function newMessage(partial: Partial<ChatMessage> & Pick<ChatMessage, "id" | "role">): ChatMessage {
   return {
@@ -105,6 +110,8 @@ function newMessage(partial: Partial<ChatMessage> & Pick<ChatMessage, "id" | "ro
     senderColor: null,
     toAgentId: null,
     uiHint: null,
+    taskId: null,
+    questionId: null,
     ...partial,
   };
 }
@@ -357,6 +364,19 @@ export class Conversation {
       case "presence":
         return [{ kind: "presence", online: frame.state === "online" }];
 
+      case "task.updated":
+      case "task.answer.ok":
+        return [{ kind: "taskChanged", task: frame.task }];
+
+      case "bind.direct.ok":
+        return [{
+          kind: "bound",
+          agentID: frame.agentID,
+          conversationID: frame.conversationID,
+          sessionID: frame.sessionID,
+          channelID: frame.channelID,
+        }];
+
       case "agents.update":
         return [{ kind: "agentsChanged", agents: frame.agents }];
 
@@ -400,6 +420,8 @@ export class Conversation {
             senderColor: frame.senderColor ?? null,
             toAgentId: frame.toAgentId ?? null,
             uiHint: frame.uiHint ?? null,
+            taskId: frame.taskId ?? null,
+            questionId: frame.questionId ?? null,
           }),
         );
         // The in-flight answer bubble was created at turn.start, before the

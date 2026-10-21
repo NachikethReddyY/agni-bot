@@ -21,6 +21,8 @@ function message(partial: Partial<ChatMessage> & { id: string; role: ChatMessage
     senderColor: null,
     toAgentId: null,
     uiHint: null,
+    taskId: null,
+    questionId: null,
     ...partial,
   };
 }

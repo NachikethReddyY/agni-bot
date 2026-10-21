@@ -36,6 +36,8 @@ export interface DelegateTaskToolDeps {
   channelID?: string;
   /** The parent turn, so the task can be traced back to what delegated it. */
   parentTurnID?: string;
+  /** The parent thread, so the answer to a question can go back to it. */
+  parentThreadID?: string;
 }
 
 export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateTaskToolDeps): void {
@@ -81,8 +83,7 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
         constraints: Array.isArray(args.constraints) ? args.constraints.map(String) : undefined,
         deadline: args.deadline === undefined ? null : String(args.deadline),
         outputSchema: args.outputSchema === undefined ? null : String(args.outputSchema),
-      };
-      // Idempotency: the same goal already in flight for the same specialist
+      };      // Idempotency: the same goal already in flight for the same specialist
       // is returned, not queued twice. A model retry must not double the work.
       const existing = findActiveDelegation(deps.db, toAgentID, goal);
       if (existing) {
@@ -109,6 +110,9 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
         brief,
         origin: "ea_delegated",
         parentTurnID: deps.parentTurnID ?? null,
+        parentThreadID: deps.parentThreadID ?? null,
+        parentChannelID: deps.channelID ?? null,
+        parentAgentID: deps.currentAgentID,
       });
 
       // The brief is the entire child context: goal, constraints, deadline and
@@ -175,6 +179,11 @@ function taskView(task: TaskRow, deps: DelegateTaskToolDeps): Record<string, unk
     result: result.value,
     resultRedacted: result.redacted,
     visibility,
+    // DEL-004: the full result lives in an artifact. The reference is only
+    // useful to a caller that may read it.
+    artifactRef: result.redacted ? null : task.artifact_id,
+    question: task.pending_question,
+    questionID: task.pending_question_id,
     terminal: task.delegate_state === "done" || task.delegate_state === "failed",
     jobID: task.job_id,
     updatedAt: task.updated_at,

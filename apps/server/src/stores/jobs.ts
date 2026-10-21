@@ -180,3 +180,29 @@ export function parseJobPayload<T>(row: JobRow): T {
     throw new Error(`job ${row.id} has an unparseable payload`);
   }
 }
+
+/**
+ * Find a queued job by a key inside its payload. Used to coalesce wake
+ * jobs: several completions for the same parent thread become one wake.
+ */
+export function findQueuedJobByPayloadKey(db: Database, kind: string, key: string): JobRow | null {
+  const rows = db
+    .query<JobRow, [string, string]>(
+      `SELECT ${COLUMNS} FROM jobs
+       WHERE kind = ? AND state = 'queued' AND json_extract(payload, '$.wakeKey') = ?
+       ORDER BY run_at ASC, rowid ASC LIMIT 1`,
+    )
+    .all(kind, key);
+  return rows[0] ?? null;
+}
+
+/** Append an item to a job payload's `results` list, in place. */
+export function appendJobResult(db: Database, id: string, item: Record<string, unknown>): void {
+  const row = getJob(db, id);
+  if (!row) return;
+  const payload = parseJobPayload<Record<string, unknown>>(row);
+  const results = Array.isArray(payload.results) ? [...payload.results] : [];
+  results.push(item);
+  payload.results = results;
+  db.run("UPDATE jobs SET payload = ?, updated_at = ? WHERE id = ?", [JSON.stringify(payload), nowISO(), id]);
+}

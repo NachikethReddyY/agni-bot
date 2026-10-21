@@ -919,6 +919,25 @@ button:disabled {
   max-width: 420px;
 }
 
+/* A delegated task asked the owner something: the answer goes back to the
+   task, not into the chat. */
+.task-question {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  max-width: 520px;
+  margin-top: 8px;
+}
+
+.task-answer-sent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
 /* The name is settled: the field is gone and the thread says what happened. */
 .onboarding-done {
   display: inline-flex;

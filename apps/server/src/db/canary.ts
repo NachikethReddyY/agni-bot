@@ -125,9 +125,22 @@ export function scanDatabaseForCanaries(
     );
   }
 
-  // Carried summaries and thread titles, except the exempt agents'.
-  if (tableExists(db, "conversations")) {
+  // Artifacts: a delegated result stored by reference. The artifact lives in
+  // the workspace of the agent that produced it, so it is exempt for that
+  // agent; access from anywhere else goes through the visibility filter.
+  if (tableExists(db, "artifacts")) {
     const rows = db
+      .query<Record<string, string>, []>(
+        "SELECT id, COALESCE(content, '') AS content, COALESCE(agent_id, '') AS owner FROM artifacts",
+      )
+      .all();
+    hits.push(
+      ...scanRows(rows, "id", ["content"], list, "artifacts", (row) => exempt.has(row.owner ?? "")),
+    );
+  }
+
+  // Carried summaries and thread titles, except the exempt agents'.
+  if (tableExists(db, "conversations")) {    const rows = db
       .query<Record<string, string>, []>(
         "SELECT id, COALESCE(summary, '') AS summary, COALESCE(agent_id, '') AS owner FROM conversations",
       )

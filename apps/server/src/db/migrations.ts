@@ -599,4 +599,41 @@ export const MIGRATIONS: Migration[] = [
          AND visibility = 'summary';
     `,
   },
+  {
+    id: 22,
+    name: "delegation_lifecycle",
+    sql: `
+      -- DEL-006: a delegated task can ask a question and be answered.
+      -- The question, the thread it belongs to, and the parent that has to be
+      -- woken when the work lands.
+      ALTER TABLE tasks ADD COLUMN child_thread_id TEXT;    -- the specialist's own thread
+      ALTER TABLE tasks ADD COLUMN parent_thread_id TEXT;   -- where the answer goes
+      ALTER TABLE tasks ADD COLUMN parent_channel_id TEXT;  -- the channel the owner watches
+      ALTER TABLE tasks ADD COLUMN parent_agent_id TEXT;   -- who has to be woken
+      ALTER TABLE tasks ADD COLUMN pending_question TEXT;  -- the question being asked
+      ALTER TABLE tasks ADD COLUMN pending_question_id TEXT;
+      ALTER TABLE tasks ADD COLUMN result_delivered_at TEXT; -- the wake was claimed
+      ALTER TABLE tasks ADD COLUMN artifact_id TEXT;        -- DEL-004: the full result
+      CREATE INDEX idx_tasks_pending ON tasks(delegate_state, pending_question_id);
+    `,
+  },
+  {
+    id: 23,
+    name: "artifacts",
+    sql: `
+      -- DEL-004: a delegated result is stored by reference. The task row keeps
+      -- a short summary for the caller's context; the full text lives here and
+      -- is only ever read through the visibility filter.
+      CREATE TABLE artifacts (
+        id TEXT PRIMARY KEY,
+        task_id TEXT,
+        agent_id TEXT NOT NULL,     -- the agent that produced it
+        kind TEXT NOT NULL DEFAULT 'result',
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_artifacts_task ON artifacts(task_id);
+      CREATE INDEX idx_artifacts_agent ON artifacts(agent_id);
+    `,
+  },
 ];

@@ -434,4 +434,73 @@ describe("websocket end-to-end", () => {
     client!.send({ type: "session.new", conversationID: "cnv_missing" });
     await client!.next("error", { match: (frame) => frame.code === "unknown_conversation" });
   });
+
+  test("a task answer resumes the task, and only once", async () => {
+    await startTestServer();
+    // A task waiting on a question, with the specialist's own thread.
+    const child = db!.query<{ id: string }, []>("SELECT id FROM threads LIMIT 1").get();
+    const threadID = createThreadFor(db!, "researcher");
+    db!.run(
+      `INSERT INTO tasks (id,title,due_at,priority,status,created_at,updated_at,snoozed_until,owner_device_id,owner_agent_id,origin,delegate_state,brief,result,job_id,parent_turn_id,child_thread_id,parent_thread_id,parent_channel_id,parent_agent_id,pending_question,pending_question_id,result_delivered_at,artifact_id)
+       VALUES ('tsk_q','Find it',NULL,'normal','open',datetime('now'),datetime('now'),NULL,NULL,'researcher','ea_delegated','needs_input',NULL,NULL,NULL,NULL,?,?,?,NULL,'Which account?',NULL,NULL,NULL)`,
+      [threadID, threadID, "main"],
+    );
+
+    client!.send({ type: "task.answer", taskID: "tsk_q", questionID: "qst_1", text: "Use the second account" });
+    // The question id does not match: refused.
+    await client!.next("error", { match: (frame) => frame.code === "bad_task_answer" });
+
+    db!.run("UPDATE tasks SET pending_question_id = 'qst_1' WHERE id = 'tsk_q'");
+    client!.send({ type: "task.answer", taskID: "tsk_q", questionID: "qst_1", text: "Use the second account" });
+    const ok = await client!.next("task.answer.ok");
+    expect(ok.task.id).toBe("tsk_q");
+    expect(ok.task.delegateState).toBe("running");
+
+    // A second answer to the same question is refused.
+    client!.send({ type: "task.answer", taskID: "tsk_q", questionID: "qst_1", text: "again" });
+    await client!.next("error", { match: (frame) => frame.code === "bad_task_answer" });
+    expect(child).toBeDefined();
+  });
+
+  test("a normal message never resumes a task", async () => {
+    await startTestServer();
+    const threadID = createThreadFor(db!, "researcher");
+    db!.run(
+      `INSERT INTO tasks (id,title,due_at,priority,status,created_at,updated_at,snoozed_until,owner_device_id,owner_agent_id,origin,delegate_state,brief,result,job_id,parent_turn_id,child_thread_id,parent_thread_id,parent_channel_id,parent_agent_id,pending_question,pending_question_id,result_delivered_at,artifact_id)
+       VALUES ('tsk_q2','Find it',NULL,'normal','open',datetime('now'),datetime('now'),NULL,NULL,'researcher','ea_delegated','needs_input',NULL,NULL,NULL,NULL,?,?,?,NULL,'Which account?','qst_2',NULL,NULL)`,
+      [threadID, threadID, "main"],
+    );
+    // Name the assistant first: the first main-channel message is the answer
+    // to its name prompt, not a chat message.
+    client!.send({ type: "agent.rename", agentId: "ea", name: "Agni" });
+    await client!.next("agent.updated");
+    client!.send({ type: "msg.send", channelId: "main", text: "just a normal message" });
+    await client!.next("msg.new", { match: (frame) => frame.fromType === "user" });
+    const state = db!.query<{ delegate_state: string }, []>("SELECT delegate_state FROM tasks WHERE id = 'tsk_q2'").get();
+    expect(state?.delegate_state).toBe("needs_input");
+  });
+
+  test("bind.direct answers with the agent's conversation and channel", async () => {
+    await startTestServer();
+    client!.send({ type: "bind.direct", agentID: "researcher" });
+    const bound = await client!.next("bind.direct.ok");
+    expect(bound.agentID).toBe("researcher");
+    expect(bound.channelID).toBe("dm:researcher");
+    expect(bound.conversationID).toBeTruthy();
+
+    // The executive assistant binds to the main channel.
+    client!.send({ type: "bind.direct", agentID: "ea" });
+    const main = await client!.next("bind.direct.ok");
+    expect(main.channelID).toBe("main");
+  });
 });
+
+/** A thread for an agent, the way a background delegation gets one. */
+function createThreadFor(db: Database, agentID: string): string {
+  const id = `thr_${agentID}_${Math.random().toString(36).slice(2, 10)}`;
+  db.run(
+    "INSERT INTO threads (id, agent_id, title, created_at, updated_at) VALUES (?, ?, '', datetime('now'), datetime('now'))",
+    [id, agentID],
+  );
+  return id;
+}

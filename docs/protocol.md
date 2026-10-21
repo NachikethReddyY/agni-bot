@@ -61,6 +61,8 @@ never reason about thread ids.
 | `job.delete` | `{jobID}` | Deletes a task unless it is running; replies with a refreshed `job.list.ok`. |
 | `task.list` | `{status?, limit?}` | Lists durable tasks; status is `open \| done \| snoozed \| all`. |
 | `task.update` | `{taskID, action, until?}` | Completes, reopens, or snoozes a task until an ISO timestamp. |
+| `task.answer` | `{taskID, questionID, text}` | Answers a question a delegated task asked. Its own frame, not a `msg.send`: the task must be in `needs_input`, the answer belongs to one question, and it is accepted exactly once. |
+| `bind.direct` | `{agentID}` | Pins this client to an agent: the server resolves that agent's conversation, its active session block and its DM channel, and answers with them. |
 | `provider.add` | `{providerID, apiKey, model?, baseUrl?, label?}` | Adds a supported API provider over the authenticated socket. `providerID: "custom"` adds an endpoint of the owner's own: `baseUrl` is an OpenAI-compatible base (`https://host/v1`), `label` names it in the list. The daemon stores the key in its mode-600 `.env` and the endpoint in `data/providers.json`; neither is ever returned. |
 | `provider.model.set` | `{providerID, model}` | Changes a configured provider's model ID on the daemon and updates the live router. |
 | `plugin.list` | `{}` | The plugin catalog bound to accounts (see below); answer: `plugin.list.ok`. |
@@ -115,10 +117,13 @@ accountLabel?, error?, connectedAt?}`.
 | `job.list.ok` | `{jobs: [...]}` | Answer to `job.list`, `job.set`, or `job.delete`; addressed to the requester. |
 | `task.list.ok` | `{tasks: [...]}` | Task snapshots, including due date, priority, status, and snooze time. A delegation task also carries `ownerAgentId`, `origin`, `delegateState`, `jobId`, `result` and `resultRedacted`. The owner sees every result; `resultRedacted` is true when a result exists that this viewer may not see. |
 | `task.update.ok` | `{task: {...}}` | Updated task snapshot after a persisted state change. |
+| `task.updated` | `{task: {...}}` | A delegated task changed state (queued, running, needs_input, done, failed). Replayable. |
+| `task.answer.ok` | `{task: {...}}` | The answer was accepted; the task is running again. |
+| `bind.direct.ok` | `{agentID, conversationID, sessionID, channelID}` | The client is bound to that agent's conversation; `sessionID` is the active block, `""` before the first one. Addressed, not replayed. |
 | `provider.add.ok` | `{providers: [...]}` | Provider metadata after adding a key; contains no credentials. |
 | `presence` | `{state}` | `online \| offline`. |
 | `status.update` | `{channelId, agentId?, text, transient}` | Activity text; transient updates clear on the next message. |
-| `msg.new` | `{id, channelId, fromType, fromId, senderName, senderColor?, text, internal, uiHint?, toAgentId?, createdAt}` | Durable channel message; `uiHint` can be `onboarding_name_prompt`, `handoff_notice`, or `progress`. `toAgentId` names the agent a handoff notice is about, so the client can render the name as a link to that agent's chat. |
+| `msg.new` | `{id, channelId, fromType, fromId, senderName, senderColor?, text, internal, uiHint?, toAgentId?, taskId?, questionId?, createdAt}` | Durable channel message; `uiHint` can be `onboarding_name_prompt`, `handoff_notice`, `progress`, `needs_input`, or `normal`. `toAgentId` names the agent a handoff notice is about, so the client can render the name as a link to that agent's chat. `taskId` + `questionId` mark a question from a delegated task: the client renders an answer field that sends `task.answer`. |
 | `agent.updated` | `{agentId, displayName, onboarded}` | Agent rename/onboarding state changed. |
 | `error` | `{code, message, retryAfter?}` | See codes below. |
 

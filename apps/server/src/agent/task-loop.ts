@@ -15,6 +15,8 @@ import { teamRoster } from "./personas";
 import { deriveAnchor } from "../context/compiler";
 import { registerHandoffTool } from "../tools/handoff-tool";
 import { registerDelegateTaskTool } from "../tools/delegate-task-tool";
+import { registerRequestOwnerInputTool } from "../tools/needs-input-tool";
+import { registerArtifactTool } from "../tools/artifact-tool";
 import { registerSecureExecTool } from "../tools/secure-exec-tool";
 import { registerSayTool } from "../tools/say-tool";
 import { registerRenameTool } from "../tools/rename-tool";
@@ -62,6 +64,20 @@ export interface TaskTurnRun {
   inputRole?: "user" | "system";
   /** The text written to the durable log (defaults to the request text). */
   inputText?: string;
+  /**
+   * DEL-006: this turn is a delegated task. The task can ask the owner a
+   * question and wait for the answer, so the turn knows which task it is and
+   * where the question should be asked.
+   */
+  delegation?: {
+    taskID: string;
+    /** The agent doing the work. */
+    ownerAgentID: string;
+    /** The agent that delegated, and gets the answer. */
+    parentAgentID: string | null;
+    /** The channel the owner is watching. */
+    parentChannelID: string | null;
+  };
 }
 export interface TaskTurnResult { turnID: string; text: string; stopReason: StopReason }
 
@@ -138,6 +154,11 @@ const TASK_SYSTEM_PROMPT = [
 
 const activeThreads = new Set<string>();
 
+/** Is a turn running in this thread right now? A wake waits for it. */
+export function isThreadActive(threadID: string): boolean {
+  return activeThreads.has(threadID);
+}
+
 /** Tools that write user-scope memory (DEL-007 read-only agents cannot use them). */
 const MEMORY_WRITE_TOOLS = new Set(["remember_fact", "memory_write", "forget_fact"]);
 
@@ -148,7 +169,10 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   if ((existing?.state === "running" || existing?.state === "awaiting_approval") && activeThreads.has(threadID)) {
     throw new Error("a task turn is already active or awaiting approval for this thread");
   }
-  const recovering = existing?.state === "running" || existing?.state === "awaiting_approval";
+  // A session parked on a question is resumed, not restarted: the answer
+  // continues the same conversation.
+  const recovering =
+    existing?.state === "running" || existing?.state === "awaiting_approval" || existing?.state === "waiting";
   const turnID = recovering ? existing.turn_id : run.turnID ?? newID("trn");
   let messages: ChatMessage[];
   let stepCount = recovering ? existing.step_count : 0;
@@ -245,7 +269,25 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // queued; the specialist runs in a background session with only the brief.
   registerDelegateTaskTool(registry, {
     db, emit: run.emit, currentAgentID: persona.id, channelID: run.channelID, parentTurnID: turnID,
+    parentThreadID: threadID,
   });
+  // DEL-006: a delegated task can ask the owner a question and wait. The
+  // tool is only registered for a delegated turn, and the turn stops with
+  // `needs_input` once the question is asked.
+  let needsInput = false;
+  if (run.delegation) {
+    registerRequestOwnerInputTool(registry, {
+      db,
+      emit: run.emit,
+      task: {
+        id: run.delegation.taskID,
+        ownerAgentID: run.delegation.ownerAgentID,
+        parentAgentID: run.delegation.parentAgentID,
+        parentChannelID: run.delegation.parentChannelID,
+      },
+      onNeedsInput: () => { needsInput = true; },
+    });
+  }
   // Separate progress bubbles, and a one-time password prompt that never
   // reaches the model. Both are per-turn because they need the live emit.
   registerSayTool(registry, {
@@ -257,6 +299,9 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // Renaming is an action, not a sentence: this persists the new name and
   // pushes `agent.updated` so every client's roster follows in the same turn.
   registerRenameTool(registry, { db, emit: run.emit, currentAgentID: persona.id });
+  // DEL-004: the full result of a delegated task, read through the same
+  // visibility filter as everything else.
+  registerArtifactTool(registry, { db, currentAgentID: persona.id });
   // Redefining an agent is an action too: the owner's words become the
   // agent's role and prompt, durably.
   registry.register(createUpdateAgentTool({ db, emit: run.emit }));
@@ -372,6 +417,17 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
           // Approval denial is returned as a tool error and the model may explain it.
           persistSession(db, threadID, turnID, "running", messages, summary, stepCount, tokenCount);
         }
+        // DEL-006: the task asked the owner a question. The turn stops here
+        // and resumes with the answer — it does not keep working on a guess.
+        if (needsInput) {
+          stopReason = "needs_input";
+          break;
+        }
+      }
+      // The question was asked; the turn ends here, waiting for the answer.
+      if (needsInput) {
+        stopReason = "needs_input";
+        break;
       }
       // A step that only calls tools is normal — some models narrate nothing
       // until they have an answer. A step that calls tools and achieves
@@ -451,7 +507,10 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   if (run.channelID) void compactChannelHistory(db, router, run.channelID, persona.id);
   finishTurn(db, { id: turnID, stopReason, ...usage });
   touchThread(db, threadID);
-  persistSession(db, threadID, turnID, stopReason === "end" ? "done" : "failed", messages, summary, stepCount, tokenCount);
+  // A turn waiting for the owner's answer is not a failed turn: the session
+  // is parked, and the resume picks it up.
+  const sessionState = stopReason === "end" ? "done" : stopReason === "needs_input" ? "waiting" : "failed";
+  persistSession(db, threadID, turnID, sessionState, messages, summary, stepCount, tokenCount);
   if (usage) recordUsage(db, { turnID, ...usage });
   run.emit({ type: "turn.end", turnID, threadID, stopReason, ...(usage ? { usage } : {}), ...(run.conversationID ? { conversationID: run.conversationID } : {}) });
   return { turnID, text: finalText, stopReason };
