@@ -9,6 +9,19 @@ status_values: [EXISTS, PARTIAL, MISSING, CONFLICT, UNKNOWN]
 effort_values: [S, M, L, XL]
 ---
 
+> **Decisions applied to this spec (2026-10-21).** Three requirements were
+> written against the code as it was, and the code is now deliberately
+> different. The spec is corrected here rather than in the code, because the
+> code is the better design:
+>
+> - **C-04 / DEL-001:** `handoff` stays **synchronous** and runs the child in
+>   its **own thread** (the specialist's own conversation). The asynchronous
+>   path is `delegate_task`: it creates a task row and returns immediately.
+> - **ROL-001:** blocks are **per conversation**, not per channel. One
+>   conversation per agent, one live block at a time.
+>
+> Everything else in this document stands as written.
+
 # 0. Instructions for the verifying agent
 
 You are auditing a codebase against this spec. **Do not modify any code.** Read-only.
@@ -30,7 +43,7 @@ Keyword conventions: MUST / SHOULD / MAY follow RFC 2119. `TUNABLE` values are s
 | C-01 | One conversation per agent; never resets | find conversation model/table; check for reset logic |
 | C-02 | Session blocks rotate; a full block is closed into a carried summary | `rollover.ts`; block table/columns |
 | C-03 | Channels: `main` (EA) and `dm:<agent>` (specialists); channel messages are the durable transcript | channel enum/table; message table |
-| C-04 | `handoff` tool spawns a child turn **in the same thread** with a specialist persona; reply posts to the channel | tool definition and executor |
+| C-04 | `handoff` tool spawns a child turn **in its own thread** (the specialist's conversation) with a specialist persona; the reply is the tool result, and it is posted to the specialist's DM | tool definition and executor |
 | C-05 | `create_agent` tool registers agents at runtime | tool definition; roster storage |
 | C-06 | Specialists are hidden from the sidebar but valid handoff targets | roster/sidebar code |
 | C-07 | Stores: `agent_memories` (scope/type/tags/importance), `links`, `tasks`; facts are recalled into the prompt prefix | schema/migrations; recall code |
@@ -192,7 +205,7 @@ Conflict rule: newest user-stated fact wins; the old one is closed; the conflict
 ```yaml
 - id: ROL-001
   level: MUST
-  text: Blocks are per channel. Each channel runs its own rollover.
+  text: Blocks are per conversation, not per channel. One conversation per agent, one live block at a time; each conversation runs its own rollover.
 - id: ROL-002
   level: MUST
   text: Rollover is a background job. A user turn arriving mid-rollover is served from the old block plus any in-flight summary. No user-visible wait.
@@ -219,8 +232,8 @@ Conflict rule: newest user-stated fact wins; the old one is closed; the conflict
 ```yaml
 - id: DEL-001
   level: MUST
-  text: handoff is asynchronous - creates a tasks row and returns immediately. Task states queued | running | needs_input | done | failed.
-  verify: current handoff is synchronous and same-thread (C-04); report the blockers to changing that.
+  text: delegate_task is asynchronous - creates a tasks row and returns immediately. Task states queued | running | needs_input | done | failed. handoff stays synchronous: the answer comes back as the tool result.
+  verify: the async path is delegate_task; handoff is the synchronous path.
 - id: DEL-002
   level: MUST
   text: Child agent runs in its own thread/context, not the EA's.

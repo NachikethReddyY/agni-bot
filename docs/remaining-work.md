@@ -1,7 +1,7 @@
 ---
 doc: remaining-work
 version: 2.0
-status: active
+status: built
 source_spec: docs/agni-context-memory-spec.md
 supersedes: docs/audit-context-memory-spec.md
 ---
@@ -13,6 +13,9 @@ needs, and the spec gaps found while checking it against the code.
 
 ## Changelog
 
+- **v3** — the plan is **built**. Every PR below is open and stacked; the
+  coverage map in §6 says where each requirement landed, and §3.1 lists the
+  new decisions the work forced.
 - **v2** — folded the spec-gap audit into the plan; PR 3 split into 3a/3b/3c;
   stale `docs/audit-context-memory-spec.md` superseded by this document.
 
@@ -117,14 +120,17 @@ Already shipped in the memory/delegation/secure-input work:
   output redaction, secret-free transcripts and logs.
 - `say` for separate progress bubbles; background jobs and delegation.
 
-Not yet done, and not yet enforced anywhere in code:
+### 3.1 What the work changed on the way
 
-- `agents.visibility` and `agent_memories.visibility` exist as columns.
-  **Nothing reads them.** `handoff` still returns the specialist's full text.
-- `needs_input` exists as a state. **Nothing sets it.**
-- Async completion raises a `notify`. It does not wake the parent thread.
-- `recall_fact` is a `LIKE` substring search. There is no FTS and no vector
-  index on `agent_memories` or `channel_messages`.
+The plan forced a few decisions that were not in it. They are recorded here
+so they are not relitigated:
+
+| ID | Decision | Status | Notes |
+|---|---|---|---|
+| D-12 | The shipped team is `shared`; a new agent starts at `summary` | settled | The executive assistant is the owner's proxy and keeps the answer it synthesizes from. A runtime-created agent starts conservative. |
+| D-13 | The gate and the retrieval rewrite share one deictic test (`looksDeictic`) | settled | The eval suite found them disagreeing: the gate called "and tomorrow?" deictic and the rewrite did not, so the turn lost its referent. One test, one answer. |
+| D-14 | FTS-only needle recall targets 0.8; hybrid recall targets 0.9 | settled | The text search cannot find a paraphrase that shares no words with the fact. The vector half is what lifts those, and it needs an embedder, which is optional — so the hybrid number is skipped, not quietly passed. |
+| D-15 | The rollup of summaries is deterministic | settled | A day summary is the union of the day's decisions and open loops. No provider, no cost, idempotent, and it can run in the background. |
 
 ---
 
@@ -581,62 +587,90 @@ Unscheduled ideas:
 
 ## 6. Spec coverage map
 
-Spec IDs from `docs/agni-context-memory-spec.md`, and where each lands.
+Spec IDs from `docs/agni-context-memory-spec.md`, and where each landed.
+Every row is **done**; the "Landed in" column is the pull request.
 
-| ID | Status today | Lands in |
-|---|---|---|
-| RTE-001 | EXISTS | — |
-| RTE-002 | PARTIAL (no leak test) | PR 1 |
-| RTE-003 | EXISTS | — |
-| RTE-004 | schema only, unenforced | PR 1 |
-| GATE-001 | rules-only, no benchmark | PR 3a (benchmark), PR 7 (enforcement) |
-| GATE-002 | EXISTS | — |
-| GATE-003 | EXISTS | — |
-| ASM-001 | EXISTS | — |
-| ASM-002 | EXISTS | — |
-| ASM-003 | MISSING | PR 3c |
-| ASM-004 | MISSING (no retrieval) | PR 3a (no-inject), PR 3c (hybrid) |
-| ASM-005 | MISSING | PR 3c |
-| ASM-006 | MISSING | PR 3c |
-| ASM-007 | constants | PR 3a |
-| TAG-001 | loose JSON | PR 3b |
-| TAG-002 | MISSING (security) | PR 3b |
-| TAG-003 | MISSING | PR 3b |
-| TAG-004 | partial (compaction only) | PR 3b |
-| MEM-001 | EXISTS | — |
-| MEM-002 | partial (no conflict flag) | PR 3b |
-| MEM-003 | MISSING | PR 3a (FTS), PR 3c (vectors) |
-| MEM-004 | scope only, no visibility | PR 1 |
-| MEM-005 | facts only | PR 3c |
-| MEM-006 | MISSING | PR 3c |
-| ROL-001 | per conversation (by D-08) | spec corrected |
-| ROL-002 | synchronous | PR 4 |
-| ROL-003 | char count | PR 4 |
-| ROL-004 | opportunistic | PR 4 (inside `rollover.summarize`) |
-| ROL-005 | free text | PR 4 |
-| ROL-006 | summary only | PR 4 |
-| CMP-001 | MISSING | PR 4 follow-up |
-| DEL-001 | `delegate_task` async (by D-09) | spec corrected |
-| DEL-002 | EXISTS | — |
-| DEL-003 | no `fact_ids` | PR 3c |
-| DEL-004 | MISSING | PR 2 |
-| DEL-005 | EXISTS | — |
-| DEL-006 | partial | PR 2 |
-| DEL-007 | EXISTS | — |
-| EVAL-001..003 | MISSING | PR 7 |
-| EVAL-004 | MISSING | PR 1, extended in PR 7 |
-| EVAL-005..006 | MISSING | PR 7 |
+| ID | What it is | Landed in | Status |
+|---|---|---|---|
+| RTE-001 | a message resolves to (agent, channel) | — | already there |
+| RTE-002 | a DM turn never reaches the EA | #4 | done — EVAL-004 is a leak test now |
+| RTE-003 | hidden specialists stay addressable | — | already there |
+| RTE-004 | per-agent visibility | #4 | done — one choke point, enforced |
+| GATE-001 | classify every turn, cheaply | #4 (gate), #6 (benchmark), #12 (enforcement) | done — rules only, p95 benchmarked |
+| GATE-002 | ephemeral turns stay in the window | — | already there |
+| GATE-003 | explicit remember/forget is immediate | — | already there |
+| ASM-001 | slot-ordered, budgeted prompt | #9 (budgets configurable) | done |
+| ASM-002 | an always-present anchor | — | already there |
+| ASM-003 | rewrite a message that points back | #8, #12 (one deictic test) | done |
+| ASM-004 | hybrid retrieval, nothing below the floor | #6 (FTS, no-inject), #8 (vectors) | done — the vector half needs an embedder |
+| ASM-005 | `expand` follows a reference | #8 | done |
+| ASM-006 | fall back to the previous block's tail | #8 | done |
+| ASM-007 | budgets are configuration | #6 | done |
+| TAG-001 | strict schema, invalid items logged | #7 | done |
+| TAG-002 | only the owner writes facts about the owner | #7 | done — enforced in the store |
+| TAG-003 | a confidence floor | #7 | done — calibrated, not guessed |
+| TAG-004 | ephemeral turns produce no items | #7 | done |
+| MEM-001 | the memory schema | #6 (lifecycle), #8 (embeddings) | done |
+| MEM-002 | a changed fact supersedes, and flags | #7 | done — conflicts are recorded |
+| MEM-003 | facts and transcripts are indexed | #6 (FTS), #8 (vectors) | done |
+| MEM-004 | scope and visibility in the query layer | #4 | done — one filter |
+| MEM-005 | forget is a hard delete | #8 | done — facts, FTS, embeddings |
+| MEM-006 | a nightly sweep | #8 | done |
+| ROL-001 | blocks per conversation | — | spec corrected (D-08) |
+| ROL-002 | rollover is a background job | #9 | done — the turn never waits |
+| ROL-003 | 65% trigger, hysteresis, topic shift | #9 | done |
+| ROL-004 | the sweep catches what the gate missed | #7 (the tagger), #9 (in the job) | done — never on the turn's path |
+| ROL-005 | a structured summary | #9 | done |
+| ROL-006 | summary + tail + ledger + anchor | #9 | done |
+| CMP-001 | block → day → epoch | #14 | done |
+| DEL-001 | the async path | #5 | `delegate_task` is async; `handoff` stays sync (D-09) |
+| DEL-002 | the child runs in its own thread | — | already there |
+| DEL-003 | the brief carries what the child needs | #5 (`fact_ids` returns), #8 (`get_fact`) | done |
+| DEL-004 | the result is stored by reference | #5 | done — an artifact, filtered on read |
+| DEL-005 | tasks carry owner and origin | — | already there |
+| DEL-006 | a status policy, with visibility | #5 | done — start, needs_input, done, failed |
+| DEL-007 | new agents get read-only user memory | — | already there |
+| EVAL-001 | needle recall | #12 | done — 0.8 FTS-only, 0.9 hybrid |
+| EVAL-002 | the gate's misses | #12 | done |
+| EVAL-003 | continuity | #12 | done |
+| EVAL-004 | the leak test | #4, #12 | done |
+| EVAL-005 | cost and latency | #12 | done |
+| EVAL-006 | drift | #12, #14 | done |
+
+### 6.1 The pull requests
+
+| PR | What it does |
+|---|---|
+| #4 | the visibility choke point and the leak gate |
+| #5 | the delegation lifecycle: ask, answer, wake |
+| #6 | FTS, ranking, `markMemoryUsed`, the no-inject rule |
+| #7 | the tagger, the source policy, the conflict flag |
+| #8 | hybrid retrieval, the nightly sweep, `expand` |
+| #9 | a rollover that never makes the owner wait |
+| #10 | the macOS authorization path for privileged commands |
+| #11 | presence, activity, and an interrupt that takes over |
+| #12 | the acceptance suite |
+| #13 | the memory view |
+| #14 | summaries in levels: block, day, epoch |
+
+They are stacked: #4 is based on `main`, and each one is based on the one
+before it. Merge them in order.
 
 ---
 
 ## 7. Process notes
 
-- This document is committed **before PR 1** starts.
-- Every PR updates the changelog at the top of this file and the coverage map
-  in §6 as it lands.
+- This document was committed **before the first implementation PR**, and
+  updated to v3 when the last one landed. The changelog at the top and the
+  coverage map in §6 are the record of what happened.
 - `docs/audit-context-memory-spec.md` is marked as superseded. It stays for
   history and for the reasoning behind the early build order, but it is not a
   source of truth and must not be used to size remaining work.
-- The spec itself is not edited in place; changes to requirements are made
-  here as a decision row in §2, and the spec is corrected separately when the
-  decision is D-08, D-09 or D-10 shaped.
+- The spec is corrected where a decision changed the requirement: C-04,
+  ROL-001 and DEL-001 (see the note at the top of the spec). The corrections
+  are recorded as decisions here first, and applied to the spec after.
+- The pull requests are stacked, in the order of §6.1. Each one is a
+  self-contained change with its own acceptance tests; merging them out of
+  order breaks the ones above it.
+- §5 (the product-direction backlog) stays **unscheduled** on purpose. It
+  came from a description of another product, not from a need we have.
