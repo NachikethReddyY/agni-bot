@@ -5,7 +5,7 @@
  */
 import { useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
-import { format, type JobInfo, type TaskInfo } from "@agni/client";
+import { format, type JobInfo, type MemoryItem, type TaskInfo } from "@agni/client";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import { AgentAvatar, PresenceDot } from "./bits";
 import { AddProviderView } from "./AddProviderView";
@@ -13,6 +13,7 @@ import { AddProviderView } from "./AddProviderView";
 export function InspectorView() {
   const model = useAppModel();
   const snapshot = useAppSnapshot();
+  const memories = snapshot.memories;
   const [addingProvider, setAddingProvider] = useState(false);
   const agent = model.agent;
   const openTasks = snapshot.tasks.filter((task) => task.status !== "done");
@@ -75,6 +76,23 @@ export function InspectorView() {
             ))}
           </>
         ) : null}
+      </section>
+
+      <section className="inspector-section">
+        <div className="inspector-section-head">
+          <div className="section-title">Memory</div>
+          <button type="button" className="link" onClick={() => model.refreshMemories()}>
+            Refresh
+          </button>
+        </div>
+        {memories.length === 0 ? (
+          <div className="empty-note">
+            <strong>Nothing remembered yet</strong>
+            <span>Facts the agent keeps show up here — only the ones it can actually recall.</span>
+          </div>
+        ) : (
+          memories.map((memory) => <MemoryRow key={memory.id} memory={memory} />)
+        )}
       </section>
 
       <section className="inspector-section">
@@ -210,6 +228,33 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="kv-row">
       <span className="kv-label">{label}</span>
       <span className="kv-value">{value}</span>
+    </div>
+  );
+}
+
+/**
+ * One remembered thing. The owner can see what the agent holds and where it
+ * came from; the list is filtered the way retrieval filters it, so nothing
+ * shows here that the agent could not have recalled.
+ */
+function MemoryRow({ memory }: { memory: MemoryItem }) {
+  const used = memory.useCount > 0;
+  return (
+    <div className="memory-row">
+      <div className="memory-text">{memory.text}</div>
+      <div className="memory-meta">
+        <span>{memory.scope}</span>
+        <span>·</span>
+        <span>{memory.source}</span>
+        <span>·</span>
+        <span title="How sure the agent is">{(memory.confidence * 100).toFixed(0)}%</span>
+        {used ? (
+          <>
+            <span>·</span>
+            <span title="How often it is recalled">used {memory.useCount}×</span>
+          </>
+        ) : null}
+      </div>
     </div>
   );
 }

@@ -16,6 +16,7 @@ struct InspectorView: View {
       VStack(alignment: .leading, spacing: 20) {
         agentCard
         tasksSection
+        memorySection
         routines
         connections
         today
@@ -53,6 +54,37 @@ struct InspectorView: View {
       row("Tools", (model.agent?.tools?.isEmpty == false) ? model.agent!.tools!.joined(separator: ", ") : "none in this lane")
       if let threadID = model.conversation.threadID {
         row("Thread", threadID)
+      }
+    }
+  }
+
+  // MARK: memory
+
+  /// What the agent holds, and where it came from. The list is filtered the
+  /// way retrieval filters it, so nothing shows here that the agent could
+  /// not have recalled.
+  private var memorySection: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack {
+        sectionTitle("Memory")
+        Spacer()
+        Button("Refresh") { model.refreshMemories() }
+          .buttonStyle(.link)
+          .font(Typography.caption)
+      }
+      if model.memories.isEmpty {
+        empty("Nothing remembered yet", "Facts the agent keeps show up here.")
+      }
+      ForEach(model.memories) { memory in
+        VStack(alignment: .leading, spacing: 3) {
+          Text(memory.text).font(Typography.rowTitle).lineLimit(3)
+          Text(
+            [memory.scope, memory.source, "\(Int(memory.confidence * 100))%"]
+              .joined(separator: " · ")
+          )
+          .font(Typography.caption).foregroundStyle(Palette.inkSecondary)
+        }
+        .padding(.vertical, 4)
       }
     }
   }

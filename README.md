@@ -115,6 +115,18 @@ script is deleted the moment the run ends. The authorization dialog shows the
 The owner's password is never stored anywhere — not in the Keychain, not in a
 file. The Keychain holds the device token and nothing else.
 
+### What Agni remembers, seen from the app
+
+The Inspector has a **Memory** section: every fact the agent holds, with its
+scope, where it came from, how sure the agent is, and how often it is
+recalled. The list is filtered by the same rules the retrieval uses, so
+nothing shows there that the agent could not have recalled — a private
+agent's fact is not in the list, and another agent's scoped note is not
+either.
+
+Editing and deleting come later; the read view ships first, because a
+memory you cannot see is a memory you cannot trust.
+
 ### The acceptance suite
 
 ```sh

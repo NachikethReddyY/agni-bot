@@ -151,6 +151,26 @@ public struct JobInfo: Sendable, Equatable, Decodable, Identifiable {
   public var lastResult: String?
 }
 
+/// The answer to `memory.list`: what the agent can remember.
+public struct MemoryListOK: Sendable, Equatable, Decodable {
+  public var seq: Int
+  public var memories: [MemoryItem]
+}
+
+/// One remembered thing, as the memory view shows it.
+public struct MemoryItem: Sendable, Equatable, Decodable, Identifiable {
+  public var id: String
+  public var text: String
+  public var scope: String
+  public var visibility: String
+  public var source: String
+  public var confidence: Double
+  public var salience: Double
+  public var updatedAt: String
+  public var lastUsedAt: String?
+  public var useCount: Int
+}
+
 public struct TaskInfo: Sendable, Equatable, Decodable, Identifiable {
   public var id: String
   public var title: String
@@ -257,6 +277,8 @@ public enum ClientFrame: Sendable, Equatable {
   case jobSet(jobID: String, action: String)
   case jobDelete(jobID: String)
   case taskList(status: String?, limit: Int?)
+  /// Ask what the agent can remember.
+  case memoryList(scope: String?, limit: Int?)
   case taskUpdate(taskID: String, action: String, until: String?)
   case providerAdd(providerID: String, apiKey: String, model: String?, baseUrl: String?, label: String?)
   case providerModelSet(providerID: String, model: String)
@@ -286,6 +308,7 @@ public enum ClientFrame: Sendable, Equatable {
     case .jobSet: "job.set"
     case .jobDelete: "job.delete"
     case .taskList: "task.list"
+    case .memoryList: "memory.list"
     case .taskUpdate: "task.update"
     case .providerAdd: "provider.add"
     case .providerModelSet: "provider.model.set"
@@ -350,6 +373,9 @@ public enum ClientFrame: Sendable, Equatable {
       object["jobID"] = jobID
     case .taskList(let status, let limit):
       if let status { object["status"] = status }
+      if let limit { object["limit"] = limit }
+    case .memoryList(let scope, let limit):
+      if let scope { object["scope"] = scope }
       if let limit { object["limit"] = limit }
     case .taskUpdate(let taskID, let action, let until):
       object["taskID"] = taskID
@@ -449,6 +475,8 @@ public enum ClientFrame: Sendable, Equatable {
       self = .jobDelete(jobID: try Require.string(object, "jobID"))
     case "task.list":
       self = .taskList(status: object["status"] as? String, limit: object["limit"] as? Int)
+    case "memory.list":
+      self = .memoryList(scope: object["scope"] as? String, limit: object["limit"] as? Int)
     case "task.update":
       self = .taskUpdate(taskID: try Require.string(object, "taskID"), action: try Require.string(object, "action"), until: object["until"] as? String)
     case "provider.add":
@@ -509,6 +537,8 @@ public enum ServerFrame: Sendable, Equatable {
   case threadExportOK(ThreadExportOK)
   case jobListOK(JobListOK)
   case taskListOK(TaskListOK)
+  /// The memory view: what the agent can remember.
+  case memoryListOK(MemoryListOK)
   case taskUpdateOK(TaskUpdateOK)
   case providerAddOK(ProviderAddOK)
   case providerModelsOK(ProviderModelsOK)
@@ -546,6 +576,7 @@ public enum ServerFrame: Sendable, Equatable {
     case .threadExportOK(let f): f.seq
     case .jobListOK(let f): f.seq
     case .taskListOK(let f): f.seq
+    case .memoryListOK(let f): f.seq
     case .taskUpdateOK(let f): f.seq
     case .providerAddOK(let f): f.seq
     case .providerModelsOK(let f): f.seq
@@ -583,6 +614,7 @@ public enum ServerFrame: Sendable, Equatable {
     case .threadExportOK: "thread.export.ok"
     case .jobListOK: "job.list.ok"
     case .taskListOK: "task.list.ok"
+    case .memoryListOK: "memory.list.ok"
     case .taskUpdateOK: "task.update.ok"
     case .providerAddOK: "provider.add.ok"
     case .providerModelsOK: "provider.models.ok"
@@ -864,6 +896,7 @@ public enum ServerFrame: Sendable, Equatable {
     case "thread.export.ok": self = .threadExportOK(try Decode.frame(ThreadExportOK.self, object))
     case "job.list.ok": self = .jobListOK(try Decode.frame(JobListOK.self, object))
     case "task.list.ok": self = .taskListOK(try Decode.frame(TaskListOK.self, object))
+    case "memory.list.ok": self = .memoryListOK(try Decode.frame(MemoryListOK.self, object))
     case "task.update.ok": self = .taskUpdateOK(try Decode.frame(TaskUpdateOK.self, object))
     case "provider.add.ok": self = .providerAddOK(try Decode.frame(ProviderAddOK.self, object))
     case "provider.models.ok": self = .providerModelsOK(try Decode.frame(ProviderModelsOK.self, object))

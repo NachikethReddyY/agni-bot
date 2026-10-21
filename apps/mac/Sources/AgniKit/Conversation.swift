@@ -334,7 +334,7 @@ public struct Conversation: Sendable, Equatable {
   public mutating func apply(_ frame: ServerFrame) -> [ConversationEffect] {
     switch frame {
     case .helloOK, .conversationOK, .conversationHistoryOK, .threadExportOK, .threadListOK, .threadHistoryOK,
-      .jobListOK, .taskListOK, .taskUpdateOK, .providerAddOK, .providerModelsOK,
+      .jobListOK, .taskListOK, .taskUpdateOK, .memoryListOK, .providerAddOK, .providerModelsOK,
       .pluginListOK, .pluginConnectOK, .pluginState, .unknown:
       return []
 

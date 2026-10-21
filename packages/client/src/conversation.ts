@@ -355,6 +355,7 @@ export class Conversation {
       case "job.list.ok":
       case "task.list.ok":
       case "task.update.ok":
+      case "memory.list.ok":
       case "provider.add.ok":
       case "provider.models.ok":
       case "plugin.list.ok":
