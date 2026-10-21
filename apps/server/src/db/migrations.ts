@@ -726,4 +726,19 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_agent_memories_archived ON agent_memories(archived_at, valid_to);
     `,
   },
+  {
+    id: 27,
+    name: "rollover_structured_summary",
+    sql: `
+      -- ROL-005: the carried summary is structured, not free text: the
+      -- decisions, the open loops, the entities, the tone, and the turns it
+      -- came from. The text version stays for the prompt.
+      ALTER TABLE conversations ADD COLUMN summary_json TEXT;
+      -- The version of the summary that is current. A second rotation can
+      -- land before the first summary does; the newer version wins.
+      ALTER TABLE conversations ADD COLUMN summary_version INTEGER NOT NULL DEFAULT 0;
+      -- ROL-006: the new block opens with the last turns of the old one.
+      ALTER TABLE threads ADD COLUMN opened_tail TEXT;
+    `,
+  },
 ];

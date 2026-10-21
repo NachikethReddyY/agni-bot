@@ -137,6 +137,19 @@ turn that is small talk produces nothing.
   one wins and the old one is closed — and the conflict is recorded
   (`memory_conflicts`) rather than hidden.
 
+### Blocks that roll over without making you wait
+
+A session block is the unit of context. When one fills up, it is closed and
+a new one opens **immediately** — the turn never waits for a summary. The
+new block opens with the previous summary plus the last six turns of the
+old one, and the summary of the closed block is written in the background.
+A second rotation that lands before the first summary does not lose the
+newer one.
+
+The trigger is 65% of the block budget, with hysteresis above it, so a
+block hovering near the threshold does not thrash. An idle gap plus a topic
+shift also starts a new block.
+
 ### Search and memory
 
 Facts and the conversation transcript are indexed with SQLite FTS5, so

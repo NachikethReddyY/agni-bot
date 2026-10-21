@@ -27,6 +27,7 @@ import { retrieveFacts, rewriteForRetrieval, previousBlockTail } from "./retriev
 import { embedderConfig } from "./embeddings";
 import { registerExpandTool } from "../tools/expand-tool";
 import { buildDelegationPrefix } from "./prompts";
+import { getThread } from "../stores/threads";
 import { appendChannelMessage, getChannelSummary } from "../stores/channels";
 import { compactChannelHistory } from "./compactor";
 import { GuardrailError, enterDelegation, rootGuardrail, stepGuardrail, type GuardrailState } from "./guardrails";
@@ -162,6 +163,15 @@ const TASK_SYSTEM_PROMPT = [
 
 const activeThreads = new Set<string>();
 
+/**
+ * The tail of the block before this one, verbatim (ROL-006).
+ */
+function openedTail(db: Database, threadID: string): string[] {
+  const raw = getThread(db, threadID)?.opened_tail;
+  if (!raw) return [];
+  return raw.split("\n").filter((line) => line.trim().length > 0);
+}
+
 /** Is a turn running in this thread right now? A wake waits for it. */
 export function isThreadActive(threadID: string): boolean {
   return activeThreads.has(threadID);
@@ -262,6 +272,12 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     maxDepth: 5,
     toolHints: dynamicHints,
     anchor,
+    // ASM-004: what this turn needs, retrieved rather than carried.
+    recall,
+    // ROL-006: the new block opens with the last turns of the old one, so
+    // the boundary does not lose the stretch the summary has not caught up
+    // with.
+    previousTail: openedTail(db, threadID),
     // Only an agent that can actually hand off needs to know the roster.
     team: persona.tools.includes("handoff") ? teamRoster(db, { exclude: persona.id }) : [],
   });

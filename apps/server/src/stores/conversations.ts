@@ -20,6 +20,10 @@ export interface ConversationRow {
   active_thread_id: string | null;
   /** Bounded carried summary, seeded into each new block's context. */
   summary: string | null;
+  /** ROL-005: the structured summary behind the text. */
+  summary_json: string | null;
+  /** The version of the summary that is current (a block's created_at). */
+  summary_version: number;
   created_at: string;
   updated_at: string;
 }
@@ -38,7 +42,7 @@ export interface SessionMessage {
 export function ensureConversation(db: Database, agentID: string): ConversationRow {
   const existing = db
     .query<ConversationRow, [string]>(
-      "SELECT id, agent_id, active_thread_id, summary, created_at, updated_at FROM conversations WHERE agent_id = ?",
+      "SELECT id, agent_id, active_thread_id, summary, summary_json, summary_version, created_at, updated_at FROM conversations WHERE agent_id = ?",
     )
     .get(agentID);
   if (existing) return existing;
@@ -47,14 +51,18 @@ export function ensureConversation(db: Database, agentID: string): ConversationR
     agent_id: agentID,
     active_thread_id: null,
     summary: null,
+    summary_json: null,
+    summary_version: 0,
     created_at: nowISO(),
     updated_at: nowISO(),
   };
-  db.run("INSERT INTO conversations (id, agent_id, active_thread_id, summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", [
+  db.run("INSERT INTO conversations (id, agent_id, active_thread_id, summary, summary_json, summary_version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
     row.id,
     row.agent_id,
     row.active_thread_id,
     row.summary,
+    row.summary_json,
+    row.summary_version,
     row.created_at,
     row.updated_at,
   ]);
@@ -65,7 +73,7 @@ export function getConversation(db: Database, id: string): ConversationRow | nul
   return (
     db
       .query<ConversationRow, [string]>(
-        "SELECT id, agent_id, active_thread_id, summary, created_at, updated_at FROM conversations WHERE id = ?",
+        "SELECT id, agent_id, active_thread_id, summary, summary_json, summary_version, created_at, updated_at FROM conversations WHERE id = ?",
       )
       .get(id) ?? null
   );
@@ -108,6 +116,7 @@ export function openSession(
   conversation: ConversationRow,
   reason: SessionCloseReason,
   carry: string | null,
+  tail: string[] = [],
 ): ThreadRow {
   const now = nowISO();
   return db.transaction(() => {
@@ -115,11 +124,16 @@ export function openSession(
       db.run("UPDATE threads SET closed_at = ?, closed_by = ? WHERE id = ?", [now, reason, conversation.active_thread_id]);
     }
     const block = createThread(db, conversation.agent_id, undefined, { conversationID: conversation.id });
-    db.run("UPDATE threads SET opened_carry = ?, created_at = ? WHERE id = ?", [carry, now, block.id]);
+    db.run("UPDATE threads SET opened_carry = ?, opened_tail = ?, created_at = ? WHERE id = ?", [
+      carry,
+      tail.length > 0 ? tail.join("\n") : null,
+      now,
+      block.id,
+    ]);
     db.run("UPDATE conversations SET active_thread_id = ?, updated_at = ? WHERE id = ?", [block.id, now, conversation.id]);
     conversation.active_thread_id = block.id;
     conversation.updated_at = now;
-    return { ...block, opened_carry: carry, created_at: now };
+    return { ...block, opened_carry: carry, opened_tail: tail.length > 0 ? tail.join("\n") : null, created_at: now };
   })();
 }
 
@@ -170,6 +184,36 @@ export function delegationSession(db: Database, conversation: ConversationRow, t
 /** Store the refreshed carried summary. */
 export function updateSummary(db: Database, conversationID: string, summary: string | null): void {
   db.run("UPDATE conversations SET summary = ?, updated_at = ? WHERE id = ?", [summary, nowISO(), conversationID]);
+}
+
+/**
+ * Store the structured summary, but only if it is newer than what is
+ * already there. Two rotations can land before the first summary does;
+ * the newer one wins and the older one is ignored.
+ */
+export function updateSummaryIfNewer(
+  db: Database,
+  conversationID: string,
+  input: { summary: string; structured: unknown; version: number },
+): boolean {
+  const result = db.run(
+    "UPDATE conversations SET summary = ?, summary_json = ?, summary_version = ?, updated_at = ? WHERE id = ? AND summary_version < ?",
+    [input.summary, JSON.stringify(input.structured), input.version, nowISO(), conversationID, input.version],
+  );
+  return result.changes > 0;
+}
+
+/** The structured summary, if there is one. */
+export function getStructuredSummary(db: Database, conversationID: string): unknown | null {
+  const raw = db
+    .query<{ summary_json: string | null }, [string]>("SELECT summary_json FROM conversations WHERE id = ?")
+    .get(conversationID)?.summary_json;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 /** Message count pressure heuristic: chars across the block (fast, indexed). */

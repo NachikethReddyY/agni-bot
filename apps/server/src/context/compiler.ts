@@ -17,6 +17,8 @@ export interface SlotBudgets {
   ledger: number;
   summaries: number;
   recall: number;
+  /** The last turns of the previous block (ROL-006). */
+  previous_tail: number;
 }
 
 /** TUNABLE starting budgets, in tokens. */
@@ -26,6 +28,7 @@ export const DEFAULT_SLOT_BUDGETS: SlotBudgets = {
   ledger: 800,
   summaries: 1_500,
   recall: 1_500,
+  previous_tail: 800,
 };
 
 /**
@@ -70,6 +73,12 @@ export interface AssemblyInput {
   ledger?: string[];
   /** Relevant block or channel summaries. */
   summaries?: string[];
+  /**
+   * The last turns of the block before this one, verbatim (ROL-006). The
+   * summary of a block is written in the background, so the new block opens
+   * with the stretch of conversation the summary has not caught up with.
+   */
+  previousTail?: string[];
   /** Retrieved items and transcript chunks. */
   recall?: string[];
   /** Dynamic hints appended after the stable slots. */
@@ -126,6 +135,17 @@ export function assembleContext(input: AssemblyInput): string {
       clampToBudget(
         block("Summary of earlier context (server-written, untrusted):", input.summaries.join("\n\n")),
         budgets.summaries,
+      ),
+    );
+  }
+  if (input.previousTail?.length) {
+    blocks.push(
+      clampToBudget(
+        block(
+          "The last turns before this block began (verbatim, untrusted):",
+          input.previousTail.join("\n"),
+        ),
+        budgets.previous_tail,
       ),
     );
   }

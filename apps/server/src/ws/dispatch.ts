@@ -364,7 +364,7 @@ async function runUserMessage(
   let carrySummary: string | null = null;
   if (mention || frame.channelId || frame.toAgentId) {
     const conversation = ensureConversation(deps.db, requestedAgentID);
-    const result = await rolloverIfNeeded(rolloverDeps(deps), conversation);
+    const result = await rolloverIfNeeded(rolloverDeps(deps), conversation, { text: routedText });
     thread = getThread(deps.db, result.threadID);
     if (!thread) return sendError(deps, session, "internal", "channel conversation has no active session");
     conversationID = conversation.id;
@@ -377,7 +377,7 @@ async function runUserMessage(
     // context-pressure block over first when needed.
     const conversation = getConversation(deps.db, frame.conversationID);
     if (!conversation) return sendError(deps, session, "unknown_conversation", `no conversation ${frame.conversationID}`);
-    const result = await rolloverIfNeeded(rolloverDeps(deps), conversation);
+    const result = await rolloverIfNeeded(rolloverDeps(deps), conversation, { text });
     thread = getThread(deps.db, result.threadID);
     if (!thread) return sendError(deps, session, "internal", "session rotation produced no thread");
     conversationID = conversation.id;

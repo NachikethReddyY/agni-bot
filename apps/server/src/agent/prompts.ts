@@ -90,6 +90,8 @@ export function buildDelegationPrefix(params: {
   anchor?: Anchor | null;
   /** ASM-004: what this turn needs, retrieved rather than carried. */
   recall?: string[];
+  /** ROL-006: the last turns of the previous block, verbatim. */
+  previousTail?: string[];
 }): string {
   const summaries: string[] = [];
   if (params.carrySummary) {
@@ -127,6 +129,7 @@ export function buildDelegationPrefix(params: {
     anchor: params.anchor ?? null,
     summaries,
     recall: params.recall ?? [],
+    previousTail: params.previousTail ?? [],
     tail,
   });
 }
