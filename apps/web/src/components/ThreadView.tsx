@@ -4,7 +4,7 @@
  * and system notes centre, because they belong to the thread, not a person.
  */
 import { useEffect, useRef, useState } from "react";
-import { Hand, MessageCircleQuestion } from "lucide-react";
+import { Hand, KeyRound, MessageCircleQuestion } from "lucide-react";
 import {
   decisionTitle,
   format,
@@ -12,6 +12,7 @@ import {
   type ApprovalRow,
   type ChatMessage,
   type FormRow,
+  type SecretRow,
 } from "@agni/client";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import { MessageRowView } from "./MessageRowView";
@@ -190,7 +191,8 @@ function PendingInbox() {
   const snapshot = useAppSnapshot();
   const approvals = snapshot.conversation.openApprovals;
   const forms = snapshot.conversation.openForms;
-  if (approvals.length === 0 && forms.length === 0) return null;
+  const secrets = snapshot.conversation.openSecrets;
+  if (approvals.length === 0 && forms.length === 0 && secrets.length === 0) return null;
   return (
     <div className="pending-inbox">
       {approvals.map((approval) => (
@@ -202,6 +204,14 @@ function PendingInbox() {
       ))}
       {forms.map((form) => (
         <FormCard key={form.id} form={form} onAnswer={(option) => model.answerForm(form, option)} />
+      ))}
+      {secrets.map((secret) => (
+        <SecretCard
+          key={secret.id}
+          secret={secret}
+          onSubmit={(value) => model.submitSecret(secret, value)}
+          onCancel={() => model.cancelSecret(secret)}
+        />
       ))}
     </div>
   );
@@ -251,6 +261,71 @@ function FormCard({ form, onAnswer }: { form: FormRow; onAnswer: (option: string
         </div>
       ) : null}
       <div className="form-hint">Or answer in your own words below.</div>
+    </div>
+  );
+}
+
+/**
+ * One-time secret prompt. The value stays in this component's local state and
+ * is cleared before the card unmounts; it is never copied into app state, the
+ * transcript, or a log.
+ */
+function SecretCard({
+  secret,
+  onSubmit,
+  onCancel,
+}: {
+  secret: SecretRow;
+  onSubmit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState("");
+  const submit = (): void => {
+    if (!value) return;
+    const typed = value;
+    setValue("");
+    onSubmit(typed);
+  };
+  return (
+    <div className="secret-card">
+      <div className="card-heading">
+        <KeyRound size={12} color="var(--ember)" />
+        {secret.purpose}
+        <span className="spacer" />
+        <span className="card-heading-id">{secret.id}</span>
+      </div>
+      <div className="secret-command">{secret.command}</div>
+      <div className="secret-row">
+        <input
+          className="secret-input"
+          type={secret.kind === "password" ? "password" : "text"}
+          name={`agni-secret-${secret.id}`}
+          value={value}
+          autoFocus
+          autoComplete="one-time-code"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          data-1p-ignore
+          data-lpignore="true"
+          data-bwignore="true"
+          placeholder={secret.kind === "password" ? "Password" : "Value"}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") submit();
+            if (event.key === "Escape") onCancel();
+          }}
+        />
+        <button type="button" className="btn small primary" onClick={submit} disabled={!value}>
+          Authorize
+        </button>
+        <button type="button" className="btn small" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+      <div className="form-hint">
+        Sent once to the daemon for this command. It is never shown to the model, stored in the transcript, or written to a log.
+      </div>
     </div>
   );
 }

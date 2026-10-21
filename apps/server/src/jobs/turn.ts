@@ -21,6 +21,7 @@ import type { Router } from "../models/router";
 import { getThread } from "../stores/threads";
 import { backgroundSession, ensureConversation, getConversation, type ConversationRow } from "../stores/conversations";
 import { parseJobPayload, type JobRow } from "../stores/jobs";
+import { setDelegationState, isDelegationCancelled } from "../stores/tasks";
 import { nextDailyRun } from "./schedule";
 import type { JobRunner } from "./runner";
 
@@ -48,6 +49,8 @@ export interface TurnJobPayload {
   lane?: "instant" | "task";
   /** When true (default), bounded durable facts ride in the prompt prefix. */
   facts?: boolean;
+  /** The delegation task row this job fulfils (DEL-001). */
+  delegationTaskID?: string;
 }
 
 export interface TurnJobDeps {
@@ -62,6 +65,12 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
     const payload = parseJobPayload<TurnJobPayload>(job);
     const text = payload.text?.trim();
     if (!text) throw new Error("turn job payload has no text");
+    const delegationTaskID = payload.delegationTaskID?.trim() || null;
+    if (delegationTaskID) {
+      // A cancelled task must not run, even if its job was already claimed.
+      if (isDelegationCancelled(deps.db, delegationTaskID)) return { result: "cancelled" };
+      setDelegationState(deps.db, delegationTaskID, "running");
+    }
 
     const persona = (payload.agentID ? resolvePersona(deps.db, payload.agentID) : undefined) ?? defaultResolvedPersona(deps.db);
 
@@ -93,10 +102,14 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
     if (result.stopReason !== "end") {
       // runInstantTurn already reported the failure as frames; a non-end stop
       // is a failed job so the runner retries it honestly.
+      if (delegationTaskID) setDelegationState(deps.db, delegationTaskID, "failed", `turn ended with ${result.stopReason}`);
       throw new Error(`turn ended with ${result.stopReason}${result.text ? " (partial output kept)" : ""}`);
     }
 
     const reply = firstLine(result.text);
+    if (delegationTaskID && !isDelegationCancelled(deps.db, delegationTaskID)) {
+      setDelegationState(deps.db, delegationTaskID, "done", reply);
+    }
     if (payload.notify !== false) {
       deps.emit({ type: "notify", title: `${persona.name} · ${truncate(text, 60)}`, body: reply, sound: false });
     }

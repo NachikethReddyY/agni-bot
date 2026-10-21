@@ -76,6 +76,27 @@ Jobs run in the daemon's `turn` lane: the model call streams into its thread
 (so any client sees it live) and completion raises a `notify` frame. Failures
 retry with backoff, then land as `failed` with a notification.
 
+### Passwords and other secrets
+
+When a command needs the owner's password (`sudo`, `ssh`, `ssh-add`, git over
+HTTPS), the agent calls `run_privileged`. It shows the exact command and a
+one-line purpose; the owner types the password into the web app's secure card
+or the CLI's hidden prompt. The value goes straight to that one command and is
+never returned to the model, written to the transcript, or logged.
+
+- **Web app:** the card appears above the composer. `Authorize` sends it once.
+- **SSH / terminal:** `bun run chat` prints a `[secret …]` line; enter it with
+  `/secret <requestID>` (input is hidden). Run the CLI on the Mac (or reach the
+  daemon over Tailscale) — the daemon binds loopback by default.
+- **Expiry:** a prompt lasts two minutes. Cancelling it, stopping the turn, or
+  restarting the daemon drops it.
+- **No chat pasting:** the agent is instructed never to ask for a password in
+  prose. If it does, refuse and use the card.
+
+The secret is injected via stdin and a short-lived 0600 askpass file in a 0700
+temp directory; it is removed when the command exits. Output is scrubbed of the
+exact value before it reaches the model.
+
 ### Smoke test without any keys
 
 ```sh

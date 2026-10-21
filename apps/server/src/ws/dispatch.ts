@@ -16,11 +16,14 @@ import {
   type JobState,
   type ServerFrame,
   type ServerFrameBody,
+  type TaskInfo,
 } from "@agni/protocol";
-import { defaultPersona, getPersona, personaInfo, defaultResolvedPersona, resolvePersona, canonicalAgentID } from "../agent/personas";
+import { defaultPersona, getPersona, personaInfo, mentionRoster, defaultResolvedPersona, resolvePersona, canonicalAgentID } from "../agent/personas";
 import { renameAgent } from "../agent/identity";
+import { resolveAgentMention } from "../agent/mentions";
 import { runTaskTurn } from "../agent/task-loop";
 import { resolveApprovalWaiter } from "../agent/approval-broker";
+import { cancelSecret, listPendingSecrets, resolveSecret } from "../agent/secret-broker";
 import { verifyToken } from "../auth/tokens";
 import type { Config } from "../config";
 import { log } from "../log";
@@ -46,13 +49,14 @@ import {
   type ConversationRow,
 } from "../stores/conversations";
 import { rolloverIfNeeded, rotate, rotateById } from "../agent/rollover";
+import { bypassesBatch, classifyTurn } from "../agent/gate";
 import type { TurnJobPayload } from "../jobs/turn";
 import { newID, nowISO } from "../util/ids";
 import { putAgentMemory, listAgentMemories, type AgentMemoryRow } from "../stores/agent-memories";
-import { addChannelMember, appendChannelMessage, createChannel, getChannel } from "../stores/channels";
+import { appendChannelMessage, ensureDMChannel, getChannel } from "../stores/channels";
 import { canonicalURL, saveLink, searchLinks } from "../stores/links";
 import { buildShareDocument, publishShare, shareBaseURL } from "../share/document";
-import { createTask, getTask, listTasks, setTaskStatus, snoozeTask } from "../stores/tasks";
+import { createTask, getTask, listTasks, setTaskStatus, snoozeTask, cancelDelegation } from "../stores/tasks";
 import { fetchPage } from "../tools/fetch-url";
 import type { PluginService } from "../plugins/service";
 import { pluginMailResolver } from "../plugins/credentials";
@@ -113,6 +117,10 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleMsgCancel(deps, session, frame);
     case "approve.reply":
       return handleApproveReply(deps, session, frame);
+    case "secret.reply":
+      return handleSecretReply(deps, session, frame);
+    case "secret.cancel":
+      return handleSecretCancel(deps, session, frame);
     case "agent.select":
       return handleAgentSelect(deps, session, frame);
     case "conversation.open":
@@ -192,7 +200,20 @@ function handleHello(deps: DispatchDeps, session: Session, frame: Extract<Client
       serverTime: nowISO(),
       lastSeq: deps.frameLog.seq + 1,
     });
-    deps.emit({ type: "agents.update", agents: personaInfo(deps.db) });
+    deps.emit({ type: "agents.update", agents: personaInfo(deps.db), mentions: mentionRoster(deps.db) });
+    // A reconnect must not lose a password prompt that is still waiting.
+    for (const pendingSecret of listPendingSecrets()) {
+      deps.reply({
+        type: "secret.request",
+        requestID: pendingSecret.id,
+        purpose: pendingSecret.purpose,
+        command: pendingSecret.command,
+        kind: pendingSecret.kind,
+        expiresAt: pendingSecret.expiresAt,
+        ...(pendingSecret.threadID ? { threadID: pendingSecret.threadID } : {}),
+        ...(pendingSecret.conversationID ? { conversationID: pendingSecret.conversationID } : {}),
+      });
+    }
     emitOnboardingIfNeeded(deps);
   });
 }
@@ -227,6 +248,13 @@ function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<Clie
 
   const parts = frame.texts?.length ? frame.texts : (frame.text.trim() ? [frame.text] : []);
   if (parts.length === 0) return sendError(deps, session, "bad_frame", "msg.send needs text or a non-empty texts array");
+  // GATE-003: explicit remember/task commands are processed immediately — the
+  // debounce exists to merge a burst of chat, not to delay a direct command.
+  const gate = classifyTurn(parts.join("\n\n"));
+  if (bypassesBatch(gate.category)) {
+    void runUserMessage(deps, session, frame, parts.join("\n\n"));
+    return;
+  }
   const batches = messageBatches.get(deps) ?? new Map<string, PendingMessageBatch>();
   messageBatches.set(deps, batches);
   const key = batchKey(frame, session);
@@ -293,18 +321,26 @@ async function runUserMessage(
   text: string,
 ): Promise<void> {
 
-  const channelID = frame.channelId ?? "main";
+  // `@friday write the email` is a message to Friday, not to whatever chat
+  // is open. Routing happens before the turn starts: the text is appended to
+  // that agent's DM and the executive assistant never sees it.
+  const mention = resolveAgentMention(deps.db, text);
+  const routedText = mention?.text ?? text;
+  // The executive assistant's surface is `main`, not a DM channel; an
+  // `@agni` mention must not create a second, invisible room.
+  const mentionChannelID = mention
+    ? canonicalAgentID(mention.agentID) === "ea"
+      ? "main"
+      : `dm:${mention.agentID}`
+    : null;
+  const channelID = mentionChannelID ?? frame.channelId ?? "main";
+  const channelAgentID = mention && mentionChannelID !== "main" ? mention.agentID : frame.toAgentId;
   let channel = getChannel(deps.db, channelID);
-  if (!channel && frame.toAgentId && channelID === `dm:${frame.toAgentId}`) {
-    channel = createChannel(deps.db, { type: "dm", visibility: "public", name: frame.toAgentId, agentID: frame.toAgentId });
-    // Keep the protocol-facing DM id stable and explicit.
-    deps.db.run("UPDATE channels SET id = ? WHERE id = ?", [channelID, channel.id]);
-    channel = getChannel(deps.db, channelID);
-    addChannelMember(deps.db, channelID, "agent", frame.toAgentId);
-    addChannelMember(deps.db, channelID, "user", "user");
+  if (!channel && channelAgentID && channelID === `dm:${channelAgentID}`) {
+    channel = ensureDMChannel(deps.db, channelAgentID);
   }
-  if (frame.channelId && !channel) return sendError(deps, session, "unknown_channel", `no channel ${frame.channelId}`);
-  const requestedAgentID = frame.toAgentId ?? (frame.channelId ? channel?.agent_id : session.agentID) ?? session.agentID;
+  if (frame.channelId && !channel && !mention) return sendError(deps, session, "unknown_channel", `no channel ${frame.channelId}`);
+  const requestedAgentID = mention?.agentID ?? frame.toAgentId ?? (frame.channelId ? channel?.agent_id : session.agentID) ?? session.agentID;
 
   // While the primary assistant is waiting for its first name, an ordinary
   // main-channel message is treated as the answer to the inline prompt.
@@ -312,7 +348,7 @@ async function runUserMessage(
     "SELECT count(*) AS count FROM channel_messages WHERE channel_id = 'main' AND ui_hint = 'onboarding_name_prompt'",
   ).get()?.count ?? 0;
   const primary = deps.db.query<{ onboarded: number }, []>("SELECT onboarded FROM agents WHERE id = 'ea'").get();
-  if (frame.channelId === "main" && channelID === "main" && primary?.onboarded === 0 && onboardingPrompt > 0) {
+  if (!mention && frame.channelId === "main" && channelID === "main" && primary?.onboarded === 0 && onboardingPrompt > 0) {
     completeAgentRename(deps, "ea", text);
     return;
   }
@@ -320,7 +356,7 @@ async function runUserMessage(
   let thread;
   let conversationID: string | undefined;
   let carrySummary: string | null = null;
-  if (frame.channelId || frame.toAgentId) {
+  if (mention || frame.channelId || frame.toAgentId) {
     const conversation = ensureConversation(deps.db, requestedAgentID);
     const result = await rolloverIfNeeded(rolloverDeps(deps), conversation);
     thread = getThread(deps.db, result.threadID);
@@ -363,22 +399,27 @@ async function runUserMessage(
   }
 
   const persona = resolvePersona(deps.db, requestedAgentID) ?? resolvePersona(deps.db, thread.agent_id) ?? defaultResolvedPersona(deps.db);
+  // GATE-001: classify before the turn runs so the durable row carries its
+  // salience. Temp turns stay visible in the transcript and the recent window
+  // but are skipped by compaction (GATE-002, MEM/TAG).
+  const gate = classifyTurn(routedText);
   if (channel) {
     const userMessage = appendChannelMessage(deps.db, {
       channelID,
       fromType: "user",
       fromID: session.device?.id ?? "user",
-      toAgentID: frame.toAgentId ?? null,
-      text,
+      toAgentID: mention?.agentID ?? frame.toAgentId ?? null,
+      text: routedText,
+      salience: gate.salience,
     });
     deps.emit({
       type: "msg.new", id: userMessage.id, channelId: channelID, fromType: "user",
-      fromId: userMessage.from_id, senderName: session.device?.name ?? "You", text,
+      fromId: userMessage.from_id, senderName: session.device?.name ?? "You", text: routedText,
       internal: false, uiHint: "normal", createdAt: userMessage.created_at,
     });
   }
-  if (isCapture(text) || isStoreQuery(text)) {
-    void captureMessage(deps, session, thread, persona.id, text);
+  if (isCapture(routedText) || isStoreQuery(routedText)) {
+    void captureMessage(deps, session, thread, persona.id, routedText);
     return;
   }
   const turnID = newID("trn");
@@ -393,7 +434,7 @@ async function runUserMessage(
   const turn = runTaskTurn(deps.db, deps.router, turnSettings, {
     turnID,
     threadID: thread.id,
-    text,
+    text: routedText,
     persona,
     conversationID,
     carrySummary,
@@ -542,6 +583,12 @@ function handleTaskUpdate(deps: DispatchDeps, session: Session, frame: Extract<C
   const old=getTask(deps.db,frame.taskID);
   if(!old)return sendError(deps,session,"unknown_task",`no task ${frame.taskID}`);
   try {
+    if (frame.action === "cancel") {
+      const cancelled = cancelDelegation(deps.db, old.id);
+      if (!cancelled) return sendError(deps, session, "unknown_task", `no task ${frame.taskID}`);
+      deps.reply({ type: "task.update.ok", task: taskSnapshot(cancelled) });
+      return;
+    }
     const updated=frame.action==="done"?setTaskStatus(deps.db,old.id,"done"):
       frame.action==="reopen"?setTaskStatus(deps.db,old.id,"open"):
       frame.until?snoozeTask(deps.db,old.id,frame.until):null;
@@ -550,8 +597,21 @@ function handleTaskUpdate(deps: DispatchDeps, session: Session, frame: Extract<C
   } catch(error) { sendError(deps,session,"bad_task_action",error instanceof Error?error.message:String(error)); }
 }
 
-function taskSnapshot(task: ReturnType<typeof listTasks>[number]) {
-  return { id:task.id,title:task.title,dueAt:task.due_at,priority:task.priority,status:task.status,snoozedUntil:task.snoozed_until,createdAt:task.created_at,updatedAt:task.updated_at };
+function taskSnapshot(task: ReturnType<typeof listTasks>[number]): TaskInfo {
+  const delegateState = (["none", "queued", "running", "needs_input", "done", "failed"] as const).includes(
+    task.delegate_state as "none",
+  )
+    ? (task.delegate_state as TaskInfo["delegateState"])
+    : "none";
+  return {
+    id: task.id, title: task.title, dueAt: task.due_at, priority: task.priority, status: task.status,
+    snoozedUntil: task.snoozed_until, createdAt: task.created_at, updatedAt: task.updated_at,
+    ownerAgentId: task.owner_agent_id,
+    origin: task.origin === "ea_delegated" ? "ea_delegated" : "user_direct",
+    delegateState,
+    jobId: task.job_id,
+    result: task.result,
+  };
 }
 
 /** Model-call deps for the conversation seam (summary generation, rollovers). */
@@ -732,6 +792,32 @@ function handleApproveReply(
     sendError(deps, session, "unknown_request", `no pending approval ${frame.requestID}`);
   }
   resolveApprovalWaiter(frame.requestID, frame.decision);
+}
+
+/**
+ * The secret is consumed here and handed straight to the waiting tool. It is
+ * deliberately not logged, persisted, or echoed back in any frame.
+ */
+function handleSecretReply(
+  deps: DispatchDeps,
+  session: Session,
+  frame: Extract<ClientFrame, { type: "secret.reply" }>,
+): void {
+  if (!requireAuth(deps, session)) return;
+  if (!resolveSecret(frame.requestID, frame.value)) {
+    sendError(deps, session, "unknown_request", `no pending secret request ${frame.requestID}`);
+  }
+}
+
+function handleSecretCancel(
+  deps: DispatchDeps,
+  session: Session,
+  frame: Extract<ClientFrame, { type: "secret.cancel" }>,
+): void {
+  if (!requireAuth(deps, session)) return;
+  if (!cancelSecret(frame.requestID, "cancelled by owner")) {
+    sendError(deps, session, "unknown_request", `no pending secret request ${frame.requestID}`);
+  }
 }
 
 function handleAgentSelect(
@@ -1050,7 +1136,7 @@ function emitOnboardingMessage(
   channelID: string,
   agentID: string,
   text: string,
-  uiHint: "onboarding_name_prompt" | "handoff_notice" | "normal",
+  uiHint: "onboarding_name_prompt" | "handoff_notice" | "progress" | "normal",
 ): void {
   const row = appendChannelMessage(deps.db, {
     channelID,

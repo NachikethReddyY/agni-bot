@@ -12,7 +12,11 @@ import { recordUsage } from "../stores/usage";
 import { newID, nowISO } from "../util/ids";
 import { buildTaskToolRegistry, taskToolHints, taskToolSpecs } from "../tools/task-registry";
 import { teamRoster } from "./personas";
+import { deriveAnchor } from "../context/compiler";
 import { registerHandoffTool } from "../tools/handoff-tool";
+import { registerDelegateTaskTool } from "../tools/delegate-task-tool";
+import { registerSecureExecTool } from "../tools/secure-exec-tool";
+import { registerSayTool } from "../tools/say-tool";
 import { registerRenameTool } from "../tools/rename-tool";
 import { registerCreateAgentTool } from "../tools/create-agent-tool";
 import { createUpdateAgentTool } from "../tools/update-agent-tool";
@@ -124,9 +128,18 @@ const TASK_SYSTEM_PROMPT = [
   // turn. Say what you cannot do instead — it is the useful answer.
   "You are the owner's assistant, not a developer of the app you run in: never try to deliver a feature by reading or editing the app's own source. " +
   "Do the work with the tools you have — including job_schedule, which puts work on a clock — and if the request needs a capability you do not have, say so plainly and name what you can do instead.",
+  // Communication shape: separate progress messages, not one wall. A long
+  // install or research pass should announce itself and keep the final answer
+  // distinct. Passwords only ever go through `run_privileged`'s secure prompt.
+  "When work will take more than a few seconds, send a one- or two-sentence progress update with `say` before starting and after each milestone; keep the final answer short, separate, and do not repeat the updates. " +
+  "For work that will take minutes, put it on a background job or delegate it and return, so the owner can keep chatting while the UI tracks it. " +
+  "Never ask the owner to type a password in chat: use `run_privileged` for commands that need one, and never put a secret in a command.",
 ].join(" ");
 
 const activeThreads = new Set<string>();
+
+/** Tools that write user-scope memory (DEL-007 read-only agents cannot use them). */
+const MEMORY_WRITE_TOOLS = new Set(["remember_fact", "memory_write", "forget_fact"]);
 
 export async function runTaskTurn(db: Database, router: Router, settings: TaskTurnSettings, run: TaskTurnRun): Promise<TaskTurnResult> {
   const { threadID, persona } = run;
@@ -162,7 +175,18 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
 
   let summary: string | null = existing?.summary ?? null;
   const registry = buildTaskToolRegistry(db, settings.mailAccounts);
-  const dynamicHints = taskToolHints(registry, persona.tools);
+  // DEL-007: a read-only agent still reads user memory but cannot write it.
+  const memoryTools = persona.memoryScope === "read"
+    ? persona.tools.filter((tool) => !MEMORY_WRITE_TOOLS.has(tool))
+    : persona.tools;
+  // Universal tools: `say` gives every agent a way to post progress as
+  // separate messages; `run_privileged` is only meaningful next to `bash`.
+  const effectiveTools = [...new Set([
+    ...memoryTools,
+    "say",
+    ...(memoryTools.includes("bash") ? ["run_privileged"] : []),
+  ])];
+  const dynamicHints = taskToolHints(registry, effectiveTools);
   if (dynamicHints.length > 0) {
     (globalThis as any).__AGNI_DYNAMIC_TOOL_HINTS__ = dynamicHints;
   } else {
@@ -173,6 +197,14 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   let guardrail = run.guardrail ?? rootGuardrail(persona.id);
   const facts = run.facts === false ? [] : recallFact(db, { limit: 6 }).facts.map((row) => row.fact);
   const channelSummary = run.channelID ? getChannelSummary(db, run.channelID)?.summary : null;
+  // ASM-002: a short, always-present note of the current topic. It rides in
+  // the (semi-static) anchor slot, not the dynamic tail, so it does not break
+  // the cached prefix.
+  const anchor = deriveAnchor({
+    carrySummary: [run.carrySummary, channelSummary].filter(Boolean).join("\n\n") || null,
+    history: messages,
+    userText: run.text,
+  });
   const delegationPrefix = buildDelegationPrefix({
     persona,
     facts,
@@ -181,6 +213,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     depth: guardrail.depth,
     maxDepth: 5,
     toolHints: dynamicHints,
+    anchor,
     // Only an agent that can actually hand off needs to know the roster.
     team: persona.tools.includes("handoff") ? teamRoster(db, { exclude: persona.id }) : [],
   });
@@ -208,6 +241,19 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     threadID, channelID: run.channelID, currentAgentID: persona.id,
     conversationID: run.conversationID, carrySummary: run.carrySummary, guardrail,
   });
+  // DEL-001: the async sibling of handoff. It returns as soon as the task is
+  // queued; the specialist runs in a background session with only the brief.
+  registerDelegateTaskTool(registry, {
+    db, emit: run.emit, currentAgentID: persona.id, channelID: run.channelID, parentTurnID: turnID,
+  });
+  // Separate progress bubbles, and a one-time password prompt that never
+  // reaches the model. Both are per-turn because they need the live emit.
+  registerSayTool(registry, {
+    db, emit: run.emit, threadID, turnID, channelID: run.channelID, persona,
+  });
+  registerSecureExecTool(registry, {
+    emit: run.emit, threadID, conversationID: run.conversationID,
+  });
   // Renaming is an action, not a sentence: this persists the new name and
   // pushes `agent.updated` so every client's roster follows in the same turn.
   registerRenameTool(registry, { db, emit: run.emit, currentAgentID: persona.id });
@@ -215,7 +261,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // agent's role and prompt, durably.
   registry.register(createUpdateAgentTool({ db, emit: run.emit }));
   registerCreateAgentTool(registry, { db, emit: run.emit });
-  const tools = taskToolSpecs(registry, persona.tools, "static"); // includes the per-turn tools registered above
+  const tools = taskToolSpecs(registry, effectiveTools, "static"); // includes the per-turn tools registered above
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, settings.turnTimeoutMs);
   const abort = (): void => controller.abort();
@@ -308,7 +354,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
           continue;
         }
         recentCalls.set(signature, stepCount);
-        const callResult = await executeTool(db, threadID, turnID, call, persona.tools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail);
+        const callResult = await executeTool(db, threadID, turnID, call, effectiveTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail);
         let content = callResult.content;
         if (looking && offRoadSteps === OFF_ROAD_NUDGE_AT && !offRoadNudged && !acted) {
           offRoadNudged = true;
@@ -690,6 +736,10 @@ function truncate(text: string, max: number): string { return text.length > max 
 function describePreview(toolName: string, args: Record<string, unknown>): string {
   switch (toolName) {
     case "handoff": return `hand off to ${String(args.toAgentID ?? "?")}: ${String(args.task ?? "").slice(0, 80)}`;
+    case "delegate_task": return `delegate to ${String(args.toAgentID ?? "?")}: ${String(args.goal ?? "").slice(0, 80)}`;
+    case "delegate_wait": return `wait for ${String(args.taskID ?? "?")}`;
+    case "task_status": return `status of ${String(args.taskID ?? "?")}`;
+    case "task_cancel": return `cancel ${String(args.taskID ?? "?")}`;
     case "rename_agent": return `rename to ${String(args.name ?? "?")}`;
     case "bash": return String(args.command ?? "").slice(0, 120);
     case "write_file": return `write ${args.path ?? "?"}`;

@@ -107,6 +107,33 @@ describe("transcript", () => {
     expect(effects).toContainEqual({ kind: "refreshThreadList" });
   });
 
+  test("a progress update is its own bubble during a streamed turn", () => {
+    const conversation = new Conversation("agni", "thr_1");
+    conversation.apply(startFrame("trn_1", "thr_1"));
+    conversation.apply(tokenFrame("trn_1", "thr_1", "Working on it."));
+    conversation.apply(wire({
+      type: "msg.new",
+      seq: 95,
+      id: "msg_progress",
+      channelId: "main",
+      fromType: "agent",
+      fromId: "agni",
+      senderName: "Agni",
+      text: "Checking the installer first.",
+      internal: false,
+      uiHint: "progress",
+      createdAt: "2026-10-21T03:00:00.000Z",
+    }));
+
+    expect(conversation.messages).toHaveLength(2);
+    expect(conversation.messages[0]).toMatchObject({
+      id: "msg_progress",
+      text: "Checking the installer first.",
+      uiHint: "progress",
+    });
+    expect(conversation.messages[1]?.text).toBe("Working on it.");
+  });
+
   test("a cancelled turn says so and keeps the partial text", () => {
     const conversation = new Conversation("agni", "thr_1");
     conversation.apply(startFrame("trn_2", "thr_1"));

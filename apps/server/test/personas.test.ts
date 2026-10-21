@@ -5,6 +5,7 @@ import {
   PERSONAS,
   defaultResolvedPersona,
   personaInfo,
+  mentionRoster,
   resolvePersona,
   seedAgentPromptTemplates,
   setOwnerName,
@@ -123,10 +124,14 @@ describe("persona roster", () => {
     expect(roster).not.toContain("researcher");
     expect(roster).not.toContain("coder");
     expect(roster).not.toContain("analyst");
-    // But they remain valid handoff targets for the EA.
+    // But they remain valid handoff targets for the EA, and the mention
+    // roster exposes them so `@researcher` can open that chat.
     const team = teamRoster(db, { exclude: "ea" }).map((member) => member.id);
     expect(team).toContain("researcher");
     expect(team).toContain("coder");
+    const mentions = mentionRoster(db);
+    expect(mentions.map((agent) => agent.id)).toContain("researcher");
+    expect(mentions.find((agent) => agent.id === "researcher")?.hidden).toBe(true);
     expect(team).toContain("analyst");
   });
 });

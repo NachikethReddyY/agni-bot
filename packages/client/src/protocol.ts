@@ -57,6 +57,8 @@ const KNOWN_SERVER_TYPES = new Set<string>([
   "tool.update",
   "tool.end",
   "approval.request",
+  "secret.request",
+  "secret.cancel",
   "form.request",
   "notify",
   "agents.update",

@@ -46,6 +46,8 @@ never reason about thread ids.
 | `agent.rename` | `{agentId, name}` | Renames an agent and completes primary-agent onboarding. |
 | `msg.cancel` | `{turnID}` | Interrupts the turn: providers abort, partial output is kept. |
 | `approve.reply` | `{requestID, decision}` | `decision`: `once \| always \| reject`. |
+| `secret.reply` | `{requestID, value}` | The owner's one-time password for a `secret.request`. Consumed server-side; never persisted, replayed, logged, or sent to the model. |
+| `secret.cancel` | `{requestID}` | Dismisses a pending secret prompt; the waiting tool fails as cancelled. |
 | `agent.select` | `{agentID}` | Sets the persona for subsequent `msg.send` on this connection. |
 | `conversation.open` | `{conversationID, agentID?}` | Resolves (creating when missing) the agent's conversation. Empty `conversationID` + `agentID` selects that agent's. Answer: `conversation.ok`. |
 | `session.new` | `{conversationID}` | Closes the active session block (`manual`), compacts it into the carried summary, continues in a fresh block; emits `session.start`. |
@@ -99,6 +101,8 @@ accountLabel?, error?, connectedAt?}`.
 | `tool.update` | `{callID, preview?}` | |
 | `tool.end` | `{callID, ok, preview?}` | |
 | `approval.request` | `{requestID, action, preview, buttons}` | `buttons`: subset of `once \| always \| reject`. |
+| `secret.request` | `{requestID, purpose, command, kind, expiresAt, threadID?, conversationID?}` | A command needs the owner's password. The frame carries no secret; the owner types it into a secure field. Replayable on reconnect; expires after two minutes. |
+| `secret.cancel` | `{requestID, reason}` | The prompt was resolved, expired, cancelled, or its turn stopped. Replayable. |
 | `form.request` | `{requestID, question, options?}` | Ad-hoc question to the user. |
 | `notify` | `{title, body, sound?, threadID?}` | Push-worthy event; Mac opens the referenced thread when clicked. |
 | `agents.update` | `{agents: [{id, name, color?, model?, role?, tools?, onboarded?}]}` | Roster snapshot. `onboarded` is set once the agent has been named, which settles the "what should I call you?" prompt. `role` is what the agent is for, in the owner's words ("inbox manager"). |
@@ -114,7 +118,7 @@ accountLabel?, error?, connectedAt?}`.
 | `provider.add.ok` | `{providers: [...]}` | Provider metadata after adding a key; contains no credentials. |
 | `presence` | `{state}` | `online \| offline`. |
 | `status.update` | `{channelId, agentId?, text, transient}` | Activity text; transient updates clear on the next message. |
-| `msg.new` | `{id, channelId, fromType, fromId, senderName, senderColor?, text, internal, uiHint?, toAgentId?, createdAt}` | Durable channel message; `uiHint` can be `onboarding_name_prompt` or `handoff_notice`. `toAgentId` names the agent a handoff notice is about, so the client can render the name as a link to that agent's chat. |
+| `msg.new` | `{id, channelId, fromType, fromId, senderName, senderColor?, text, internal, uiHint?, toAgentId?, createdAt}` | Durable channel message; `uiHint` can be `onboarding_name_prompt`, `handoff_notice`, or `progress`. `toAgentId` names the agent a handoff notice is about, so the client can render the name as a link to that agent's chat. |
 | `agent.updated` | `{agentId, displayName, onboarded}` | Agent rename/onboarding state changed. |
 | `error` | `{code, message, retryAfter?}` | See codes below. |
 

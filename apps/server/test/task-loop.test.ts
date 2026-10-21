@@ -118,7 +118,10 @@ describe("task lane loop", () => {
     expect(result.stopReason).toBe("end");
     expect(result.text).toBe("You have no open tasks.");
     expect(requestBodies).toHaveLength(2);
-    expect(requestBodies[0]?.tools).toHaveLength(1);
+    expect(requestBodies[0]?.tools).toHaveLength(2);
+    expect(
+      (requestBodies[0]?.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name).sort(),
+    ).toEqual(["say", "tasks_list"]);
     expect(requestBodies[0]?.tool_choice).toBe("auto");
     expect((requestBodies[1]?.messages as Array<Record<string, unknown>>).some((message) => message.role === "tool" && message.tool_call_id === "call-1")).toBe(true);
     expect(db.query("SELECT tool_name, ok FROM tool_calls WHERE turn_id = ?").get(result.turnID)).toEqual({ tool_name: "tasks_list", ok: 1 });

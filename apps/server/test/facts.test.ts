@@ -41,22 +41,40 @@ describe("durable facts", () => {
     expect(recallFact(db, { query: "temporary" }).facts).toEqual([]);
   });
 
+  test("forget_fact removes the whole supersession chain", () => {
+    db = openDatabase(":memory:");
+    const first = rememberFact(db, { fact: "version one", keySlug: "chain" });
+    const second = rememberFact(db, { fact: "version two", keySlug: "chain" });
+    const secondRow = db.query<{ supersedes_id: string | null }, [string]>("SELECT supersedes_id FROM agent_memories WHERE id = ?").get(second.id);
+    expect(secondRow?.supersedes_id).toBe(first.id);
+    expect(forgetFact(db, { id: second.id }).deleted).toBe(true);
+    expect(getFact(db, first.id)).toBeNull();
+    const remaining = db.query<{ count: number }, []>("SELECT count(*) AS count FROM agent_memories").get();
+    expect(remaining?.count).toBe(0);
+  });
+
   test("update_fact rewrites text and re-tags", () => {
     db = openDatabase(":memory:");
     const created = rememberFact(db, { fact: "old value" });
     const updated = updateFact(db, created.id, { fact: "new value", tags: ["x"] });
     expect(updated?.fact).toBe("new value");
-    expect(getFact(db, created.id)?.tags).toContain("fact");
-    expect(getFact(db, created.id)?.tags).toContain("x");
+    expect(updated?.id).not.toBe(created.id);
+    expect(updated?.tags).toContain("fact");
+    expect(updated?.tags).toContain("x");
   });
 
   test("facts land in the semantic agent_memories store", () => {
     db = openDatabase(":memory:");
     const created = rememberFact(db, { fact: "User likes concise answers", keySlug: "answer_style" });
     const updated = rememberFact(db, { fact: "User prefers concise replies", keySlug: "answer_style" });
-    expect(updated.id).toBe(created.id);
-    const rows = db.query<{ count: number }, []>("SELECT count(*) AS count FROM agent_memories").get();
-    expect(rows?.count).toBe(1);
+    // MEM-002: the old fact is superseded (kept, closed), not overwritten.
+    expect(updated.id).not.toBe(created.id);
+    const updatedRow = db.query<{ supersedes_id: string | null }, [string]>("SELECT supersedes_id FROM agent_memories WHERE id = ?").get(updated.id);
+    expect(updatedRow?.supersedes_id).toBe(created.id);
+    const live = db.query<{ count: number }, []>("SELECT count(*) AS count FROM agent_memories WHERE valid_to IS NULL").get();
+    expect(live?.count).toBe(1);
+    const all = db.query<{ count: number }, []>("SELECT count(*) AS count FROM agent_memories").get();
+    expect(all?.count).toBe(2);
   });
 
   test("fact text is bounded and empty facts are rejected", () => {

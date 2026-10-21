@@ -28,6 +28,8 @@ export interface ChannelMessageRow {
   text: string;
   internal: number;
   compacted: number;
+  /** Gate salience: temp turns are kept but never compacted (migration 17). */
+  salience: string;
   turn_id: string | null;
   ui_hint: string | null;
   created_at: string;
@@ -64,6 +66,23 @@ export function createChannel(
     [row.id, row.type, row.visibility, row.name, row.agent_id, row.parent_turn_id, row.created_at, row.updated_at],
   );
   return row;
+}
+
+/**
+ * The stable DM channel for an agent (`dm:<id>`), created on first use.
+ *
+ * A delegation can address an agent the owner has never opened a chat with,
+ * so the channel cannot be assumed to exist when the specialist replies.
+ */
+export function ensureDMChannel(db: Database, agentID: string): ChannelRow {
+  const id = `dm:${agentID}`;
+  const existing = getChannel(db, id);
+  if (existing) return existing;
+  const row = createChannel(db, { type: "dm", visibility: "public", name: agentID, agentID });
+  db.run("UPDATE channels SET id = ? WHERE id = ?", [id, row.id]);
+  addChannelMember(db, id, "agent", agentID);
+  addChannelMember(db, id, "user", "user");
+  return getChannel(db, id) ?? { ...row, id };
 }
 
 export function listChannels(db: Database, agentID?: string): ChannelRow[] {
@@ -137,6 +156,8 @@ export function appendChannelMessage(
     internal?: boolean;
     turnID?: string | null;
     uiHint?: string | null;
+    /** Gate salience; defaults to recent_turns when the caller does not classify. */
+    salience?: string;
   },
 ): ChannelMessageRow {
   const row: ChannelMessageRow = {
@@ -148,13 +169,14 @@ export function appendChannelMessage(
     text: input.text,
     internal: input.internal ? 1 : 0,
     compacted: 0,
+    salience: input.salience ?? "recent_turns",
     turn_id: input.turnID ?? null,
     ui_hint: input.uiHint ?? null,
     created_at: nowISO(),
   };
   db.run(
-    `INSERT INTO channel_messages (id, channel_id, from_type, from_id, to_agent_id, text, internal, compacted, turn_id, ui_hint, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO channel_messages (id, channel_id, from_type, from_id, to_agent_id, text, internal, compacted, salience, turn_id, ui_hint, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       row.id,
       row.channel_id,
@@ -164,6 +186,7 @@ export function appendChannelMessage(
       row.text,
       row.internal,
       row.compacted,
+      row.salience,
       row.turn_id,
       row.ui_hint,
       row.created_at,
@@ -175,7 +198,7 @@ export function appendChannelMessage(
 export function listChannelMessages(db: Database, channelID: string, limit = 200): ChannelMessageRow[] {
   return db
     .query<ChannelMessageRow, [string, number]>(
-      `SELECT id, channel_id, from_type, from_id, to_agent_id, text, internal, compacted, turn_id, ui_hint, created_at
+      `SELECT id, channel_id, from_type, from_id, to_agent_id, text, internal, compacted, salience, turn_id, ui_hint, created_at
        FROM channel_messages WHERE channel_id = ? ORDER BY created_at, rowid LIMIT ?`,
     )
     .all(channelID, limit);
@@ -184,8 +207,8 @@ export function listChannelMessages(db: Database, channelID: string, limit = 200
 export function uncompactedMessages(db: Database, channelID: string, limit = 200): ChannelMessageRow[] {
   return db
     .query<ChannelMessageRow, [string, number]>(
-      `SELECT id, channel_id, from_type, from_id, to_agent_id, text, internal, compacted, turn_id, ui_hint, created_at
-       FROM channel_messages WHERE channel_id = ? AND compacted = 0 ORDER BY created_at, rowid LIMIT ?`,
+      `SELECT id, channel_id, from_type, from_id, to_agent_id, text, internal, compacted, salience, turn_id, ui_hint, created_at
+       FROM channel_messages WHERE channel_id = ? AND compacted = 0 AND salience <> 'temp' ORDER BY created_at, rowid LIMIT ?`,
     )
     .all(channelID, limit);
 }

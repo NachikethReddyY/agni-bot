@@ -60,6 +60,15 @@ export interface FormRow {
   answer: string | null;
 }
 
+/** A one-time password prompt. The value never lives in this row. */
+export interface SecretRow {
+  id: string;
+  purpose: string;
+  command: string;
+  kind: "password" | "text";
+  expiresAt: string;
+}
+
 export type NoticeKind = "info" | "reminder" | "failure";
 
 export interface NoticeRow {
@@ -139,6 +148,7 @@ export class Conversation {
   messages: ChatMessage[] = [];
   approvals: ApprovalRow[] = [];
   forms: FormRow[] = [];
+  secrets: SecretRow[] = [];
   notices: NoticeRow[] = [];
   inFlightTurnID: string | null = null;
   inFlightThreadID: string | null = null;
@@ -170,8 +180,12 @@ export class Conversation {
     return this.forms.filter((form) => form.answer === null);
   }
 
+  get openSecrets(): SecretRow[] {
+    return this.secrets;
+  }
+
   get needsYou(): boolean {
-    return this.openApprovals.length > 0 || this.openForms.length > 0;
+    return this.openApprovals.length > 0 || this.openForms.length > 0 || this.openSecrets.length > 0;
   }
 
   get streamingMessageID(): string | null {
@@ -206,6 +220,10 @@ export class Conversation {
   resolveForm(id: string, answer: string): void {
     const form = this.forms.find((candidate) => candidate.id === id);
     if (form) form.answer = answer;
+  }
+
+  resolveSecret(id: string): void {
+    this.secrets = this.secrets.filter((secret) => secret.id !== id);
   }
 
   note(notice: NoticeRow): void {
@@ -316,6 +334,11 @@ export class Conversation {
 
     switch (frame.type) {
       case "hello.ok":
+        // A new connection invalidates any card left over from a daemon
+        // restart; the server re-sends requests that are still pending.
+        this.secrets = [];
+        return [];
+
       case "conversation.ok":
       case "conversation.history.ok":
       case "thread.export.ok":
@@ -353,7 +376,9 @@ export class Conversation {
             return [];
           }
         }
-        if (role === "assistant") {
+        // A progress update is its own bubble even while the turn is
+        // streaming; only the final answer folds into the streaming message.
+        if (role === "assistant" && frame.uiHint !== "progress") {
           const streamed = this.messages.find(
             (message) => message.id === Conversation.assistantID(this.inFlightTurnID ?? "") && isStreaming(message),
           );
@@ -377,6 +402,17 @@ export class Conversation {
             uiHint: frame.uiHint ?? null,
           }),
         );
+        // The in-flight answer bubble was created at turn.start, before the
+        // progress update. Keep it last so progress reads above the answer.
+        if (role === "assistant" && frame.uiHint === "progress") {
+          const streamedIndex = this.messages.findIndex(
+            (message) => message.id === Conversation.assistantID(this.inFlightTurnID ?? "") && isStreaming(message),
+          );
+          if (streamedIndex >= 0 && streamedIndex < this.messages.length - 1) {
+            const [streamed] = this.messages.splice(streamedIndex, 1);
+            if (streamed) this.messages.push(streamed);
+          }
+        }
         return [];
       }
 
@@ -525,6 +561,23 @@ export class Conversation {
           { kind: "notify", title: "Agni asked a question", body: frame.question, sound: false },
           { kind: "focusComposer" },
         ];
+
+      case "secret.request":
+        this.secrets = this.secrets.filter((secret) => secret.id !== frame.requestID);
+        this.secrets.push({
+          id: frame.requestID,
+          purpose: frame.purpose,
+          command: frame.command,
+          kind: frame.kind,
+          expiresAt: frame.expiresAt,
+        });
+        return [
+          { kind: "notify", title: "Agni needs your password", body: frame.purpose, sound: true },
+        ];
+
+      case "secret.cancel":
+        this.secrets = this.secrets.filter((secret) => secret.id !== frame.requestID);
+        return [];
 
       case "notify":
         this.note({

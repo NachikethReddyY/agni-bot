@@ -13,7 +13,7 @@
 import type { Database } from "bun:sqlite";
 import type { ServerFrameBody } from "@agni/protocol";
 import type { ToolRegistry, ToolDefinition } from "./registry";
-import { getPersona, personaInfo, updatePersona } from "../agent/personas";
+import { getPersona, personaInfo, mentionRoster, updatePersona } from "../agent/personas";
 
 export interface UpdateAgentDeps {
   db: Database;
@@ -72,7 +72,7 @@ export function createUpdateAgentTool(deps: UpdateAgentDeps): ToolDefinition<Upd
     handler: async (args) => {
       const result = updateAgent(deps.db, args);
       // The roster follows, so the app shows the new role straight away.
-      deps.emit({ type: "agents.update", agents: personaInfo(deps.db) });
+      deps.emit({ type: "agents.update", agents: personaInfo(deps.db), mentions: mentionRoster(deps.db) });
       return result;
     },
   };

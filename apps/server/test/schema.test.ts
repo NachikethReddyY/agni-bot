@@ -80,16 +80,21 @@ describe("agent memories schema", () => {
     db = openDatabase(":memory:");
     const global = putAgentMemory(db!, { scope: "global_user", agentID: null, keySlug: "project", content: "Agni", importance: 8 });
     expect(global.agent_id).toBeNull();
+    // MEM-002: a changed fact supersedes the old one; the key is not silently
+    // overwritten. The old row stays readable by id with its history intact.
     const same = putAgentMemory(db!, { scope: "global_user", agentID: null, keySlug: "project", content: "Agni updated" });
-    expect(same.id).toBe(global.id);
+    expect(same.id).not.toBe(global.id);
     expect(same.content).toBe("Agni updated");
+    expect(same.supersedes_id).toBe(global.id);
     const perAgent = putAgentMemory(db!, { scope: "agent", agentID: "ea", keySlug: "project", content: "EA scope" });
     expect(perAgent.agent_id).toBe("ea");
     // Same slug, different scope+agent — no collision.
     expect(perAgent.id).not.toBe(global.id);
-    expect(listAgentMemories(db!, { scope: "global_user", limit: 10 }).map((row) => row.id)).toEqual([global.id]);
+    // Only live rows are listed; the superseded row is archived.
+    expect(listAgentMemories(db!, { scope: "global_user", limit: 10 }).map((row) => row.id)).toEqual([same.id]);
     expect(listAgentMemories(db!, { scope: "agent", agentID: "ea", limit: 10 }).map((row) => row.id)).toEqual([perAgent.id]);
-    expect(getAgentMemory(db!, global.id)?.content).toBe("Agni updated");
+    expect(getAgentMemory(db!, global.id)?.content).toBe("Agni");
+    expect(getAgentMemory(db!, global.id)?.valid_to).not.toBeNull();
   });
 
   test("importance is clamped and tags are normalized", () => {

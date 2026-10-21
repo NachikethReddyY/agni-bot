@@ -19,7 +19,9 @@ product decisions. `docs/architecture.md` is the 2-minute summary.
   reintroduce a dependency on another product's app-locked free tier.
 - Secrets (provider keys, Gmail app password, device tokens) live server-side
   only: `.env` on Mac, mode-600 file on bb-1. Never in code, tests, docs, or
-  the apps.
+  the apps. Owner-typed secrets (sudo/ssh passwords) go through the one-time
+  `run_privileged` prompt; they are never returned to the model, written to a
+  transcript, or logged.
 - Shell, file writes outside scratch, email sends, and payments are
   approval-gated. Exception: sends from Agni's own mailbox (the agent-owned
   Google account connected in the Plugins pane) are ungated by owner decision

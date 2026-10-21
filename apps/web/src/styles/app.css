@@ -979,7 +979,8 @@ button:disabled {
 }
 
 .approval-card,
-.form-card {
+.form-card,
+.secret-card {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1046,6 +1047,43 @@ button:disabled {
 .form-hint {
   color: var(--ink-tertiary);
   font-size: var(--text-caption);
+}
+
+.secret-command {
+  max-height: 130px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--row-radius);
+  background: var(--canvas);
+  color: var(--ink-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.secret-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.secret-input {
+  min-width: 0;
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--row-radius);
+  background: var(--canvas);
+  color: var(--ink-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-code);
+}
+
+.secret-input:focus {
+  border-color: var(--ember);
+  outline: none;
 }
 
 .status-strip {

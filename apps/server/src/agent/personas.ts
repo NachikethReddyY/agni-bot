@@ -33,6 +33,11 @@ export interface Persona {
   /** Tool names this persona may use. */
   tools: string[];
   /**
+   * DEL-007: whether this agent may write user-scope memory. New agents are
+   * read-only by default; the orchestrator and shipped personas can write.
+   */
+  memoryScope?: "read" | "readwrite";
+  /**
    * Hidden from the sidebar, but still a valid handoff target. The owner
    * wants one clean entry point — the executive assistant — while the EA can
    * still delegate to specialists in the background.
@@ -96,7 +101,7 @@ export const PERSONAS: Persona[] = [
     color: "#f0b95a",
     role: "front desk — replies fast, decides who should do the work, and synthesizes the answers",
     systemPromptTemplate: AGNI_PROMPT_TEMPLATE,
-    tools: ["memory_search", "memory_write", "links_search", "link_save", "tasks_list", "task_create", "task_update", "grep", "glob", "read_file", "write_file", "web_search", "web_fetch", "deep_research", "bash", "skills_list", "skills_load", "skills_resource", "mail_search", "mail_read", "mail_send", "remember_fact", "recall_fact", "forget_fact", "handoff", "rename_agent", "create_agent", "share_thread", "job_schedule", "job_list", "job_cancel", "update_agent"],
+    tools: ["memory_search", "memory_write", "links_search", "link_save", "tasks_list", "task_create", "task_update", "grep", "glob", "read_file", "write_file", "web_search", "web_fetch", "deep_research", "bash", "skills_list", "skills_load", "skills_resource", "mail_search", "mail_read", "mail_send", "remember_fact", "recall_fact", "forget_fact", "handoff", "delegate_task", "delegate_wait", "task_status", "task_cancel", "rename_agent", "create_agent", "share_thread", "job_schedule", "job_list", "job_cancel", "update_agent"],
   },
   {
     id: "researcher",
@@ -167,7 +172,8 @@ export function loadRuntimeAgents(db: Database): number {
     .query<{
       id: string; name: string; color: string | null; role: string | null; role_detail: string | null;
       display_name: string | null; system_prompt: string | null; avatar_color: string | null; tools: string | null;
-    }, []>("SELECT id, name, color, role, role_detail, display_name, system_prompt, avatar_color, tools FROM agents")
+      memory_scope: string | null;
+    }, []>("SELECT id, name, color, role, role_detail, display_name, system_prompt, avatar_color, tools, memory_scope FROM agents")
     .all();
   let loaded = 0;
   for (const row of rows) {
@@ -179,6 +185,7 @@ export function loadRuntimeAgents(db: Database): number {
       role: row.role_detail?.trim() || row.role?.trim() || "agent",
       systemPromptTemplate: row.system_prompt?.trim() || "You are {name}, an assistant for {user}.",
       tools: parseToolList(row.tools),
+      memoryScope: row.memory_scope === "readwrite" ? "readwrite" : "read",
     };
     registerPersona(persona);
     loaded += 1;
@@ -278,8 +285,8 @@ export function resolvePersona(db: Database, id: string): ResolvedPersona | unde
   const persona = getPersona(id);
   if (!persona) return undefined;
   const row = db
-    .query<{ display_name: string | null; avatar_color: string | null; system_prompt: string | null; role_detail: string | null }, [string]>(
-      "SELECT display_name, avatar_color, system_prompt, role_detail FROM agents WHERE id = ?",
+    .query<{ display_name: string | null; avatar_color: string | null; system_prompt: string | null; role_detail: string | null; memory_scope: string | null }, [string]>(
+      "SELECT display_name, avatar_color, system_prompt, role_detail, memory_scope FROM agents WHERE id = ?",
     )
     .get(persona.id);
   const name = row?.display_name?.trim() || persona.name;
@@ -294,6 +301,7 @@ export function resolvePersona(db: Database, id: string): ResolvedPersona | unde
     role: row?.role_detail?.trim() || persona.role,
     systemPromptTemplate: template,
     tools: [...persona.tools],
+    memoryScope: (row?.memory_scope ?? persona.memoryScope) === "readwrite" ? "readwrite" : "read",
     systemPrompt: composeSystemPrompt(template, name),
   };
 }
@@ -333,8 +341,8 @@ export function seedAgentPromptTemplates(db: Database): number {
 /** Agent roster advertised to clients; names/colors follow the live rows.
  *  Hidden specialists are left out so the sidebar shows one clean entry point,
  *  but they stay in `teamRoster` and remain valid handoff targets. */
-export function personaInfo(db?: Database): AgentInfo[] {
-  return PERSONAS.filter((persona) => !persona.hidden).map((persona) => {
+export function personaInfo(db?: Database, options: { includeHidden?: boolean } = {}): AgentInfo[] {
+  return PERSONAS.filter((persona) => options.includeHidden || !persona.hidden).map((persona) => {
     const row = db
       ?.query<{ display_name: string | null; avatar_color: string | null; onboarded: number; role_detail: string | null }, [string]>(
         "SELECT display_name, avatar_color, onboarded, role_detail FROM agents WHERE id = ?",
@@ -348,8 +356,17 @@ export function personaInfo(db?: Database): AgentInfo[] {
       role: shortRole(row?.role_detail?.trim() || persona.role),
       tools: [...persona.tools],
       onboarded: (row?.onboarded ?? 0) === 1,
+      ...(persona.hidden ? { hidden: true } : {}),
     };
   });
+}
+
+/**
+ * The full roster for `@mention` resolution: hidden specialists are not in
+ * the sidebar, but the owner can still address them by name.
+ */
+export function mentionRoster(db: Database): AgentInfo[] {
+  return personaInfo(db, { includeHidden: true });
 }
 
 /**

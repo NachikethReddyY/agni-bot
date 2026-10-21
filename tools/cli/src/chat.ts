@@ -9,6 +9,7 @@
 import { createInterface } from "node:readline";
 import { PROTOCOL_VERSION, type AgentInfo, type MessageInfo, type ServerFrame, type ThreadInfo } from "@agni/protocol";
 import { AgniSocket } from "./client";
+import { readSecret } from "./secret";
 
 export interface ChatConnection {
   url: string;
@@ -31,6 +32,7 @@ const HELP = `commands
   /agents             list personas
   /agent <id>         switch conversation surface
   /approve [id] once|always|reject   answer an approval request
+  /secret [id]       enter a one-time password (hidden input)
   /cancel             stop the running turn
   /status             connection, conversation, and agent state
   /quit               exit (Ctrl+C at the prompt does the same)
@@ -50,6 +52,7 @@ export async function startChat(options: ChatOptions): Promise<void> {
   let pendingSend = false;
   let streamedHeader = false;
   let lastApprovalID: string | null = null;
+  const pendingSecrets = new Map<string, Extract<ServerFrame, { type: "secret.request" }>>();
   let closing = false;
   let reconnecting = false;
 
@@ -138,6 +141,16 @@ export async function startChat(options: ChatOptions): Promise<void> {
         print(color.yellow(`[approval ${frame.requestID}] ${frame.action}`));
         print(indent(frame.preview));
         print(color.dim(`  answer: /approve ${frame.requestID} ${frame.buttons.join("|")}`));
+        break;
+      case "secret.request":
+        pendingSecrets.set(frame.requestID, frame);
+        print(color.yellow(`[secret ${frame.requestID}] ${frame.purpose}`));
+        print(indent(frame.command));
+        print(color.dim(`  enter it: /secret ${frame.requestID} (hidden input) — or use the web app`));
+        break;
+      case "secret.cancel":
+        pendingSecrets.delete(frame.requestID);
+        print(color.dim(`[secret ${frame.requestID}] ${frame.reason}`));
         break;
       case "form.request":
         print(color.yellow(`[question ${frame.requestID}] ${frame.question}`));
@@ -361,6 +374,31 @@ export async function startChat(options: ChatOptions): Promise<void> {
         print(color.dim(`approval ${requestID} → ${decision}`));
         break;
       }
+      case "secret": {
+        const requestID = rest[0] ?? [...pendingSecrets.keys()][0];
+        const request = requestID ? pendingSecrets.get(requestID) : undefined;
+        if (!request) {
+          print("(no pending secret — /secret <requestID>)");
+          break;
+        }
+        rl.pause();
+        try {
+          const value = await readSecret(color.dim("password (hidden): "));
+          if (!value) {
+            print(color.yellow("empty secret — not sent"));
+            break;
+          }
+          socket.send({ type: "secret.reply", requestID: request.requestID, value });
+          pendingSecrets.delete(request.requestID);
+          print(color.dim(`secret ${request.requestID} → sent`));
+        } catch (error) {
+          print(color.yellow(messageOf(error)));
+        } finally {
+          rl.resume();
+          prompt();
+        }
+        break;
+      }
       case "cancel":
         if (activeTurn) {
           socket.send({ type: "msg.cancel", turnID: activeTurn });
@@ -510,6 +548,11 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Read a secret from the terminal without echoing it. Over SSH this reads the
+ * SSH pty directly, so the value never leaves the host's stdin. A non-TTY
+ * (piped input) refuses rather than pretending to be secure.
+ */
 async function connectOrExit(connection: ChatConnection): Promise<AgniSocket> {
   try {
     return await AgniSocket.connect(connection.url, connection.token, connection.device);

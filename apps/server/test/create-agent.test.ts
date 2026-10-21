@@ -75,6 +75,8 @@ describe("an agent creating its own agent", () => {
     expect(db.query<{ role_detail: string }, []>("SELECT role_detail FROM agents WHERE id = 'friday'").get()?.role_detail).toBe("companion");
     // The hierarchy role stays the hierarchy role.
     expect(db.query<{ role: string }, []>("SELECT role FROM agents WHERE id = 'friday'").get()?.role).toBe("agent");
+    // DEL-007: new agents get user-scope memory read-only by default.
+    expect(db.query<{ memory_scope: string }, []>("SELECT memory_scope FROM agents WHERE id = 'friday'").get()?.memory_scope).toBe("read");
     // In the roster the app receives, and resolvable as a persona.
     const roster = personaInfo(db);
     expect(roster.some((agent) => agent.id === "friday")).toBe(true);
