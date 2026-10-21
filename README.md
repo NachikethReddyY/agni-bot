@@ -115,6 +115,17 @@ script is deleted the moment the run ends. The authorization dialog shows the
 The owner's password is never stored anywhere — not in the Keychain, not in a
 file. The Keychain holds the device token and nothing else.
 
+### Seeing what the agent is doing
+
+The sidebar shows a quiet dot next to an agent that is working, waiting for
+you, or blocked — so "working" and "waiting for you" are not the same
+silence. Under each answer there is a one-line activity strip (expandable)
+showing what the agent did, so progress does not depend on the model
+remembering to narrate.
+
+Interrupting works the way it should: a new message stops the running turn
+and takes over, instead of bouncing off a busy thread.
+
 ### Agent visibility
 
 Every agent has a visibility that says what *other* agents may see of its

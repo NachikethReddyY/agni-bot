@@ -92,6 +92,7 @@ export type ConversationEffect =
   | { kind: "unread"; threadID: string }
   | { kind: "agentsChanged"; agents: AgentInfo[] }
   | { kind: "presence"; online: boolean }
+  | { kind: "agentPresence"; agentID: string; state: "idle" | "working" | "waiting" | "blocked" }
   | { kind: "taskChanged"; task: TaskInfo }
   | { kind: "bound"; agentID: string; conversationID: string; sessionID: string; channelID: string };
 
@@ -363,6 +364,9 @@ export class Conversation {
 
       case "presence":
         return [{ kind: "presence", online: frame.state === "online" }];
+
+      case "agent.presence":
+        return [{ kind: "agentPresence", agentID: frame.agentId, state: frame.state }];
 
       case "task.updated":
       case "task.answer.ok":

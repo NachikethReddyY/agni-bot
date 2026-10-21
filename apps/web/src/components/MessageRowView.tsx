@@ -6,9 +6,9 @@
  * The name is never spelled out again — the header already says who you are
  * talking to, and a thread is a conversation, not a stack of labels.
  *
- * Tool activity is deliberately not rendered. The transcript answers "what did
- * I ask and what came back"; the mechanics of a turn are diagnostics. Progress
- * is shown by the status strip, and a turn that produced nothing says why.
+ * Tool activity is shown as one quiet, collapsible line under the answer —
+ * enough to see that the work happened, not enough to turn the transcript
+ * into a log. The `say` tool is for the milestones that deserve words.
  */
 import { useState, type FormEvent } from "react";
 import ReactMarkdown from "react-markdown";
@@ -159,6 +159,41 @@ function AssistantProse({
 
       {explanation && message.text.length > 0 ? (
         <div className="stop-explanation">Response didn't finish · {explanation}</div>
+      ) : null}
+
+      {message.tools.length > 0 ? <ActivityStrip message={message} /> : null}
+    </div>
+  );
+}
+
+/**
+ * The activity strip: what the agent did, quietly. The transcript answers
+ * "what did I ask and what came back" — this is the progress behind it, one
+ * line until the owner wants to see it. It is here so the UI shows that
+ * work is happening even when the model forgets to narrate.
+ */
+function ActivityStrip({ message }: { message: ChatMessage }) {
+  const [open, setOpen] = useState(false);
+  const tools = message.tools;
+  const running = tools.find((tool) => tool.state === "running");
+  const failed = tools.filter((tool) => tool.state === "failed").length;
+  const summary = running
+    ? `Working · ${running.name}`
+    : `${tools.length} step${tools.length === 1 ? "" : "s"}${failed > 0 ? ` · ${failed} failed` : ""}`;
+  return (
+    <div className="activity-strip">
+      <button type="button" className="activity-summary" onClick={() => setOpen(!open)}>
+        {summary}
+      </button>
+      {open ? (
+        <ul className="activity-list">
+          {tools.map((tool) => (
+            <li key={tool.id} className={tool.state}>
+              <span className="activity-name">{tool.name}</span>
+              {tool.preview ? <span className="activity-preview">{tool.preview}</span> : null}
+            </li>
+          ))}
+        </ul>
       ) : null}
     </div>
   );

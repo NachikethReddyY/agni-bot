@@ -80,6 +80,7 @@ const KNOWN_SERVER_TYPES = new Set<string>([
   "plugin.connect.ok",
   "plugin.state",
   "presence",
+  "agent.presence",
   "status.update",
   "msg.new",
   "agent.updated",

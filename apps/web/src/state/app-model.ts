@@ -63,6 +63,8 @@ export interface AppSnapshot {
   /** Full roster for `@mention` and handoff links, including hidden agents. */
   mentionAgents: AgentInfo[];
   unread: ReadonlySet<string>;
+  /** What each agent is doing: idle, working, waiting, blocked. */
+  agentStates: Readonly<Record<string, "idle" | "working" | "waiting" | "blocked">>;
 
   health: HealthReport | null;
   healthError: string | null;
@@ -140,6 +142,7 @@ export class AppModel {
   /** The channel this client is bound to, when it bound itself to an agent. */
   private boundChannelID: string | null = null;
   private unread = new Set<string>();
+  private agentStates: Record<string, "idle" | "working" | "waiting" | "blocked"> = {};
 
   private health: HealthReport | null = null;
   private healthError: string | null = null;
@@ -223,6 +226,7 @@ export class AppModel {
       agents: this.agents,
       mentionAgents: this.mentionAgents,
       unread: new Set(this.unread),
+      agentStates: { ...this.agentStates },
       health: this.health,
       healthError: this.healthError,
       configuredProviders: this.configuredProviders,
@@ -1229,6 +1233,11 @@ export class AppModel {
           // client follows it from here.
           this.conversation.bind(effect.conversationID, effect.agentID, effect.sessionID || null);
           this.boundChannelID = effect.channelID;
+          break;
+        case "agentPresence":
+          // What the agent is doing: the owner can tell "working" from
+          // "waiting for you" without asking.
+          this.agentStates = { ...this.agentStates, [effect.agentID]: effect.state };
           break;
         case "presence":
           break;

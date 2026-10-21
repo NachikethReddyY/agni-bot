@@ -516,6 +516,8 @@ public enum ServerFrame: Sendable, Equatable {
   case pluginConnectOK(PluginConnectOK)
   case pluginState(PluginState)
   case presence(Presence)
+  /// What an agent is doing: idle, working, waiting, blocked.
+  case agentPresence(AgentPresence)
   case statusUpdate(StatusUpdate)
   case msgNew(MsgNew)
   case agentUpdated(AgentUpdated)
@@ -551,6 +553,7 @@ public enum ServerFrame: Sendable, Equatable {
   case .pluginConnectOK(let f): f.seq
   case .pluginState(let f): f.seq
     case .presence(let f): f.seq
+    case .agentPresence(let f): f.seq
     case .statusUpdate(let f): f.seq
     case .msgNew(let f): f.seq
     case .agentUpdated(let f): f.seq
@@ -587,6 +590,7 @@ public enum ServerFrame: Sendable, Equatable {
   case .pluginConnectOK: "plugin.connect.ok"
   case .pluginState: "plugin.state"
     case .presence: "presence"
+    case .agentPresence: "agent.presence"
     case .statusUpdate: "status.update"
     case .msgNew: "msg.new"
     case .agentUpdated: "agent.updated"
@@ -781,6 +785,18 @@ public enum ServerFrame: Sendable, Equatable {
     public var isOnline: Bool { state == "online" }
   }
 
+  /// What an agent is doing, so the owner can tell "working" from
+  /// "waiting for you" without asking.
+  public struct AgentPresence: Sendable, Equatable, Decodable {
+    public var seq: Int
+    public var agentId: String
+    public var state: String
+    public var taskId: String?
+
+    public var isBusy: Bool { state == "working" }
+    public var isWaiting: Bool { state == "waiting" }
+  }
+
   /// A channel's status changed (e.g. typing/activity broadcast).
   public struct StatusUpdate: Sendable, Equatable, Decodable {
     public var seq: Int
@@ -855,6 +871,7 @@ public enum ServerFrame: Sendable, Equatable {
     case "plugin.connect.ok": self = .pluginConnectOK(try Decode.frame(PluginConnectOK.self, object))
     case "plugin.state": self = .pluginState(try Decode.frame(PluginState.self, object))
     case "presence": self = .presence(try Decode.frame(Presence.self, object))
+    case "agent.presence": self = .agentPresence(try Decode.frame(AgentPresence.self, object))
     case "status.update": self = .statusUpdate(try Decode.frame(StatusUpdate.self, object))
     case "msg.new": self = .msgNew(try Decode.frame(MsgNew.self, object))
     case "agent.updated": self = .agentUpdated(try Decode.frame(AgentUpdated.self, object))

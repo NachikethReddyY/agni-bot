@@ -42,6 +42,8 @@ final class AppModel {
   private(set) var threads: [ThreadInfo] = []
   private(set) var agents: [AgentInfo] = []
   private(set) var unread: Set<String> = []
+  /// What each agent is doing: idle, working, waiting, blocked.
+  private(set) var agentStates: [String: String] = [:]
 
   // daemon health
   private(set) var health: HealthReport?
@@ -545,6 +547,11 @@ final class AppModel {
 
   private func handleFrame(_ frame: ServerFrame) {
     switch frame {
+    case .agentPresence(let presence):
+      // What the agent is doing: the owner can tell "working" from
+      // "waiting for you" without asking.
+      agentStates[presence.agentId] = presence.state
+      return
     case .statusUpdate(let status):
       let activeChannel = conversation.agentID == "ea" ? "main" : "dm:\(conversation.agentID)"
       guard status.channelId == activeChannel else { return }
