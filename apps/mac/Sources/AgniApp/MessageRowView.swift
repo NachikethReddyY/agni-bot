@@ -25,6 +25,8 @@ struct MessageRowView: View {
   var onNotice: () -> Void
   var onRename: (String) -> Void = { _ in }
   var preferredName = State(wrappedValue: "")
+  /// Whether the activity strip is expanded.
+  var activityOpen = State(wrappedValue: false)
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -146,11 +148,63 @@ struct MessageRowView: View {
           .font(Typography.caption)
           .foregroundStyle(Palette.inkSecondary)
       }
+      if !message.tools.isEmpty {
+        activityStrip
+      }
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 12)
     .frame(maxWidth: 620, alignment: .leading)
     .background(Palette.incomingBubble, in: RoundedRectangle(cornerRadius: Metrics.bubbleRadius, style: .continuous))
+  }
+
+  /// The activity strip: what the agent did, quietly. One line until the
+  /// owner wants to see it — the transcript answers "what did I ask and what
+  /// came back", this is the progress behind it.
+  private var activityStrip: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Button {
+        activityOpen.wrappedValue.toggle()
+      } label: {
+        Text(activitySummary)
+          .font(Typography.caption)
+          .foregroundStyle(Palette.inkTertiary)
+      }
+      .buttonStyle(.plain)
+      if activityOpen.wrappedValue {
+        ForEach(message.tools) { tool in
+          HStack(spacing: 8) {
+            Text(tool.name)
+              .font(Typography.caption)
+              .foregroundStyle(isFailed(tool) ? Palette.ember : Palette.inkSecondary)
+            if let preview = tool.preview, !preview.isEmpty {
+              Text(preview)
+                .font(Typography.caption)
+                .foregroundStyle(Palette.inkTertiary)
+                .lineLimit(1)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private func isFailed(_ tool: ToolActivity) -> Bool {
+    if case .failed = tool.state { return true }
+    return false
+  }
+
+  private var activitySummary: String {
+    if let running = message.tools.first(where: { tool in
+      if case .running = tool.state { return true }
+      return false
+    }) {
+      return "Working · \(running.name)"
+    }
+    let failed = message.tools.filter(isFailed).count
+    let steps = message.tools.count
+    let suffix = failed > 0 ? " · \(failed) failed" : ""
+    return "\(steps) step\(steps == 1 ? "" : "s")\(suffix)"
   }
 
   /// The empty row's account of itself. A stopped turn names its reason; when

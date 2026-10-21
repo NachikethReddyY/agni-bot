@@ -538,6 +538,19 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
   /** Replayable stream state: a plugin connection changed (connect, error, disconnect). */
   z.object({ type: z.literal("plugin.state"), seq, plugins: z.array(PluginInfoSchema) }),
   z.object({ type: z.literal("presence"), seq, state: z.enum(["online", "offline"]) }),
+  /**
+   * What an agent is doing: idle, working, waiting for the owner, or
+   * blocked. The client shows it on the agent, so the owner can tell
+   * "working" from "waiting for you" without asking.
+   */
+  z.object({
+    type: z.literal("agent.presence"),
+    seq,
+    agentId: z.string(),
+    state: z.enum(["idle", "working", "waiting", "blocked"]),
+    /** The delegated task, when the state is about one. */
+    taskId: z.string().optional(),
+  }),
   /** A channel's status changed (e.g. typing/activity broadcast). */
   z.object({
     type: z.literal("status.update"),

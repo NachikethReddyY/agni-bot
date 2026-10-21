@@ -110,6 +110,12 @@ struct SidebarView: View {
             .lineLimit(1)
         }
         Spacer(minLength: 0)
+        if let state = model.agentStates[agent.id], state != "idle" {
+          Circle()
+            .fill(state == "working" ? Palette.ember : (state == "waiting" ? Palette.amber : Palette.emberDeep))
+            .frame(width: 6, height: 6)
+            .accessibilityLabel(state)
+        }
         if unreadBlocks {
           Circle().fill(Palette.ember).frame(width: 6, height: 6)
         }

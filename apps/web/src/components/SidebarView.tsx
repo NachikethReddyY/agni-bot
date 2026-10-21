@@ -6,6 +6,13 @@ import { Search, X } from "lucide-react";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import { AppTile, SidebarAgentBadge, connectionShortStatus, initials } from "./bits";
 
+function stateLabel(state: string): string {
+  if (state === "working") return "Working";
+  if (state === "waiting") return "Waiting for you";
+  if (state === "blocked") return "Blocked";
+  return "Idle";
+}
+
 export function SidebarView() {
   const model = useAppModel();
   const snapshot = useAppSnapshot();
@@ -49,6 +56,7 @@ export function SidebarView() {
             const selected = snapshot.conversation.agentID === agent.id;
             // A private agent is worth saying out loud: other agents see a
             // receipt for its work, not the work itself.
+            const state = snapshot.agentStates[agent.id];
             const visibilityNote =
               agent.visibility === "private"
                 ? " · private"
@@ -78,6 +86,9 @@ export function SidebarView() {
                   </span>
                 </span>
                 {model.unreadBlocks(agent.id) ? <span className="unread-dot" aria-label="Unread" /> : null}
+                {state && state !== "idle" ? (
+                  <span className={`agent-state ${state}`} aria-label={state} title={stateLabel(state)} />
+                ) : null}
               </button>
             );
           })
