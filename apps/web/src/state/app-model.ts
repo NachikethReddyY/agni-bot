@@ -31,6 +31,7 @@ import {
   type NoticeRow,
   type PluginInfo,
   type ProviderStatus,
+  type SecretRow,
   type SecretStoreKind,
   type ServerSettings,
   type TaskInfo,
@@ -59,6 +60,8 @@ export interface AppSnapshot {
   conversation: Conversation;
   threads: ThreadInfo[];
   agents: AgentInfo[];
+  /** Full roster for `@mention` and handoff links, including hidden agents. */
+  mentionAgents: AgentInfo[];
   unread: ReadonlySet<string>;
 
   health: HealthReport | null;
@@ -132,6 +135,8 @@ export class AppModel {
   private conversation = new Conversation("ea");
   private threads: ThreadInfo[] = [];
   private agents: AgentInfo[] = seedAgents();
+  /** Hidden specialists are absent from the sidebar but still addressable. */
+  private mentionAgents: AgentInfo[] = seedAgents();
   private unread = new Set<string>();
 
   private health: HealthReport | null = null;
@@ -214,6 +219,7 @@ export class AppModel {
       conversation: this.conversation,
       threads: this.threads,
       agents: this.agents,
+      mentionAgents: this.mentionAgents,
       unread: new Set(this.unread),
       health: this.health,
       healthError: this.healthError,
@@ -263,7 +269,14 @@ export class AppModel {
   }
 
   get agent(): AgentInfo | null {
-    return this.agents.find((agent) => agent.id === this.conversation.agentID) ?? this.agents[0] ?? null;
+    // A hidden specialist reached through `@name` is not in the sidebar but
+    // is still the agent this conversation belongs to.
+    return (
+      this.mentionAgents.find((agent) => agent.id === this.conversation.agentID) ??
+      this.agents.find((agent) => agent.id === this.conversation.agentID) ??
+      this.agents[0] ??
+      null
+    );
   }
 
   get activeThreadTitle(): string | null {
@@ -349,6 +362,7 @@ export class AppModel {
     this.secretKind = null;
     this.threads = [];
     this.agents = seedAgents();
+    this.mentionAgents = seedAgents();
     this.conversation = new Conversation("ea");
     this.health = null;
     this.configuredProviders = [];
@@ -516,7 +530,7 @@ export class AppModel {
     void connection.send({ type: "plugin.disconnect", connectionID }).catch(() => undefined);
   }
 
-  updateTask(task: TaskInfo, action: "done" | "reopen" | "snooze", until?: Date): void {
+  updateTask(task: TaskInfo, action: "done" | "reopen" | "snooze" | "cancel", until?: Date): void {
     const connection = this.connection;
     if (!connection) return;
     void connection
@@ -529,10 +543,43 @@ export class AppModel {
       .catch(() => undefined);
   }
 
+  /** Resolve a leading `@name`/`@id` against the visible roster. */
+  private resolveMention(text: string): { agent: AgentInfo; text: string } | null {
+    const prefix = /^\s*@/.exec(text);
+    if (!prefix) return null;
+    const after = text.slice(prefix[0].length);
+    const lowered = after.toLowerCase();
+    const roster = new Map<string, AgentInfo>();
+    for (const agent of [...this.agents, ...this.mentionAgents]) roster.set(agent.id, agent);
+    const candidates = [...roster.values()].sort(
+      (a, b) => Math.max(b.id.length, b.name.length) - Math.max(a.id.length, a.name.length),
+    );
+    for (const agent of candidates) {
+      for (const name of [agent.id, agent.name]) {
+        const needle = name.toLowerCase();
+        if (!lowered.startsWith(needle)) continue;
+        const boundary = after.slice(needle.length);
+        // A mention ends at whitespace or punctuation; `@fridayish` is not a
+        // message to Friday.
+        if (boundary !== "" && !/^[\s,:;.!?-]/.test(boundary)) continue;
+        return { agent, text: boundary.replace(/^[\s,:;.!?-]+/, "").trim() };
+      }
+    }
+    return null;
+  }
+
   send(text: string): void {
     const trimmed = text.trim();
     if (trimmed.length === 0) return;
-    const localID = this.conversation.appendLocalUserMessage(trimmed);
+    // `@friday write the email` opens Friday's chat and sends there, the way
+    // a messaging app treats an address. The server routes it too, but the
+    // surface has to follow or the reply would stream into a chat the owner
+    // is not looking at.
+    const mention = this.resolveMention(trimmed);
+    if (mention && mention.agent.id !== this.conversation.agentID) this.selectAgent(mention.agent);
+    const outgoing = mention ? mention.text : trimmed;
+    if (outgoing.length === 0) return;
+    const localID = this.conversation.appendLocalUserMessage(outgoing);
     this.publish();
     const connection = this.connection;
     if (!connection || !isReady(this.connectionState)) {
@@ -548,7 +595,7 @@ export class AppModel {
     void connection
       .send({
         type: "msg.send",
-        text: trimmed,
+        text: outgoing,
         channelId: channelID,
         ...(specialistID ? { toAgentId: specialistID } : {}),
       })
@@ -598,6 +645,26 @@ export class AppModel {
   answerForm(form: FormRow, option: string): void {
     this.conversation.resolveForm(form.id, option);
     this.send(option);
+  }
+
+  /**
+   * Send a one-time secret. The value is never put into app state or the
+   * transcript; the row disappears before the frame leaves.
+   */
+  submitSecret(secret: SecretRow, value: string): void {
+    this.conversation.resolveSecret(secret.id);
+    this.publish();
+    const connection = this.connection;
+    if (!connection) return;
+    void connection.send({ type: "secret.reply", requestID: secret.id, value }).catch(() => undefined);
+  }
+
+  cancelSecret(secret: SecretRow): void {
+    this.conversation.resolveSecret(secret.id);
+    this.publish();
+    const connection = this.connection;
+    if (!connection) return;
+    void connection.send({ type: "secret.cancel", requestID: secret.id }).catch(() => undefined);
   }
 
   selectAgent(agent: AgentInfo): void {
@@ -916,11 +983,12 @@ export class AppModel {
     }
 
     if (frame.type === "agent.updated") {
-      this.agents = this.agents.map((agent) =>
+      const rename = (agent: AgentInfo): AgentInfo =>
         agent.id === frame.agentId
           ? { ...agent, name: frame.displayName, onboarded: frame.onboarded }
-          : agent,
-      );
+          : agent;
+      this.agents = this.agents.map(rename);
+      this.mentionAgents = this.mentionAgents.map(rename);
       this.conversation.apply(frame);
       this.publish();
       return;
@@ -1104,6 +1172,7 @@ export class AppModel {
       }
     }
 
+    if (frame.type === "agents.update" && frame.mentions) this.mentionAgents = frame.mentions;
     const effects = this.conversation.apply(frame);
     if (frame.type === "turn.end" || frame.type === "turn.start") this.refreshThreadList();
     this.run(effects);

@@ -6,11 +6,11 @@
  * the mail tools) rather than in the static registry, because its handler
  * needs the live emit/signal/guardrail — it is not a pure function of `db`.
  *
- * Visibility is the point of this file. Delegation used to be invisible: the
- * child ran in an internal thread and only the parent's synthesis reached the
- * user. Now the flow reads as a conversation — a notice saying who was asked
- * and what for, then the specialist's own answer as a message from that agent,
- * then the parent's synthesis on top.
+ * Visibility is the point of this file. The user sees who was asked and what
+ * for, but not what the specialist said back: the full answer is a tool result
+ * for the delegating agent to synthesize. The specialist's own conversation
+ * still holds the work, so opening that agent's DM shows it — which is the
+ * difference between "Vision asked Friday" and "I asked Friday".
  */
 import type { Database } from "bun:sqlite";
 import type { ServerFrameBody } from "@agni/protocol";
@@ -20,7 +20,7 @@ import type { Router } from "../models/router";
 import type { GuardrailState } from "../agent/guardrails";
 import { handoff, type HandoffDeps, type HandoffRequest } from "../agent/handoff";
 import { teamRoster } from "../agent/personas";
-import { appendChannelMessage } from "../stores/channels";
+import { appendChannelMessage, ensureDMChannel } from "../stores/channels";
 
 const objectSchema = (properties: Record<string, unknown>, required: string[]): Record<string, unknown> => ({
   type: "object", properties, required, additionalProperties: false,
@@ -63,12 +63,16 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
     fromType: "user" | "agent" | "system",
     fromID: string,
     text: string,
-    uiHint?: "onboarding_name_prompt" | "handoff_notice" | "normal",
+    uiHint?: "onboarding_name_prompt" | "handoff_notice" | "progress" | "normal",
     toAgentID?: string,
+    channelID = deps.channelID,
   ): void => {
-    if (!deps.channelID) return;
+    if (!channelID) return;
+    // The specialist may not have a DM channel yet; create it so the reply
+    // has somewhere durable to live.
+    if (channelID.startsWith("dm:")) ensureDMChannel(deps.db, channelID.slice(3));
     const row = appendChannelMessage(deps.db, {
-      channelID: deps.channelID,
+      channelID,
       fromType,
       fromID,
       text,
@@ -76,7 +80,7 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
       toAgentID: toAgentID ?? null,
     });
     deps.emit({
-      type: "msg.new", id: row.id, channelId: deps.channelID, fromType,
+      type: "msg.new", id: row.id, channelId: channelID, fromType,
       fromId: fromID, senderName: nameOf(fromID), senderColor: colorOf(fromID),
       text, internal: false, uiHint: uiHint ?? "normal",
       // The target rides along, so the client can make the name a link to
@@ -89,10 +93,10 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
   registry.register({
     name: "handoff",
     description:
-      "Hand a sub-task to another agent and get its answer back as this call's result. " +
+      "Hand a sub-task to another agent and get its answer back privately as this call's result. " +
       "Use it whenever the request is another agent's job — research, coding, or analysis — instead of doing it yourself. " +
-      "Give a focused brief: what to do, and any context it needs to start. The other agent's answer appears in the user's chat, " +
-      "so you do not need to repeat it verbatim; say what it means.",
+      "Give a focused brief: what to do, and any context it needs to start. The other agent's answer does NOT appear in the user's chat; " +
+      "synthesize what it means for the user. The user can open that agent's DM to read the work directly.",
     kind: "static",
     timeoutMs: 120_000,
     schema: objectSchema({
@@ -142,10 +146,13 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
         guardrail: deps.guardrail,
       };
       const result = await handoff(handoffDeps, request);
-      // The specialist's answer is part of the user-visible flow, not just a
-      // tool result: it lands as a message from that agent, and the delegating
-      // agent's own reply follows it.
-      if (result.text.trim()) post("agent", result.agentID, result.text);
+      // Not posted to the delegating agent's channel: the answer belongs to
+      // its synthesis. It is posted to the specialist's own DM instead, so a
+      // direct chat with that agent reads like a conversation — the brief was
+      // a note there, and this is the reply.
+      if (result.text.trim()) {
+        post("agent", result.agentID, result.text, "normal", undefined, `dm:${result.agentID}`);
+      }
       return {
         childTurnID: result.childTurnID,
         agentID: result.agentID,

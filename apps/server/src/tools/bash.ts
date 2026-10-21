@@ -5,7 +5,9 @@
  * the user has allowed it or the pattern is on the always-allow list.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -14,6 +16,11 @@ export interface BashArgs {
   command: string;
   timeoutMs?: number;
   cwd?: string;
+  /**
+   * Internal only. `run_privileged` supplies the owner's one-time secret; the
+   * model never sees or sets this field.
+   */
+  secret?: string;
 }
 
 export interface BashResult {
@@ -47,20 +54,111 @@ export function isDestructive(command: string): boolean {
   return DESTRUCTIVE_PATTERNS.some((pattern) => pattern.test(command));
 }
 
+interface SecretEnv {
+  env: Record<string, string>;
+  cleanup: () => void;
+}
+
+/**
+ * Build a short-lived environment that lets sudo/ssh/git read the owner's
+ * password without putting it in argv or the environment. The secret lives in
+ * a 0600 file inside a 0700 temp dir; the askpass helper cats it. The dir is
+ * removed as soon as the child exits.
+ *
+ * This is not a boundary against a same-user attacker (nothing in-process is),
+ * but it keeps the value out of the model, the transcript, the frame log, and
+ * `ps`.
+ */
+function secretEnv(secret: string): SecretEnv {
+  const dir = mkdtempSync(join(tmpdir(), "agni-secret-"));
+  const secretPath = join(dir, "secret");
+  const askpass = join(dir, "askpass.sh");
+  const sudoWrapper = join(dir, "sudo");
+  writeFileSync(secretPath, `${secret}\n`, { mode: 0o600 });
+  writeFileSync(askpass, `#!/bin/sh\ncat "${secretPath}"\n`, { mode: 0o700 });
+  writeFileSync(sudoWrapper, `#!/bin/sh\nexec /usr/bin/sudo -A "$@"\n`, { mode: 0o700 });
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    PATH: `${dir}:${process.env.PATH ?? ""}`,
+    SUDO_ASKPASS: askpass,
+    SSH_ASKPASS: askpass,
+    SSH_ASKPASS_REQUIRE: "force",
+    GIT_ASKPASS: askpass,
+  };
+  return {
+    env,
+    cleanup: () => {
+      try {
+        // Best effort: overwrite before unlinking, then drop the directory.
+        writeFileSync(secretPath, Buffer.alloc(Math.max(secret.length, 1)), { mode: 0o600 });
+      } catch {
+        // The child may already have removed it; the unlink below still runs.
+      }
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Temp cleanup is best effort.
+      }
+    },
+  };
+}
+
+function redact(text: string, secret: string): string {
+  if (!secret) return text;
+  const variants = new Set([
+    secret,
+    encodeURIComponent(secret),
+    Buffer.from(secret).toString("base64"),
+  ]);
+  let result = text;
+  for (const variant of variants) {
+    if (variant) result = result.split(variant).join("[redacted]");
+  }
+  return result;
+}
+
 export async function runBash(args: BashArgs): Promise<BashResult> {
   const cwd = args.cwd ?? process.cwd();
   mkdirSync(cwd, { recursive: true });
   const timeoutMs = Math.min(args.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000);
   const startedAt = Date.now();
+  const secret = args.secret;
+  const secretSetup = secret ? secretEnv(secret) : null;
 
   return await new Promise<BashResult>((resolve) => {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let settled = false;
     const child = spawn("bash", ["-c", args.command], {
       cwd,
-      env: { ...process.env },
+      env: secretSetup?.env ?? { ...process.env },
+      stdio: ["pipe", "pipe", "pipe"],
     }) as unknown as ChildProcessWithoutNullStreams;
+
+    if (secret) {
+      // `sudo -S` and friends read the password from stdin; askpass covers
+      // brew/ssh/git. A command that never reads stdin gets EPIPE, ignored.
+      child.stdin.on("error", () => {});
+      child.stdin.end(`${secret}\n`);
+    } else {
+      child.stdin.end();
+    }
+
+    const finish = (code: number | null, signal: string | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      secretSetup?.cleanup();
+      resolve({
+        stdout: redact(stdout.trimEnd(), secret ?? ""),
+        stderr: redact(stderr.trimEnd(), secret ?? ""),
+        exitCode: code,
+        signal,
+        timedOut,
+        durationMs: Date.now() - startedAt,
+      });
+    };
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -79,16 +177,6 @@ export async function runBash(args: BashArgs): Promise<BashResult> {
     child.on("error", (error) => {
       stderr += `\n${error instanceof Error ? error.message : String(error)}`;
     });
-    child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      resolve({
-        stdout: stdout.trimEnd(),
-        stderr: stderr.trimEnd(),
-        exitCode: code,
-        signal,
-        timedOut,
-        durationMs: Date.now() - startedAt,
-      });
-    });
+    child.on("close", (code, signal) => finish(code, signal));
   });
 }

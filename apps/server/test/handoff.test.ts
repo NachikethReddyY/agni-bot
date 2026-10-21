@@ -6,6 +6,8 @@ import type { ProviderConfig } from "../src/models/providers";
 import { Router } from "../src/models/router";
 import { runTaskTurn } from "../src/agent/task-loop";
 import { handoff } from "../src/agent/handoff";
+import { registerHandoffTool } from "../src/tools/handoff-tool";
+import { ToolRegistry } from "../src/tools/registry";
 import { defaultResolvedPersona } from "../src/agent/personas";
 import { createThread, getThread } from "../src/stores/threads";
 import { conversationTranscript, ensureConversation, getConversation } from "../src/stores/conversations";
@@ -148,5 +150,46 @@ describe("agent-to-agent handoff", () => {
     const brief = transcript.find((message) => message.text.includes("messaged you"));
     expect(brief?.role).toBe("system");
     expect(brief?.text).toContain("Agni Bot messaged you");
+  });
+
+  test("the specialist's answer stays out of the user's channel", async () => {
+    db = openDatabase(":memory:");
+    const parent = createThread(db, defaultResolvedPersona(db!).id);
+    const registry = new ToolRegistry();
+    registerHandoffTool(registry, {
+      db,
+      router: makeRouter(["Friday's private answer."]),
+      settings: { firstTokenTimeoutMs: 1000, turnTimeoutMs: 5000 },
+      emit: () => undefined,
+      signal: new AbortController().signal,
+      threadID: parent.id,
+      channelID: "main",
+      currentAgentID: "ea",
+      guardrail: rootGuardrail("ea"),
+    });
+    const tool = registry.get("handoff") as unknown as {
+      handler: (args: Record<string, unknown>, ctx: { threadID: string; turnID: string; signal: AbortSignal }) => Promise<unknown>;
+    };
+    const result = (await tool.handler(
+      { toAgentID: "researcher", task: "Find it" },
+      { threadID: parent.id, turnID: "trn_handoff", signal: new AbortController().signal },
+    )) as { text: string };
+
+    // The delegating agent gets the full answer...
+    expect(result.text).toBe("Friday's private answer.");
+    // ...the user gets only a receipt, not the content...
+    const rows = db.query<{ from_type: string; text: string }, []>(
+      "SELECT from_type, text FROM channel_messages WHERE channel_id = 'main'",
+    ).all();
+    expect(rows.some((row) => row.from_type === "agent" && row.text.includes("private answer"))).toBe(false);
+    expect(rows.some((row) => row.from_type === "system" && row.text.includes("Messaged"))).toBe(true);
+    // ...the specialist's own DM shows the reply...
+    const dmRows = db.query<{ from_type: string; text: string }, []>(
+      "SELECT from_type, text FROM channel_messages WHERE channel_id = 'dm:researcher'",
+    ).all();
+    expect(dmRows.some((row) => row.from_type === "agent" && row.text.includes("private answer"))).toBe(true);
+    // ...and the work is still readable in the specialist's own conversation.
+    const conversation = ensureConversation(db, "researcher");
+    expect(conversationTranscript(db, conversation.id).some((message) => message.text.includes("private answer"))).toBe(true);
   });
 });

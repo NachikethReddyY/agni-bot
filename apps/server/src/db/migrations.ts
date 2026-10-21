@@ -516,4 +516,74 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE agents ADD COLUMN role_detail TEXT;
     `,
   },
+  {
+    id: 17,
+    name: "agents_visibility_and_message_salience",
+    sql: `
+      -- Per-agent visibility to the primary assistant (RTE-004):
+      -- private   -> nothing leaves the agent's own channel
+      -- summary   -> the EA may see task status and one-line outcomes
+      -- shared    -> the EA may read the agent's channel directly
+      ALTER TABLE agents ADD COLUMN visibility TEXT NOT NULL DEFAULT 'summary';
+
+      -- Turn salience (GATE-001): ephemeral turns stay in the durable
+      -- transcript and the recent window but are excluded from compaction
+      -- and long-term memory extraction.
+      ALTER TABLE channel_messages ADD COLUMN salience TEXT NOT NULL DEFAULT 'recent_turns';
+      CREATE INDEX idx_channel_messages_salience ON channel_messages(channel_id, salience, created_at);
+    `,
+  },
+  {
+    id: 18,
+    name: "agent_memories_lifecycle_columns",
+    sql: `
+      -- MEM-001 foundation: the columns temporal facts, provenance and
+      -- retrieval ranking need. All nullable/defaulted so existing rows are
+      -- valid and behaviour is unchanged until the writers opt in.
+      ALTER TABLE agent_memories ADD COLUMN kind TEXT NOT NULL DEFAULT 'fact';
+      ALTER TABLE agent_memories ADD COLUMN valid_from TEXT;
+      ALTER TABLE agent_memories ADD COLUMN valid_to TEXT;
+      ALTER TABLE agent_memories ADD COLUMN supersedes_id TEXT;
+      ALTER TABLE agent_memories ADD COLUMN source_block_id TEXT;
+      ALTER TABLE agent_memories ADD COLUMN source_turn_ids TEXT;
+      ALTER TABLE agent_memories ADD COLUMN last_used_at TEXT;
+      ALTER TABLE agent_memories ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE agent_memories ADD COLUMN embedding BLOB;
+      ALTER TABLE agent_memories ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0;
+      ALTER TABLE agent_memories ADD COLUMN salience REAL NOT NULL DEFAULT 0.5;
+      ALTER TABLE agent_memories ADD COLUMN visibility TEXT NOT NULL DEFAULT 'shared';
+      ALTER TABLE agent_memories ADD COLUMN source TEXT NOT NULL DEFAULT 'user';
+
+      CREATE INDEX idx_agent_memories_live ON agent_memories(scope, agent_id, valid_to);
+      CREATE INDEX idx_agent_memories_supersedes ON agent_memories(supersedes_id);
+    `,
+  },
+  {
+    id: 19,
+    name: "delegation_tasks",
+    sql: `
+      -- DEL-001/DEL-005: asynchronous delegation is a task with an owner, an
+      -- origin, and its own lifecycle. Kept separate from the user-facing
+      -- status column so the task list does not grow agent states.
+      ALTER TABLE tasks ADD COLUMN owner_agent_id TEXT;
+      ALTER TABLE tasks ADD COLUMN origin TEXT NOT NULL DEFAULT 'user_direct'; -- user_direct | ea_delegated
+      ALTER TABLE tasks ADD COLUMN delegate_state TEXT NOT NULL DEFAULT 'none'; -- none | queued | running | needs_input | done | failed
+      ALTER TABLE tasks ADD COLUMN brief TEXT;        -- JSON TaskPacket (goal/constraints/deadline/output_schema)
+      ALTER TABLE tasks ADD COLUMN result TEXT;       -- short summary or failure
+      ALTER TABLE tasks ADD COLUMN job_id TEXT;       -- the background job that runs it
+      ALTER TABLE tasks ADD COLUMN parent_turn_id TEXT; -- the EA turn that delegated it
+      CREATE INDEX idx_tasks_delegate ON tasks(delegate_state, owner_agent_id);
+    `,
+  },
+  {
+    id: 20,
+    name: "agents_memory_scope",
+    sql: `
+      -- DEL-007: a new agent gets user-scope memory read-only by default.
+      -- Existing agents keep their current write access; the orchestrator and
+      -- every pre-existing persona are readwrite.
+      ALTER TABLE agents ADD COLUMN memory_scope TEXT NOT NULL DEFAULT 'readwrite';
+      CREATE INDEX idx_agents_memory_scope ON agents(memory_scope);
+    `,
+  },
 ];

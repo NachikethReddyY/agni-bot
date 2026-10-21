@@ -9,7 +9,7 @@
 import type { Database } from "bun:sqlite";
 import type { ServerFrameBody } from "@agni/protocol";
 import type { Persona } from "../agent/personas";
-import { getPersona, personaInfo, registerPersona, DEFAULT_AGENT_TOOLS } from "../agent/personas";
+import { getPersona, personaInfo, mentionRoster, registerPersona, DEFAULT_AGENT_TOOLS } from "../agent/personas";
 import { nowISO } from "../util/ids";
 import { MAX_AGENT_NAME_CHARS } from "../agent/identity";
 import type { ToolRegistry } from "./registry";
@@ -54,6 +54,7 @@ export function registerCreateAgentTool(registry: ToolRegistry, deps: CreateAgen
         prompt: { type: "string", minLength: 1, maxLength: 8_000, description: "The new agent's system prompt — its personality and job." },
         color: { type: "string", description: "Optional hex color (e.g. '#e05252'). A color is picked if omitted." },
         tools: { type: "array", items: { type: "string" }, description: "Tool names the new agent may use." },
+        memoryScope: { type: "string", enum: ["read", "readwrite"], description: "Whether the agent may write user-scope memory. Default read-only." },
       },
       required: ["name", "prompt"],
       additionalProperties: false,
@@ -83,16 +84,19 @@ export function registerCreateAgentTool(registry: ToolRegistry, deps: CreateAgen
 
       const colorArg = typeof args.color === "string" ? args.color.trim() : "";
       const color = colorArg ? colorArg : colorFor(id);
-      const persona: Persona = { id, name, color, role, systemPromptTemplate: prompt, tools: finalTools };
+      // DEL-007: a new agent reads user memory but cannot write it unless the
+      // caller explicitly says so.
+      const memoryScope: "read" | "readwrite" = args.memoryScope === "readwrite" ? "readwrite" : "read";
+      const persona: Persona = { id, name, color, role, systemPromptTemplate: prompt, tools: finalTools, memoryScope };
 
       const now = nowISO();
       db.run(
-        `INSERT INTO agents (id, name, color, role, role_detail, default_name, display_name, system_prompt, avatar_color, onboarded, tools, created_at, updated_at)
-         VALUES (?, ?, ?, 'agent', ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
-        [id, name, color, role, name, name, prompt, color, JSON.stringify(finalTools), now, now],
+        `INSERT INTO agents (id, name, color, role, role_detail, default_name, display_name, system_prompt, avatar_color, onboarded, tools, memory_scope, created_at, updated_at)
+         VALUES (?, ?, ?, 'agent', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+        [id, name, color, role, name, name, prompt, color, JSON.stringify(finalTools), memoryScope, now, now],
       );
       registerPersona(persona);
-      deps.emit({ type: "agents.update", agents: personaInfo(db) });
+      deps.emit({ type: "agents.update", agents: personaInfo(db), mentions: mentionRoster(db) });
 
       return {
         id,
@@ -100,6 +104,7 @@ export function registerCreateAgentTool(registry: ToolRegistry, deps: CreateAgen
         role,
         color,
         tools: finalTools,
+        memoryScope,
         ...(dropped.length > 0 ? { droppedTools: dropped } : {}),
         promptChars: prompt.length,
       };

@@ -43,6 +43,28 @@ function sseResponse(...deltas: string[]): Response {
   return new Response(stream, { status: 200 });
 }
 
+function sseToolCall(name: string, args: unknown): Response {
+  const event = {
+    choices: [{
+      delta: {
+        tool_calls: [{
+          index: 0,
+          id: `call-${name}`,
+          type: "function",
+          function: { name, arguments: JSON.stringify(args) },
+        }],
+      },
+    }],
+  };
+  const body = `data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`;
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(body));
+      controller.close();
+    },
+  }), { status: 200 });
+}
+
 class TestClient {
   private readonly frames: ServerFrame[] = [];
   private readonly waiters: Array<{
@@ -134,10 +156,14 @@ afterEach(() => {
   db = undefined;
 });
 
-async function startTestServer(): Promise<void> {
+async function startTestServer(fetchMock?: typeof fetch): Promise<void> {
   db = openDatabase(":memory:");
   const { token } = await mintToken(db, "test-device");
-  const router = new Router([provider], new HealthTracker(), (async () => sseResponse("hello ", "there")) as unknown as typeof fetch);
+  const router = new Router(
+    [provider],
+    new HealthTracker(),
+    fetchMock ?? ((async () => sseResponse("hello ", "there")) as unknown as typeof fetch),
+  );
   const config: Config = {
     host: "127.0.0.1",
     port: 0,
@@ -182,6 +208,47 @@ describe("websocket end-to-end", () => {
     expect(stored?.from_id).toBe(userMessage.fromId);
   });
 
+  test("a secret request crosses the socket and never reaches the transcript", async () => {
+    let request = 0;
+    const fetchMock = (async () => {
+      request += 1;
+      return request === 1
+        ? sseToolCall("run_privileged", { command: "cat", purpose: "prove the secret stays out" })
+        : sseResponse("Done.");
+    }) as unknown as typeof fetch;
+    await startTestServer(fetchMock);
+
+    client!.send({ type: "agent.rename", agentId: "ea", name: "Agni" });
+    await client!.next("agent.updated");
+    client!.send({ type: "msg.send", channelId: "main", text: "run the privileged command" });
+    await client!.next("msg.new", { match: (frame) => frame.fromType === "user" });
+
+    const secretRequest = await client!.next("secret.request", { timeoutMs: 5000 });
+    expect(secretRequest).toMatchObject({
+      purpose: "prove the secret stays out",
+      command: "cat",
+      kind: "password",
+    });
+    expect(JSON.stringify(secretRequest)).not.toContain("top-secret-value");
+
+    client!.send({ type: "secret.reply", requestID: secretRequest.requestID, value: "top-secret-value" });
+    await client!.next("turn.end", { timeoutMs: 5000 });
+
+    const row = db!.query<{ result: string }, []>(
+      "SELECT result FROM tool_calls ORDER BY rowid DESC LIMIT 1",
+    ).get();
+    expect(row?.result).toContain("[redacted]");
+    expect(row?.result).not.toContain("top-secret-value");
+    const messageHits = db!.query<{ n: number }, [string]>(
+      "SELECT count(*) AS n FROM messages WHERE text LIKE ?",
+    ).get("%top-secret-value%");
+    expect(messageHits?.n).toBe(0);
+    const channelHits = db!.query<{ n: number }, [string]>(
+      "SELECT count(*) AS n FROM channel_messages WHERE text LIKE ?",
+    ).get("%top-secret-value%");
+    expect(channelHits?.n).toBe(0);
+  });
+
   test("reports the name prompt as settled once the agent has a name", async () => {
     await startTestServer();
     client!.send({ type: "agent.rename", agentId: "ea", name: "Vision" });
@@ -206,6 +273,28 @@ describe("websocket end-to-end", () => {
     await client!.next("turn.end");
     expect(started.agentID).toBe("researcher");
     expect(db!.query("SELECT id FROM channels WHERE id = 'dm:researcher'").get()).toBeTruthy();
+  });
+
+  test("a leading @mention routes a main-channel message to that specialist", async () => {
+    await startTestServer();
+    // No channelId/toAgentId: the mention itself decides where the message goes.
+    client!.send({ type: "msg.send", text: "@researcher find the source of the delay" });
+    const userMessage = await client!.next("msg.new", { match: (frame) => frame.fromType === "user" });
+    expect(userMessage.channelId).toBe("dm:researcher");
+    expect(userMessage.text).toBe("find the source of the delay");
+    const started = await client!.next("turn.start");
+    expect(started.agentID).toBe("researcher");
+    await client!.next("turn.end");
+  });
+
+  test("an @agni mention stays on the main channel", async () => {
+    await startTestServer();
+    client!.send({ type: "msg.send", text: "@agni hello" });
+    const userMessage = await client!.next("msg.new", { match: (frame) => frame.fromType === "user" });
+    expect(userMessage.channelId).toBe("main");
+    expect(userMessage.text).toBe("hello");
+    await client!.next("turn.end");
+    expect(db!.query("SELECT id FROM channels WHERE id = 'dm:ea'").get()).toBeNull();
   });
 
   test("streams a turn, then serves thread list and history", async () => {

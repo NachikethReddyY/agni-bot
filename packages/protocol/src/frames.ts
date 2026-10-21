@@ -48,6 +48,8 @@ export const AgentInfoSchema = z.object({
   tools: z.array(z.string()).optional(),
   /** Set once the agent has been named; the "what should I call you?" prompt is settled. */
   onboarded: z.boolean().optional(),
+  /** Hidden from the sidebar, but still addressable as `@id` / `@name`. */
+  hidden: z.boolean().optional(),
 });
 export type AgentInfo = z.infer<typeof AgentInfoSchema>;
 
@@ -112,10 +114,17 @@ export const JobInfoSchema = z.object({
 export type JobInfo = z.infer<typeof JobInfoSchema>;
 
 export const TaskStatusSchema = z.enum(["open", "done", "snoozed"]);
+export const DelegateStateSchema = z.enum(["none", "queued", "running", "needs_input", "done", "failed"]);
 export const TaskInfoSchema = z.object({
   id: z.string().min(1), title: z.string(), dueAt: z.string().nullable(),
   priority: z.enum(["low", "normal", "high"]), status: TaskStatusSchema,
   snoozedUntil: z.string().nullable(), createdAt: z.string(), updatedAt: z.string(),
+  // Delegation fields (DEL-001/DEL-005). Optional so older clients still parse.
+  ownerAgentId: z.string().nullable().optional(),
+  origin: z.enum(["user_direct", "ea_delegated"]).optional(),
+  delegateState: DelegateStateSchema.optional(),
+  jobId: z.string().nullable().optional(),
+  result: z.string().nullable().optional(),
 });
 export type TaskInfo = z.infer<typeof TaskInfoSchema>;
 
@@ -206,6 +215,17 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
     requestID: z.string().min(1),
     decision: DecisionSchema,
   }),
+  /**
+   * The owner typed a secret for a `secret.request`. The value is never
+   * persisted, replayed, or sent to the model; the server uses it once for
+   * the command named in the request.
+   */
+  z.object({
+    type: z.literal("secret.reply"),
+    requestID: z.string().min(1),
+    value: z.string().min(1),
+  }),
+  z.object({ type: z.literal("secret.cancel"), requestID: z.string().min(1) }),
   z.object({ type: z.literal("agent.select"), agentID: z.string().min(1) }),
   /**
    * Resolve (and create when missing) the agent's one conversation — the
@@ -256,7 +276,7 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
   /** Delete a task unless it is currently running. */
   z.object({ type: z.literal("job.delete"), jobID: z.string().min(1) }),
   z.object({ type: z.literal("task.list"), status: z.enum(["open", "done", "snoozed", "all"]).optional(), limit: z.number().int().positive().max(200).optional() }),
-  z.object({ type: z.literal("task.update"), taskID: z.string().min(1), action: z.enum(["done", "reopen", "snooze"]), until: z.string().datetime().optional() }),
+  z.object({ type: z.literal("task.update"), taskID: z.string().min(1), action: z.enum(["done", "reopen", "snooze", "cancel"]), until: z.string().datetime().optional() }),
   /** Configure a built-in API provider. The key is accepted only by the daemon. */
   z.object({
     type: z.literal("provider.add"),
@@ -370,6 +390,28 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     preview: z.string(),
     buttons: z.array(DecisionSchema).min(1),
   }),
+  /**
+   * A command needs the owner's password. The request carries no secret —
+   * only what the owner is authorizing. The answer travels on `secret.reply`
+   * and is consumed once, server-side.
+   */
+  z.object({
+    type: z.literal("secret.request"),
+    seq,
+    requestID: z.string(),
+    purpose: z.string(),
+    command: z.string(),
+    kind: z.enum(["password", "text"]),
+    expiresAt: z.string(),
+    threadID: z.string().optional(),
+    conversationID: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("secret.cancel"),
+    seq,
+    requestID: z.string(),
+    reason: z.string(),
+  }),
   z.object({
     type: z.literal("form.request"),
     seq,
@@ -378,7 +420,13 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     options: z.array(z.string()).optional(),
   }),
   z.object({ type: z.literal("notify"), seq, title: z.string(), body: z.string(), sound: z.boolean().optional(), threadID: z.string().optional() }),
-  z.object({ type: z.literal("agents.update"), seq, agents: z.array(AgentInfoSchema) }),
+  z.object({
+    type: z.literal("agents.update"),
+    seq,
+    agents: z.array(AgentInfoSchema),
+    /** The full roster, including hidden specialists, for `@mention` resolution. */
+    mentions: z.array(AgentInfoSchema).optional(),
+  }),
   z.object({ type: z.literal("thread.list.ok"), seq, threads: z.array(ThreadInfoSchema) }),
   z.object({
     type: z.literal("thread.history.ok"),
@@ -471,7 +519,7 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     senderColor: z.string().optional(),
     text: z.string(),
     internal: z.boolean(),
-    uiHint: z.enum(["onboarding_name_prompt", "handoff_notice", "normal"]).optional(),
+    uiHint: z.enum(["onboarding_name_prompt", "handoff_notice", "progress", "normal"]).optional(),
     /** The agent this message is about — a handoff notice names its target. */
     toAgentId: z.string().optional(),
     createdAt: z.string(),

@@ -65,7 +65,7 @@ describe("migrations", () => {
     insert("thr_scout", "scout");
 
     const ran = migrate(db);
-    expect(ran).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    expect(ran).toEqual(MIGRATIONS.filter((entry) => entry.id > 6).map((entry) => entry.id));
 
     // One conversation per agent; every pre-existing thread assigned; the
     // newest agni block is the conversation's active one.

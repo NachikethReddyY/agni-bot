@@ -18,7 +18,7 @@ export async function compactChannelHistory(db: Database, router: Router, channe
   const chunk = messages.slice(0, compactCount);
   const prior = getChannelSummary(db, channelID)?.summary ?? "";
   const known = db.query<{ key_slug: string; content: string }, []>(
-    "SELECT key_slug, content FROM agent_memories WHERE scope = 'global_user' ORDER BY importance DESC, updated_at DESC LIMIT 100",
+    "SELECT key_slug, content FROM agent_memories WHERE scope = 'global_user' AND valid_to IS NULL ORDER BY importance DESC, updated_at DESC LIMIT 100",
   ).all();
   const prompt = [
     "Update the running channel summary and extract durable facts from the new messages.",

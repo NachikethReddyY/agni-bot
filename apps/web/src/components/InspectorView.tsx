@@ -221,9 +221,14 @@ function TaskRow({ task }: { task: TaskInfo }) {
     due ? `Due ${format.stamp(due)}` : null,
     task.priority.charAt(0).toUpperCase() + task.priority.slice(1),
     task.status.charAt(0).toUpperCase() + task.status.slice(1),
+    task.delegateState && task.delegateState !== "none"
+      ? `${task.ownerAgentId ?? "agent"} · ${task.delegateState.replace("_", " ")}`
+      : null,
   ]
     .filter(Boolean)
     .join(" · ");
+  const cancellable =
+    task.delegateState === "queued" || task.delegateState === "running" || task.delegateState === "needs_input";
 
   return (
     <div className="task-row">
@@ -255,6 +260,11 @@ function TaskRow({ task }: { task: TaskInfo }) {
         <option value="hour">1 hour</option>
         <option value="tomorrow">Tomorrow</option>
       </select>
+      {cancellable ? (
+        <button type="button" className="btn small" onClick={() => model.updateTask(task, "cancel")}>
+          Cancel
+        </button>
+      ) : null}
       <button type="button" className="btn primary small" onClick={() => model.updateTask(task, "done")}>
         Done
       </button>

@@ -13,6 +13,7 @@
  */
 import type { ResolvedPersona } from "./personas";
 import { clampFactPrefix, MAX_FACT_PREFIX_CHARS } from "./guardrails";
+import { assembleContext, type Anchor } from "../context/compiler";
 
 /** Stable lane header — kept identical across turns in the same lane. */
 export function laneHeader(lane: "instant" | "task" | "deep"): string {
@@ -85,37 +86,46 @@ export function buildDelegationPrefix(params: {
   toolHints?: string[];
   /** The other agents this one may hand work to, with their roles. */
   team?: Array<{ id: string; name: string; role: string }>;
+  /** ASM-002: short always-present note of the current topic, if available. */
+  anchor?: Anchor | null;
 }): string {
-  const extra: string[] = [];
+  const summaries: string[] = [];
   if (params.carrySummary) {
-    extra.push(`Carried summary of earlier session blocks (server-written, untrusted): ${params.carrySummary}`);
+    summaries.push(`Carried summary of earlier session blocks: ${params.carrySummary}`);
   }
   if (params.handoffSummary) {
-    extra.push(
-      `Handoff context from the delegating agent (untrusted): ${params.handoffSummary}`,
-    );
+    summaries.push(`Handoff context from the delegating agent: ${params.handoffSummary}`);
   }
+  const tail: string[] = [];
   if (params.team?.length) {
     // The roster is the model's only view of who else exists, so it states both
     // who they are and what the contract is: hand off in one call, then fold
     // the returned result into the reply.
-    extra.push(
+    tail.push(
       [
-        "Your team — hand work to these with the `handoff` tool:",
+        "Your team — hand work to these with `handoff` (synchronous) or `delegate_task` (background):",
         ...params.team.map((member) => `- ${member.id} (${member.name}): ${member.role}`),
-        "Offload rather than pile up. If a request is someone else's job, hand it off and keep working;",
-        "the specialist's answer comes back to you as that tool call's result, and you are the one who",
-        "tells the user what it found. Never claim a delegated task finished before you have seen its result.",
+        "Offload rather than pile up. If a request is someone else's job, hand it off and keep working.",
+        "When the owner writes `use @name` or `@name`, that names the specialist to delegate to.",
+        "The specialist's answer comes back to you privately as the tool result; only you write to the",
+        "owner's chat, so synthesize it instead of forwarding it. Never claim a delegated task finished",
+        "before you have seen its result. Use `delegate_wait` only when you need the result this turn;",
+        "otherwise start the work, tell the owner it has begun, and let the completion notice arrive.",
       ].join("\n"),
     );
   }
-  extra.push(
-    `You are at depth ${params.depth} of ${params.maxDepth} in an agent-to-agent chain.`,
-  );
+  tail.push(`You are at depth ${params.depth} of ${params.maxDepth} in an agent-to-agent chain.`);
   if (params.toolHints?.length) {
-    extra.push(`Dynamic tools available (full schema on invocation):\n${params.toolHints.join("\n")}`);
+    tail.push(`Dynamic tools available (full schema on invocation):\n${params.toolHints.join("\n")}`);
   }
-  return buildSystemPrefix({ persona: params.persona, lane: "task", facts: params.facts, extra });
+  return assembleContext({
+    personaPrompt: params.persona.systemPrompt,
+    laneHeader: laneHeader("task"),
+    facts: params.facts,
+    anchor: params.anchor ?? null,
+    summaries,
+    tail,
+  });
 }
 
 export function estimatePrefixTokens(text: string): number {

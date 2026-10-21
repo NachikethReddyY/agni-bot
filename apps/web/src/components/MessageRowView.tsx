@@ -189,7 +189,8 @@ function HandoffNotice({ message }: { message: ChatMessage }) {
   const model = useAppModel();
   const snapshot = useAppSnapshot();
   const target = message.toAgentId
-    ? snapshot.agents.find((agent) => agent.id === message.toAgentId)
+    ? snapshot.mentionAgents.find((agent) => agent.id === message.toAgentId) ??
+      snapshot.agents.find((agent) => agent.id === message.toAgentId)
     : undefined;
   if (!target) {
     return (
