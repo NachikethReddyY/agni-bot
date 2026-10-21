@@ -23,6 +23,7 @@ import {
 } from "../stores/agent-memories";
 import { nowISO } from "../util/ids";
 import { nextDailyRun } from "./schedule";
+import { rollupSummaries } from "./summary-rollup";
 import type { JobRunner } from "./runner";
 
 /** How long an unused fact stays warm before it is archived. */
@@ -59,6 +60,13 @@ export function registerMemoryJobs(runner: JobRunner, deps: MemoryJobDeps): void
         ? { nextRunAt: new Date(Date.now() + 5 * 60_000).toISOString() }
         : {}),
     };
+  });
+
+  runner.register("summary.rollup", async () => {
+    // CMP-001: the ladder of summaries — block → day → epoch. Deterministic,
+    // so it costs nothing and can run in the background.
+    const result = rollupSummaries(deps.db);
+    return { result: `rolled up ${result.days} day(s) and ${result.epochs} epoch(s)` };
   });
 
   runner.register("memory.consolidate", async () => {

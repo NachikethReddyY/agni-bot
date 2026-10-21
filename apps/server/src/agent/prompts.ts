@@ -92,10 +92,15 @@ export function buildDelegationPrefix(params: {
   recall?: string[];
   /** ROL-006: the last turns of the previous block, verbatim. */
   previousTail?: string[];
+  /** CMP-001: the rolled-up day and epoch summaries, when there are any. */
+  rollups?: string[];
 }): string {
   const summaries: string[] = [];
   if (params.carrySummary) {
     summaries.push(`Carried summary of earlier session blocks: ${params.carrySummary}`);
+  }
+  if (params.rollups?.length) {
+    summaries.push(`Earlier, at a wider scope:\n${params.rollups.join("\n")}`);
   }
   if (params.handoffSummary) {
     summaries.push(`Handoff context from the delegating agent: ${params.handoffSummary}`);

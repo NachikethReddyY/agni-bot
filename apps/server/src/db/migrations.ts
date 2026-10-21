@@ -741,4 +741,30 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE threads ADD COLUMN opened_tail TEXT;
     `,
   },
+  {
+    id: 28,
+    name: "summary_levels",
+    sql: `
+      -- CMP-001: summaries in levels. A block summary says what happened in
+      -- one session block; a day summary says what happened in a day; an
+      -- epoch summary says what happened over a longer stretch. Each level
+      -- keeps the range it came from, so a summary can be traced back.
+      CREATE TABLE summaries (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        level TEXT NOT NULL,          -- block | day | epoch
+        parent_id TEXT,
+        title TEXT NOT NULL,
+        text TEXT NOT NULL,
+        structured TEXT,
+        source_from INTEGER,
+        source_to INTEGER,
+        day TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_summaries_conversation ON summaries(conversation_id, level, created_at);
+      CREATE INDEX idx_summaries_day ON summaries(conversation_id, day, level);
+    `,
+  },
 ];

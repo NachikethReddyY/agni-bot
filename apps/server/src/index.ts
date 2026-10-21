@@ -102,6 +102,13 @@ async function serve(): Promise<void> {
   if (!listJobs(db, { limit: 50 }).some((job) => job.kind === "memory.consolidate")) {
     enqueueJob(db, { kind: "memory.consolidate", payload: {} });
   }
+  if (!listJobs(db, { limit: 50 }).some((job) => job.kind === "summary.rollup")) {
+    enqueueJob(db, {
+      kind: "summary.rollup",
+      payload: {},
+      runAt: new Date(Date.now() + 120_000).toISOString(),
+    });
+  }
   if (!listJobs(db, { limit: 50 }).some((job) => job.kind === "memory.embed")) {
     enqueueJob(db, { kind: "memory.embed", payload: {}, runAt: new Date(Date.now() + 30_000).toISOString() });
   }
