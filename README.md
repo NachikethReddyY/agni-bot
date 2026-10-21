@@ -115,6 +115,15 @@ script is deleted the moment the run ends. The authorization dialog shows the
 The owner's password is never stored anywhere — not in the Keychain, not in a
 file. The Keychain holds the device token and nothing else.
 
+### Summaries in levels
+
+A session block's summary says what happened in that block. The day summary
+says what happened in the day, and the epoch summary says what happened over
+a week. The rollup is deterministic — the union of the day's decisions and
+open loops — so it costs nothing, runs in the background, and is
+idempotent. Each level keeps the range it came from, so a summary can
+always be traced back to the turns that produced it.
+
 ### What Agni remembers, seen from the app
 
 The Inspector has a **Memory** section: every fact the agent holds, with its

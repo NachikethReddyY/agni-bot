@@ -28,6 +28,7 @@ import { embedderConfig } from "./embeddings";
 import { registerExpandTool } from "../tools/expand-tool";
 import { buildDelegationPrefix } from "./prompts";
 import { getThread } from "../stores/threads";
+import { listSummaries } from "../stores/summaries";
 import { appendChannelMessage, getChannelSummary } from "../stores/channels";
 import { compactChannelHistory } from "./compactor";
 import { GuardrailError, enterDelegation, rootGuardrail, stepGuardrail, type GuardrailState } from "./guardrails";
@@ -331,6 +332,10 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     // the boundary does not lose the stretch the summary has not caught up
     // with.
     previousTail: openedTail(db, threadID),
+    // CMP-001: the day and epoch summaries, when this conversation has them.
+    rollups: run.conversationID
+      ? listSummaries(db, { conversationID: run.conversationID, level: "day", limit: 3 }).map((summary) => summary.text)
+      : [],
     // Only an agent that can actually hand off needs to know the roster.
     team: persona.tools.includes("handoff") ? teamRoster(db, { exclude: persona.id }) : [],
   });

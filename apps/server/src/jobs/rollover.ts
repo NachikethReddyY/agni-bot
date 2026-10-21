@@ -18,6 +18,7 @@ import { getThread } from "../stores/threads";
 import { getConversation, updateSummaryIfNewer } from "../stores/conversations";
 import { parseJobPayload, type JobRow } from "../stores/jobs";
 import { summarizeBlock, type RolloverDeps } from "../agent/rollover";
+import { dayOf, saveSummary } from "../stores/summaries";
 import type { JobRunner } from "./runner";
 
 export interface RolloverJobPayload {
@@ -50,6 +51,19 @@ export function registerRolloverJob(runner: JobRunner, deps: RolloverJobDeps): v
       summary: summary.text,
       structured: summary.structured,
       version: payload.version,
+    });
+    // CMP-001: the block summary is also a row, so it can be rolled up into
+    // a day summary and an epoch summary later.
+    saveSummary(deps.db, {
+      conversationID: conversation.id,
+      agentID: conversation.agent_id,
+      level: "block",
+      title: `Block ${block.id.slice(-6)}`,
+      text: summary.text,
+      structured: summary.structured,
+      sourceFrom: summary.structured.source_turn_range?.from ?? null,
+      sourceTo: summary.structured.source_turn_range?.to ?? null,
+      day: dayOf(block.created_at),
     });
     log.info(
       `rollover: summarized block ${block.id} (${stored ? "stored" : "superseded by a newer summary"})`,
