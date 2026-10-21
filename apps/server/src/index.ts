@@ -34,6 +34,7 @@ import { setSlotBudgets } from "./context/compiler";
 import { JobRunner } from "./jobs/runner";
 import { registerTurnJob, type TurnJobPayload } from "./jobs/turn";
 import { registerBriefJob } from "./jobs/brief";
+import { registerTaggerJob, scheduleTagger } from "./jobs/tagger";
 import { log } from "./log";
 import { HealthTracker } from "./models/health";
 import { Router } from "./models/router";
@@ -91,6 +92,8 @@ async function serve(): Promise<void> {
   const runner = new JobRunner(db, running.emit, { pollMs: config.jobPollMs });
   registerTurnJob(runner, { db, router, settings, emit: running.emit });
   registerBriefJob(runner, { db, emit: running.emit });
+  // TAG-001: memory is extracted in batches, never on the path of a turn.
+  registerTaggerJob(runner, { db, router, emit: running.emit });
   runner.start();
 
   log.info(`agni server v${PROTOCOL_VERSION} listening on ${running.url} (pid ${process.pid})`);

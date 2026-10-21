@@ -30,6 +30,11 @@ describe("channel compaction", () => {
 
     expect(getChannelSummary(testDB, "main")?.summary).toBe("The user is building Agni.");
     expect(uncompactedMessages(testDB, "main")).toHaveLength(13);
-    expect(listAgentMemories(testDB, { scope: "global_user", limit: 10 })[0]?.key_slug).toBe("project-name");
+    // TAG-002: what the conversation implies is the agent's own note, never a
+    // fact about the owner — the channel holds tool output and web text too.
+    const note = listAgentMemories(testDB, { scope: "agent", agentID: "ea", limit: 10 })[0];
+    expect(note?.key_slug).toBe("project-name");
+    expect(note?.source).toBe("compaction");
+    expect(listAgentMemories(testDB, { scope: "global_user", limit: 10 })).toHaveLength(0);
   });
 });

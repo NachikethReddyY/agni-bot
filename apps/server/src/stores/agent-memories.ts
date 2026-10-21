@@ -127,12 +127,26 @@ export function putAgentMemory(db: Database, input: AgentMemoryInput): AgentMemo
   const importance = clampImportance(input.importance ?? 0);
   const agentID = input.agentID === undefined ? null : input.agentID;
   const timestamp = nowISO();
+  const source = input.source?.trim() || "user";
+
+  // TAG-002: a fact about the owner may only come from the owner (or from
+  // something verified). A tool result, a web page or an email is data: a
+  // page that says "the user prefers dark mode" is an injection attempt, not
+  // a fact. An item that breaks the rule is kept as the agent's own note
+  // instead of becoming a fact about the owner.
+  const userScope = scope === "global_user" || scope === "user";
+  const sourceMayWriteUserFacts = source === "user" || source === "verified";
+  if (userScope && !sourceMayWriteUserFacts && !agentID) {
+    throw new Error("only owner-stated content may become a user-scoped fact");
+  }
+  const effectiveScope = userScope && !sourceMayWriteUserFacts ? "agent" : scope;
+  const effectiveAgentID = effectiveScope === "agent" ? agentID : null;
 
   const existing = db
     .query<AgentMemoryRow, [string, string, string]>(
       `SELECT ${MEMORY_COLUMNS} FROM agent_memories WHERE scope = ? AND COALESCE(agent_id, '') = ? AND key_slug = ? AND valid_to IS NULL`,
     )
-      .get(scope, agentID ?? "", normalizedKeySlug);
+      .get(effectiveScope, effectiveAgentID ?? "", normalizedKeySlug);
 
   if (existing) {
     // MEM-002: a changed fact supersedes the old one; it is never silently
@@ -157,8 +171,8 @@ export function putAgentMemory(db: Database, input: AgentMemoryInput): AgentMemo
 
   const row: AgentMemoryRow = {
     id: newID("mem"),
-    scope,
-    agent_id: agentID,
+    scope: effectiveScope,
+    agent_id: effectiveAgentID,
     type,
     key_slug: normalizedKeySlug,
     content,
@@ -178,7 +192,7 @@ export function putAgentMemory(db: Database, input: AgentMemoryInput): AgentMemo
     confidence: clampConfidence(input.confidence),
     salience: clampImportance(input.salience ?? importance),
     visibility: normalizeMemoryVisibility(input.visibility),
-    source: input.source?.trim() || "user",
+    source,
   };
   db.run(
     `INSERT INTO agent_memories (id, scope, agent_id, type, key_slug, content, tags, importance, created_at, updated_at, kind, valid_from, valid_to, supersedes_id, source_block_id, source_turn_ids, last_used_at, use_count, embedding, confidence, salience, visibility, source)

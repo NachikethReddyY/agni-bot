@@ -32,6 +32,7 @@ import {
   taskInfo,
 } from "../stores/tasks";
 import { saveArtifact } from "../stores/artifacts";
+import { scheduleTagger } from "./tagger";
 import { nextDailyRun } from "./schedule";
 import type { JobRunner } from "./runner";
 
@@ -170,6 +171,9 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
       if (delegationTaskID) setDelegationState(deps.db, delegationTaskID, "failed", `turn ended with ${result.stopReason}`);
       throw new Error(`turn ended with ${result.stopReason}${result.text ? " (partial output kept)" : ""}`);
     }
+
+    // TAG-001: a background turn is also material worth tagging.
+    scheduleTagger(deps.db, { agentID: persona.id, ...(payload.channelID ? { channelID: payload.channelID } : {}) });
 
     const reply = firstLine(result.text);
     if (delegationTaskID && !isDelegationCancelled(deps.db, delegationTaskID)) {
