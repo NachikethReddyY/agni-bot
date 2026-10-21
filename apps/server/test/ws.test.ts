@@ -480,6 +480,26 @@ describe("websocket end-to-end", () => {
     expect(state?.delegate_state).toBe("needs_input");
   });
 
+  test("the memory view shows what the caller can recall, and nothing else", async () => {
+    await startTestServer();
+    // A shared fact, and a private one that belongs to the researcher.
+    db!.run(
+      `INSERT INTO agent_memories (id,scope,agent_id,type,key_slug,content,tags,importance,created_at,updated_at,kind,valid_from,valid_to,supersedes_id,source_block_id,source_turn_ids,last_used_at,use_count,embedding,confidence,salience,visibility,source,created_at)
+       VALUES ('mem_shared','global_user',NULL,'fact','shared-note','The shared note.',NULL,0.5,datetime('now'),datetime('now'),'fact',datetime('now'),NULL,NULL,NULL,NULL,NULL,0,NULL,1.0,0.5,'shared','user',datetime('now'))`,
+    );
+    db!.run("UPDATE agents SET visibility = 'private' WHERE id = 'researcher'");
+    db!.run(
+      `INSERT INTO agent_memories (id,scope,agent_id,type,key_slug,content,tags,importance,created_at,updated_at,kind,valid_from,valid_to,supersedes_id,source_block_id,source_turn_ids,last_used_at,use_count,embedding,confidence,salience,visibility,source,created_at)
+       VALUES ('mem_private','global_user','researcher','fact','private-note','The private note.',NULL,0.5,datetime('now'),datetime('now'),'fact',datetime('now'),NULL,NULL,NULL,NULL,NULL,0,NULL,1.0,0.5,'private','user',datetime('now'))`,
+    );
+
+    client!.send({ type: "memory.list", scope: "global_user" });
+    const listed = await client!.next("memory.list.ok");
+    const texts = listed.memories.map((memory) => memory.text);
+    expect(texts).toContain("The shared note.");
+    expect(texts).not.toContain("The private note.");
+  });
+
   test("bind.direct answers with the agent's conversation and channel", async () => {
     await startTestServer();
     client!.send({ type: "bind.direct", agentID: "researcher" });

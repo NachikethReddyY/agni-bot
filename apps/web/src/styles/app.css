@@ -912,6 +912,26 @@ button:disabled {
   text-decoration-color: currentColor;
 }
 
+/* The memory view: what the agent holds, and where it came from. */
+.memory-row {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.memory-text {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.memory-meta {
+  display: flex;
+  gap: 5px;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
 /* The activity strip: one quiet line under the answer. */
 .activity-strip {
   margin-top: 6px;

@@ -147,6 +147,8 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleJobDelete(deps, session, frame);
     case "task.list":
       return handleTaskList(deps, session, frame);
+    case "memory.list":
+      return handleMemoryList(deps, session, frame);
     case "task.update":
       return handleTaskUpdate(deps, session, frame);
     case "task.answer":
@@ -589,6 +591,40 @@ function handleTaskList(deps: DispatchDeps, session: Session, frame: Extract<Cli
   if (!requireAuth(deps,session)) return;
   const status = frame.status ?? "open";
   deps.reply({ type:"task.list.ok", tasks:listTasks(deps.db,{status,limit:frame.limit,includeSnoozed:status==="open"}).map(taskSnapshot) });
+}
+
+/**
+ * The memory view (PR 8): what the agent can remember.
+ *
+ * The list goes through the same caller-filter the retrieval uses, so the
+ * view shows exactly what retrieval could use — a private fact is not in
+ * here for another agent, and a scoped fact is not in here at all.
+ */
+function handleMemoryList(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame,{type:"memory.list"}>): void {
+  if (!requireAuth(deps, session)) return;
+  const scope = frame.scope ?? "global_user";
+  const agentID = scope === "agent" ? session.agentID : null;
+  const rows = listAgentMemories(deps.db, {
+    scope,
+    agentID,
+    callerAgentID: session.agentID,
+    limit: frame.limit ?? 100,
+  });
+  deps.reply({
+    type: "memory.list.ok",
+    memories: rows.map((row) => ({
+      id: row.id,
+      text: row.content,
+      scope: row.scope,
+      visibility: row.visibility,
+      source: row.source,
+      confidence: row.confidence,
+      salience: row.salience,
+      updatedAt: row.updated_at,
+      lastUsedAt: row.last_used_at,
+      useCount: row.use_count,
+    })),
+  });
 }
 
 function handleTaskUpdate(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame,{type:"task.update"}>): void {

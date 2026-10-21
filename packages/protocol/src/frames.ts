@@ -120,6 +120,21 @@ export type JobInfo = z.infer<typeof JobInfoSchema>;
 
 export const TaskStatusSchema = z.enum(["open", "done", "snoozed"]);
 export const DelegateStateSchema = z.enum(["none", "queued", "running", "needs_input", "done", "failed"]);
+/** One remembered thing, as the memory view shows it. */
+export const MemoryItemSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  scope: z.string(),
+  visibility: z.string(),
+  source: z.string(),
+  confidence: z.number(),
+  salience: z.number(),
+  updatedAt: z.string(),
+  lastUsedAt: z.string().nullable(),
+  useCount: z.number(),
+});
+export type MemoryItem = z.infer<typeof MemoryItemSchema>;
+
 export const TaskInfoSchema = z.object({
   id: z.string().min(1), title: z.string(), dueAt: z.string().nullable(),
   priority: z.enum(["low", "normal", "high"]), status: TaskStatusSchema,
@@ -286,6 +301,12 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
   /** Delete a task unless it is currently running. */
   z.object({ type: z.literal("job.delete"), jobID: z.string().min(1) }),
   z.object({ type: z.literal("task.list"), status: z.enum(["open", "done", "snoozed", "all"]).optional(), limit: z.number().int().positive().max(200).optional() }),
+  /**
+   * What the agent can remember. The list is filtered by the same
+   * caller-filter the retrieval uses, so the view shows exactly what
+   * retrieval could use — and nothing more.
+   */
+  z.object({ type: z.literal("memory.list"), scope: z.enum(["global_user", "agent"]).optional(), limit: z.number().int().positive().max(200).optional() }),
   z.object({ type: z.literal("task.update"), taskID: z.string().min(1), action: z.enum(["done", "reopen", "snooze", "cancel"]), until: z.string().datetime().optional() }),
   /**
    * Answer a question a delegated task asked. Its own frame, not a `msg.send`:
@@ -501,6 +522,7 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("job.list.ok"), seq, jobs: z.array(JobInfoSchema) }),
   z.object({ type: z.literal("task.list.ok"), seq, tasks: z.array(TaskInfoSchema) }),
+  z.object({ type: z.literal("memory.list.ok"), seq, memories: z.array(MemoryItemSchema) }),
   z.object({ type: z.literal("task.update.ok"), seq, task: TaskInfoSchema }),
   /** A delegated task changed state; clients refresh their task list. */
   z.object({ type: z.literal("task.updated"), seq, task: TaskInfoSchema }),

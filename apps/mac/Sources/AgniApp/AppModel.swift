@@ -52,6 +52,8 @@ final class AppModel {
   private(set) var plugins: [PluginInfo] = []
   private(set) var jobs: [JobInfo] = []
   private(set) var tasks: [TaskInfo] = []
+  /// What the agent can remember, filtered the way retrieval filters it.
+  private(set) var memories: [MemoryItem] = []
   private(set) var isAddingProvider = false
   private(set) var providerAddError: String?
   private(set) var providerAddSuccess: String?
@@ -235,6 +237,12 @@ final class AppModel {
   func refreshTasks() {
     guard let connection, connectionState.isReady else { return }
     Task { try? await connection.send(.taskList(status: "all", limit: 200)) }
+  }
+
+  /// Ask what the agent can remember.
+  func refreshMemories() {
+    guard let connection, connectionState.isReady else { return }
+    Task { try? await connection.send(.memoryList(scope: "global_user", limit: 100)) }
   }
 
   func refreshPlugins() {
@@ -610,6 +618,9 @@ final class AppModel {
 
     case .taskListOK(let list):
       tasks = list.tasks
+
+    case .memoryListOK(let list):
+      memories = list.memories
 
     case .taskUpdateOK(let result):
       if let index = tasks.firstIndex(where: { $0.id == result.task.id }) { tasks[index] = result.task }

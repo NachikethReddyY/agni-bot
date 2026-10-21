@@ -27,6 +27,7 @@ import {
   type HealthReport,
   type IncomingFrame,
   type JobInfo,
+  type MemoryItem,
   type NoticeKind,
   type NoticeRow,
   type PluginInfo,
@@ -65,6 +66,8 @@ export interface AppSnapshot {
   unread: ReadonlySet<string>;
   /** What each agent is doing: idle, working, waiting, blocked. */
   agentStates: Readonly<Record<string, "idle" | "working" | "waiting" | "blocked">>;
+  /** What the agent can remember, filtered the way retrieval filters it. */
+  memories: MemoryItem[];
 
   health: HealthReport | null;
   healthError: string | null;
@@ -143,6 +146,7 @@ export class AppModel {
   private boundChannelID: string | null = null;
   private unread = new Set<string>();
   private agentStates: Record<string, "idle" | "working" | "waiting" | "blocked"> = {};
+  private memories: MemoryItem[] = [];
 
   private health: HealthReport | null = null;
   private healthError: string | null = null;
@@ -227,6 +231,7 @@ export class AppModel {
       mentionAgents: this.mentionAgents,
       unread: new Set(this.unread),
       agentStates: { ...this.agentStates },
+      memories: this.memories,
       health: this.health,
       healthError: this.healthError,
       configuredProviders: this.configuredProviders,
@@ -558,6 +563,13 @@ export class AppModel {
     const answer = text.trim();
     if (!connection || !answer) return;
     void connection.send({ type: "task.answer", taskID, questionID, text: answer }).catch(() => undefined);
+  }
+
+  /** Ask what the agent can remember (PR 8). */
+  refreshMemories(scope: "global_user" | "agent" = "global_user"): void {
+    const connection = this.connection;
+    if (!connection) return;
+    void connection.send({ type: "memory.list", scope, limit: 100 }).catch(() => undefined);
   }
 
   /** Pin this client to an agent's conversation and its DM channel. */
@@ -1097,6 +1109,12 @@ export class AppModel {
       return;
     }
 
+    if (frame.type === "memory.list.ok") {
+      this.memories = frame.memories;
+      this.publish();
+      return;
+    }
+
     if (frame.type === "task.update.ok") {
       const index = this.tasks.findIndex((task) => task.id === frame.task.id);
       if (index === -1) this.tasks = [...this.tasks, frame.task];
@@ -1277,6 +1295,7 @@ export class AppModel {
     await this.refreshHealth();
     this.refreshJobs();
     this.refreshTasks();
+    this.refreshMemories();
     this.refreshPlugins();
   }
 
