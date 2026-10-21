@@ -35,6 +35,7 @@ import {
   listJobs,
   parseJobPayload,
   deleteJob,
+  enqueueJob,
   setJobEnabled,
   wakeJob,
   type JobRow,
@@ -56,7 +57,7 @@ import { putAgentMemory, listAgentMemories, type AgentMemoryRow } from "../store
 import { appendChannelMessage, ensureDMChannel, getChannel } from "../stores/channels";
 import { canonicalURL, saveLink, searchLinks } from "../stores/links";
 import { buildShareDocument, publishShare, shareBaseURL } from "../share/document";
-import { createTask, getTask, listTasks, setTaskStatus, snoozeTask, cancelDelegation } from "../stores/tasks";
+import { createTask, getTask, listTasks, setTaskStatus, snoozeTask, cancelDelegation, clearPendingQuestion, setDelegationJob, setDelegationState, taskInfo } from "../stores/tasks";
 import { fetchPage } from "../tools/fetch-url";
 import type { PluginService } from "../plugins/service";
 import { pluginMailResolver } from "../plugins/credentials";
@@ -147,6 +148,10 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleTaskList(deps, session, frame);
     case "task.update":
       return handleTaskUpdate(deps, session, frame);
+    case "task.answer":
+      return handleTaskAnswer(deps, session, frame);
+    case "bind.direct":
+      return void handleBindDirect(deps, session, frame);
     case "provider.add":
       return await handleProviderAdd(deps, session, frame);
     case "provider.model.set":
@@ -597,24 +602,75 @@ function handleTaskUpdate(deps: DispatchDeps, session: Session, frame: Extract<C
   } catch(error) { sendError(deps,session,"bad_task_action",error instanceof Error?error.message:String(error)); }
 }
 
+/**
+ * DEL-006: the owner answers a question a delegated task asked.
+ *
+ * Its own frame, not a `msg.send`: a task only accepts an answer while it
+ * is in `needs_input`, the answer belongs to one question, and it is
+ * accepted exactly once. The answer resumes the task in its own
+ * conversation.
+ */
+function handleTaskAnswer(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame,{type:"task.answer"}>): void {
+  if (!requireAuth(deps, session)) return;
+  const task = getTask(deps.db, frame.taskID);
+  if (!task) return sendError(deps, session, "unknown_task", `no task ${frame.taskID}`);
+  if (task.delegate_state !== "needs_input") {
+    return sendError(deps, session, "bad_task_answer", `task ${frame.taskID} is not waiting for an answer`);
+  }
+  if (task.pending_question_id !== frame.questionID) {
+    return sendError(deps, session, "bad_task_answer", "that question has already been answered");
+  }
+  const childThreadID = task.child_thread_id;
+  if (!childThreadID) return sendError(deps, session, "internal", "that task has no conversation to resume");
+  const answer = frame.text.trim();
+  if (!answer) return sendError(deps, session, "bad_task_answer", "the answer is empty");
+
+  // The answer goes into the specialist's conversation, as the owner speaking
+  // to it, and the task runs again from there.
+  appendMessage(deps.db, { threadID: childThreadID, role: "user", text: answer });
+  clearPendingQuestion(deps.db, task.id);
+  setDelegationState(deps.db, task.id, "running");
+  const job = enqueueJob(deps.db, {
+    kind: "turn",
+    payload: {
+      lane: "task",
+      agentID: task.owner_agent_id ?? undefined,
+      threadID: childThreadID,
+      text: answer,
+      notify: false,
+      delegationTaskID: task.id,
+    },
+  });
+  setDelegationJob(deps.db, task.id, job.id);
+  const updated = getTask(deps.db, task.id);
+  if (updated) deps.reply({ type: "task.answer.ok", task: taskSnapshot(updated) });
+}
+
+/**
+ * Pin this client to an agent: the server resolves that agent's
+ * conversation, its active block and its DM channel, and answers with them.
+ */
+async function handleBindDirect(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame,{type:"bind.direct"}>): Promise<void> {
+  if (!requireAuth(deps, session)) return;
+  const persona = resolvePersona(deps.db, frame.agentID);
+  if (!persona) return sendError(deps, session, "unknown_agent", `no agent ${frame.agentID}`);
+  const conversation = ensureConversation(deps.db, persona.id);
+  const result = await rolloverIfNeeded(rolloverDeps(deps), conversation);
+  const thread = getThread(deps.db, result.threadID);
+  if (!thread) return sendError(deps, session, "internal", "the agent has no active session");
+  const channelID = canonicalAgentID(persona.id) === "ea" ? "main" : `dm:${persona.id}`;
+  ensureDMChannel(deps.db, persona.id);
+  deps.reply({
+    type: "bind.direct.ok",
+    agentID: persona.id,
+    conversationID: conversation.id,
+    sessionID: thread.id,
+    channelID,
+  });
+}
+
 function taskSnapshot(task: ReturnType<typeof listTasks>[number]): TaskInfo {
-  const delegateState = (["none", "queued", "running", "needs_input", "done", "failed"] as const).includes(
-    task.delegate_state as "none",
-  )
-    ? (task.delegate_state as TaskInfo["delegateState"])
-    : "none";
-  return {
-    id: task.id, title: task.title, dueAt: task.due_at, priority: task.priority, status: task.status,
-    snoozedUntil: task.snoozed_until, createdAt: task.created_at, updatedAt: task.updated_at,
-    ownerAgentId: task.owner_agent_id,
-    origin: task.origin === "ea_delegated" ? "ea_delegated" : "user_direct",
-    delegateState,
-    jobId: task.job_id,
-    result: task.result,
-    // The owner sees every result; the flag is here so a client can tell
-    // "no result yet" from "there is a result you may not see".
-    resultRedacted: false,
-  };
+  return taskInfo(task);
 }
 
 /** Model-call deps for the conversation seam (summary generation, rollovers). */

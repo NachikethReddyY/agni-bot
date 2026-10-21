@@ -137,6 +137,8 @@ export class AppModel {
   private agents: AgentInfo[] = seedAgents();
   /** Hidden specialists are absent from the sidebar but still addressable. */
   private mentionAgents: AgentInfo[] = seedAgents();
+  /** The channel this client is bound to, when it bound itself to an agent. */
+  private boundChannelID: string | null = null;
   private unread = new Set<string>();
 
   private health: HealthReport | null = null;
@@ -543,6 +545,24 @@ export class AppModel {
       .catch(() => undefined);
   }
 
+  /**
+   * DEL-006: answer a question a delegated task asked. Its own frame, so a
+   * normal message can never resume a task by accident.
+   */
+  answerTask(taskID: string, questionID: string, text: string): void {
+    const connection = this.connection;
+    const answer = text.trim();
+    if (!connection || !answer) return;
+    void connection.send({ type: "task.answer", taskID, questionID, text: answer }).catch(() => undefined);
+  }
+
+  /** Pin this client to an agent's conversation and its DM channel. */
+  bindDirect(agentID: string): void {
+    const connection = this.connection;
+    if (!connection) return;
+    void connection.send({ type: "bind.direct", agentID }).catch(() => undefined);
+  }
+
   /** Resolve a leading `@name`/`@id` against the visible roster. */
   private resolveMention(text: string): { agent: AgentInfo; text: string } | null {
     const prefix = /^\s*@/.exec(text);
@@ -591,7 +611,7 @@ export class AppModel {
       return;
     }
     const specialistID = this.conversation.agentID === "ea" ? undefined : this.conversation.agentID;
-    const channelID = specialistID ? `dm:${specialistID}` : "main";
+    const channelID = this.boundChannelID ?? (specialistID ? `dm:${specialistID}` : "main");
     void connection
       .send({
         type: "msg.send",
@@ -1200,6 +1220,15 @@ export class AppModel {
           break;
         case "agentsChanged":
           if (JSON.stringify(effect.agents) !== JSON.stringify(this.agents)) this.agents = effect.agents;
+          break;
+        case "taskChanged":
+          this.tasks = this.tasks.map((task) => (task.id === effect.task.id ? effect.task : task));
+          break;
+        case "bound":
+          // The server resolved the agent's conversation and channel; the
+          // client follows it from here.
+          this.conversation.bind(effect.conversationID, effect.agentID, effect.sessionID || null);
+          this.boundChannelID = effect.channelID;
           break;
         case "presence":
           break;

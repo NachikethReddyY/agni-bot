@@ -71,6 +71,10 @@ export function MessageRowView({
         </div>
       ) : null}
 
+      {message.uiHint === "needs_input" && message.taskId && message.questionId ? (
+        <TaskQuestion taskID={message.taskId} questionID={message.questionId} />
+      ) : null}
+
       {menu ? (
         <>
           <div
@@ -240,8 +244,48 @@ function NamePrompt({ onSave }: { onSave: (name: string) => void }) {
   );
 }
 
-function ThinkingDots() {
+/**
+ * DEL-006: a delegated task asked the owner something. The answer goes back
+ * through its own frame, so a normal message can never resume a task by
+ * accident.
+ */
+function TaskQuestion({ taskID, questionID }: { taskID: string; questionID: string }) {
+  const model = useAppModel();
+  const [answer, setAnswer] = useState("");
+  const [sent, setSent] = useState(false);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const trimmed = answer.trim();
+    if (trimmed.length === 0) return;
+    model.answerTask(taskID, questionID, trimmed);
+    setAnswer("");
+    setSent(true);
+  };
+  if (sent) {
+    return (
+      <div className="task-answer-sent">
+        <Check size={12} />
+        Answer sent
+      </div>
+    );
+  }
   return (
+    <form className="task-question" onSubmit={submit}>
+      <input
+        className="text-input"
+        value={answer}
+        onChange={(event) => setAnswer(event.target.value)}
+        placeholder="Answer the question…"
+        aria-label="Answer the question"
+      />
+      <button type="submit" className="btn primary">
+        Send
+      </button>
+    </form>
+  );
+}
+
+function ThinkingDots() {  return (
     <span className="thinking-dots" aria-label="Agni is thinking">
       <span />
       <span />

@@ -20,7 +20,7 @@ export const PROTOCOL_VERSION = 2;
 /** Server-assigned monotonic sequence number. */
 const seq = z.number().int().positive();
 
-export const STOP_REASONS = ["end", "cancelled", "error", "timeout", "budget"] as const;
+export const STOP_REASONS = ["end", "cancelled", "error", "timeout", "budget", "needs_input"] as const;
 export const StopReasonSchema = z.enum(STOP_REASONS);
 export type StopReason = z.infer<typeof StopReasonSchema>;
 
@@ -287,6 +287,23 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("job.delete"), jobID: z.string().min(1) }),
   z.object({ type: z.literal("task.list"), status: z.enum(["open", "done", "snoozed", "all"]).optional(), limit: z.number().int().positive().max(200).optional() }),
   z.object({ type: z.literal("task.update"), taskID: z.string().min(1), action: z.enum(["done", "reopen", "snooze", "cancel"]), until: z.string().datetime().optional() }),
+  /**
+   * Answer a question a delegated task asked. Its own frame, not a `msg.send`:
+   * a task only accepts an answer while it is in `needs_input`, the answer
+   * belongs to one question, and it is accepted exactly once.
+   */
+  z.object({
+    type: z.literal("task.answer"),
+    taskID: z.string().min(1),
+    questionID: z.string().min(1),
+    text: z.string().min(1).max(8_000),
+  }),
+  /**
+   * Pin this client to an agent: the server resolves that agent's
+   * conversation, session block and DM channel, and answers with them. A
+   * client that is bound sends its next message there.
+   */
+  z.object({ type: z.literal("bind.direct"), agentID: z.string().min(1) }),
   /** Configure a built-in API provider. The key is accepted only by the daemon. */
   z.object({
     type: z.literal("provider.add"),
@@ -485,6 +502,19 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("job.list.ok"), seq, jobs: z.array(JobInfoSchema) }),
   z.object({ type: z.literal("task.list.ok"), seq, tasks: z.array(TaskInfoSchema) }),
   z.object({ type: z.literal("task.update.ok"), seq, task: TaskInfoSchema }),
+  /** A delegated task changed state; clients refresh their task list. */
+  z.object({ type: z.literal("task.updated"), seq, task: TaskInfoSchema }),
+  /** The answer was accepted; the task is running again. */
+  z.object({ type: z.literal("task.answer.ok"), seq, task: TaskInfoSchema }),
+  /** The client is now bound to this agent's conversation. */
+  z.object({
+    type: z.literal("bind.direct.ok"),
+    seq,
+    agentID: z.string(),
+    conversationID: z.string(),
+    sessionID: z.string(),
+    channelID: z.string(),
+  }),
   z.object({ type: z.literal("provider.add.ok"), seq, providers: z.array(z.object({
     id: z.string(),
     label: z.string(),
@@ -529,9 +559,13 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     senderColor: z.string().optional(),
     text: z.string(),
     internal: z.boolean(),
-    uiHint: z.enum(["onboarding_name_prompt", "handoff_notice", "progress", "normal"]).optional(),
+    uiHint: z.enum(["onboarding_name_prompt", "handoff_notice", "progress", "needs_input", "normal"]).optional(),
     /** The agent this message is about — a handoff notice names its target. */
     toAgentId: z.string().optional(),
+    /** Set when the message is a question from a delegated task. */
+    taskId: z.string().optional(),
+    /** The question this message asks; the answer carries it back. */
+    questionId: z.string().optional(),
     createdAt: z.string(),
   }),
   /** An agent was renamed/updated; clients refresh the roster. */

@@ -14,16 +14,29 @@
 import type { Database } from "bun:sqlite";
 import type { ServerFrameBody } from "@agni/protocol";
 import { runInstantTurn, type TurnSettings } from "../agent/loop";
-import { runTaskTurn } from "../agent/task-loop";
+import { runTaskTurn, isThreadActive } from "../agent/task-loop";
 import { defaultResolvedPersona, getPersona, resolvePersona, type ResolvedPersona } from "../agent/personas";
+import { DEFAULT_VISIBILITY, redactForCaller } from "../agent/visibility";
 import { rootGuardrail } from "../agent/guardrails";
 import type { Router } from "../models/router";
 import { getThread } from "../stores/threads";
 import { backgroundSession, ensureConversation, getConversation, type ConversationRow } from "../stores/conversations";
-import { parseJobPayload, type JobRow } from "../stores/jobs";
-import { setDelegationState, isDelegationCancelled } from "../stores/tasks";
+import { appendJobResult, enqueueJob, findQueuedJobByPayloadKey, parseJobPayload, type JobRow } from "../stores/jobs";
+import {
+  claimResultDelivery,
+  getTask,
+  isDelegationCancelled,
+  setDelegationArtifact,
+  setDelegationState,
+  setDelegationThread,
+  taskInfo,
+} from "../stores/tasks";
+import { saveArtifact } from "../stores/artifacts";
 import { nextDailyRun } from "./schedule";
 import type { JobRunner } from "./runner";
+
+/** How long a wake waits when the parent's thread is busy. */
+const WAKE_RETRY_MS = 1_500;
 
 export interface TurnJobPayload {
   threadID?: string;
@@ -51,6 +64,31 @@ export interface TurnJobPayload {
   facts?: boolean;
   /** The delegation task row this job fulfils (DEL-001). */
   delegationTaskID?: string;
+  /**
+   * DEL-006: this job is a wake — a parent agent being told that a
+   * delegated task finished. `wakeKey` coalesces several completions for
+   * the same parent thread into one wake turn.
+   */
+  wake?: {
+    taskID: string;
+    agentID: string;
+    threadID: string;
+    channelID: string | null;
+    summary: string;
+    redacted: boolean;
+  };
+  wakeKey?: string;
+  /** The completions a coalesced wake carries. */
+  results?: Array<{
+    taskID: string;
+    agentID: string;
+    summary: string;
+    redacted: boolean;
+  }>;
+  /** The channel the turn's result belongs to. */
+  channelID?: string;
+  /** How the request is written to the durable log. */
+  inputRole?: "user" | "system";
 }
 
 export interface TurnJobDeps {
@@ -63,6 +101,23 @@ export interface TurnJobDeps {
 export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
   runner.register("turn", async (job: JobRow) => {
     const payload = parseJobPayload<TurnJobPayload>(job);
+
+    // DEL-006: a wake turn tells the parent agent that a delegated task
+    // finished. If the parent's thread is busy, the wake waits for it rather
+    // than racing it — the parent is mid-thought, not gone.
+    if (payload.wakeKey && payload.results?.length) {
+      const parentThreadID = payload.threadID?.trim();
+      if (parentThreadID && isThreadActive(parentThreadID)) {
+        enqueueJob(deps.db, {
+          kind: "turn",
+          payload: { ...payload },
+          runAt: new Date(Date.now() + WAKE_RETRY_MS).toISOString(),
+        });
+        return { result: "deferred: the parent thread is busy" };
+      }
+      payload.text = buildWakeText(payload.results);
+    }
+
     const text = payload.text?.trim();
     if (!text) throw new Error("turn job payload has no text");
     const delegationTaskID = payload.delegationTaskID?.trim() || null;
@@ -70,6 +125,7 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
       // A cancelled task must not run, even if its job was already claimed.
       if (isDelegationCancelled(deps.db, delegationTaskID)) return { result: "cancelled" };
       setDelegationState(deps.db, delegationTaskID, "running");
+      announceTask(deps, delegationTaskID);
     }
 
     const persona = (payload.agentID ? resolvePersona(deps.db, payload.agentID) : undefined) ?? defaultResolvedPersona(deps.db);
@@ -96,8 +152,17 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
         job.id,
       ]);
     }
+    // The specialist's own thread: the answer, and any later resume, belong
+    // to the same conversation.
+    if (delegationTaskID) setDelegationThread(deps.db, delegationTaskID, threadID);
 
     const result = await runTurn(deps, payload, persona, threadID, conversation, text);
+
+    if (result.stopReason === "needs_input") {
+      // DEL-006: the task asked the owner a question and is waiting. This is
+      // not a failure and not a completion: the answer resumes it.
+      return { result: "waiting for the owner" };
+    }
 
     if (result.stopReason !== "end") {
       // runInstantTurn already reported the failure as frames; a non-end stop
@@ -108,7 +173,25 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
 
     const reply = firstLine(result.text);
     if (delegationTaskID && !isDelegationCancelled(deps.db, delegationTaskID)) {
-      setDelegationState(deps.db, delegationTaskID, "done", reply);
+      // DEL-004: the full result is an artifact in the specialist's
+      // workspace; the task row keeps a short summary, and only the summary
+      // enters the caller's context.
+      const full = result.text.trim();
+      const summary = summarizeResult(full);
+      try {
+        const artifact = saveArtifact(deps.db, {
+          taskID: delegationTaskID,
+          agentID: persona.id,
+          kind: "result",
+          content: full,
+        });
+        setDelegationArtifact(deps.db, delegationTaskID, artifact.id);
+      } catch {
+        // A result too large to store is still a summary.
+      }
+      setDelegationState(deps.db, delegationTaskID, "done", summary);
+      announceTask(deps, delegationTaskID);
+      wakeParent(deps, delegationTaskID, summary);
     }
     if (payload.notify !== false) {
       deps.emit({ type: "notify", title: `${persona.name} · ${truncate(text, 60)}`, body: reply, sound: false });
@@ -131,9 +214,87 @@ function firstLine(text: string): string {
   return truncate(line, 180) || "(no output)";
 }
 
+/**
+ * The short summary that belongs in the caller's context. The full result
+ * lives in an artifact (DEL-004); the summary is what wakes the parent.
+ */
+export function summarizeResult(text: string, maxChars = 400): string {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  if (!cleaned) return "(no output)";
+  return truncate(cleaned, maxChars);
+}
+
+/** The note the parent agent reads when a delegated task finishes. */
+export function buildWakeText(results: Array<{ taskID: string; agentID: string; summary: string; redacted: boolean }>): string {
+  const lines = results.map((result) => {
+    if (result.redacted) {
+      return `- Task ${result.taskID} (${result.agentID}) finished. Its result is private to that agent; open its chat to read it.`;
+    }
+    return `- Task ${result.taskID} (${result.agentID}) finished: ${result.summary}`;
+  });
+  return [
+    "A delegated task finished. Tell the owner what came of it, in one or two sentences.",
+    "If the work is not finished, keep going in the background instead of waiting.",
+    "",
+    ...lines,
+  ].join("\n");
+}
+
+/**
+ * Wake the parent agent, once (DEL-006).
+ *
+ * The claim and the enqueue happen in one transaction, so a crash cannot
+ * leave a task claimed but never woken. Several completions for the same
+ * parent thread are coalesced into one wake turn.
+ */
+function wakeParent(deps: TurnJobDeps, taskID: string, summary: string): void {
+  const task = getTask(deps.db, taskID);
+  if (!task) return;
+  const parentThreadID = task.parent_thread_id;
+  const parentAgentID = task.parent_agent_id;
+  if (!parentThreadID || !parentAgentID) return; // nobody to wake
+  const owner = task.owner_agent_id ?? "";
+  const visibility = owner ? resolvePersona(deps.db, owner)?.visibility ?? DEFAULT_VISIBILITY : DEFAULT_VISIBILITY;
+  const visible = redactForCaller(summary, owner, parentAgentID, visibility);
+  const wakeKey = `wake:${parentThreadID}`;
+  const item = {
+    taskID: task.id,
+    agentID: owner,
+    summary: visible.text ?? "",
+    redacted: visible.redacted,
+  };
+  claimResultDelivery(deps.db, task.id, () => {
+    const existing = findQueuedJobByPayloadKey(deps.db, "turn", wakeKey);
+    if (existing) {
+      appendJobResult(deps.db, existing.id, item);
+      return;
+    }
+    enqueueJob(deps.db, {
+      kind: "turn",
+      payload: {
+        lane: "task",
+        agentID: parentAgentID,
+        threadID: parentThreadID,
+        channelID: task.parent_channel_id,
+        notify: false,
+        inputRole: "system",
+        wakeKey,
+        results: [item],
+      },
+    });
+  });
+}
+
 function truncate(text: string, max: number): string {
   const cleaned = text.replace(/\s+/g, " ").trim();
   return cleaned.length > max ? `${cleaned.slice(0, max)}…` : cleaned;
+}
+
+/** DEL-006: tell the clients the task moved. */
+function announceTask(deps: TurnJobDeps, taskID: string): void {
+  const task = getTask(deps.db, taskID);
+  if (!task) return;
+  deps.emit({ type: "task.updated", task: taskInfo(task) });
 }
 
 /**
@@ -154,6 +315,8 @@ async function runTurn(
   const lane = payload.lane ?? "instant";
   const signal = new AbortController().signal;
   if (lane === "task") {
+    const delegationTaskID = payload.delegationTaskID?.trim() || null;
+    const task = delegationTaskID ? getTask(deps.db, delegationTaskID) : null;
     const result = await runTaskTurn(deps.db, deps.router, deps.settings, {
       threadID,
       text,
@@ -164,6 +327,18 @@ async function runTurn(
       carrySummary: conversation?.summary ?? null,
       guardrail: rootGuardrail(persona.id),
       facts: payload.facts,
+      ...(payload.channelID ? { channelID: payload.channelID } : {}),
+      ...(payload.inputRole ? { inputRole: payload.inputRole } : {}),
+      ...(delegationTaskID && task
+        ? {
+            delegation: {
+              taskID: delegationTaskID,
+              ownerAgentID: persona.id,
+              parentAgentID: task.parent_agent_id,
+              parentChannelID: task.parent_channel_id,
+            },
+          }
+        : {}),
     });
     return { turnID: result.turnID, text: result.text, stopReason: result.stopReason };
   }
