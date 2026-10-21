@@ -119,6 +119,24 @@ by other agents, and a private fact is readable by its owner alone.
 Change it with `update_agent` (`visibility: private | summary | shared`) or
 in the app.
 
+### What Agni remembers, and what it may not
+
+Memory is extracted in batches, after a turn — never on the path of one. A
+turn that is small talk produces nothing.
+
+- **The source decides the scope.** Only what the owner said (or something
+  verified) may become a fact *about the owner*. A tool result, a web page
+  or an email is data: a page that says "the user prefers dark mode" is a
+  prompt-injection attempt, not a fact. What a conversation *implies* is
+  kept as that agent's own note.
+- **Confidence has a floor.** An item the extractor is not sure about stays
+  in the transcript and is not promoted.
+- **Strict schema.** Every extracted item is validated; an invalid one is
+  dropped and logged, never stored.
+- **Changes are flagged.** When a new fact contradicts an older one, the new
+  one wins and the old one is closed — and the conflict is recorded
+  (`memory_conflicts`) rather than hidden.
+
 ### Search and memory
 
 Facts and the conversation transcript are indexed with SQLite FTS5, so

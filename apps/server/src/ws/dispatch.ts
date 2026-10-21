@@ -51,6 +51,7 @@ import {
 } from "../stores/conversations";
 import { rolloverIfNeeded, rotate, rotateById } from "../agent/rollover";
 import { bypassesBatch, classifyTurn } from "../agent/gate";
+import { scheduleTagger, turnsSinceTag } from "../jobs/tagger";
 import type { TurnJobPayload } from "../jobs/turn";
 import { newID, nowISO } from "../util/ids";
 import { putAgentMemory, listAgentMemories, type AgentMemoryRow } from "../stores/agent-memories";
@@ -457,6 +458,13 @@ async function runUserMessage(
     })
     .finally(() => {
       session.aborts.delete(turnID);
+      // TAG-001: memory is extracted in batches, after the turn — never on
+      // the path of one.
+      scheduleTagger(deps.db, {
+        ...(channel ? { channelID } : {}),
+        agentID: persona.id,
+        turns: turnsSinceTag(),
+      });
     });
 }
 

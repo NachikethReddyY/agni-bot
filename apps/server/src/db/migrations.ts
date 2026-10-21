@@ -685,4 +685,30 @@ export const MIGRATIONS: Migration[] = [
       INSERT INTO channel_messages_fts(channel_messages_fts) VALUES ('rebuild');
     `,
   },
+  {
+    id: 25,
+    name: "tagger_batches_and_conflicts",
+    sql: `
+      -- TAG-001: the tagger works in batches. A message that has been swept
+      -- for memory is marked, so the next batch starts where this one
+      -- stopped instead of reading the whole channel again.
+      ALTER TABLE channel_messages ADD COLUMN tagged_at TEXT;
+      CREATE INDEX idx_channel_messages_untagged ON channel_messages(tagged_at, created_at);
+
+      -- MEM-002: a changed fact closes the old one — and the conflict is
+      -- recorded, because closing it silently would hide that the two
+      -- statements disagreed.
+      CREATE TABLE memory_conflicts (
+        id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL,
+        previous_id TEXT NOT NULL,
+        previous_content TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        resolved INTEGER NOT NULL DEFAULT 0,
+        resolved_at TEXT
+      );
+      CREATE INDEX idx_memory_conflicts_open ON memory_conflicts(resolved, created_at);
+    `,
+  },
 ];
