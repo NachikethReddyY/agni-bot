@@ -767,4 +767,29 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_summaries_day ON summaries(conversation_id, day, level);
     `,
   },
+  {
+    id: 29,
+    name: "message_attachments",
+    sql: `
+      CREATE TABLE attachments (
+        id TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL REFERENCES devices(id),
+        name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        path TEXT NOT NULL,
+        extracted_text TEXT,
+        created_at TEXT NOT NULL
+      );
+      -- Message IDs belong to either messages or channel_messages.
+      CREATE TABLE message_attachments (
+        message_id TEXT NOT NULL,
+        attachment_id TEXT NOT NULL REFERENCES attachments(id),
+        position INTEGER NOT NULL,
+        PRIMARY KEY (message_id, attachment_id)
+      );
+      CREATE INDEX idx_message_attachments_file ON message_attachments(attachment_id);
+    `,
+  },
 ];

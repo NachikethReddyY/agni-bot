@@ -11,7 +11,8 @@
  * into a log. The `say` tool is for the milestones that deserve words.
  */
 import { useState, type FormEvent } from "react";
-import ReactMarkdown from "react-markdown";
+import { MarkdownText } from "./MarkdownText";
+import { AttachmentCard } from "./AttachmentCard";
 import { Check, Copy, TextCursor } from "lucide-react";
 import { isStreaming, stopExplanation, type AgentInfo, type ChatMessage } from "@agni/client";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
@@ -119,7 +120,8 @@ export function MessageRowView({
 function UserBubble({ message }: { message: ChatMessage }) {
   return (
     <div className="user-bubble">
-      <div className="user-bubble-text">{message.text}</div>
+      <div className="user-bubble-text"><MarkdownText text={message.text} /></div>
+      {message.attachments?.map((attachment) => <AttachmentCard key={attachment.id} attachment={attachment} />)}
       {message.state.kind === "failed" ? (
         <div className="user-bubble-error">{message.state.reason}</div>
       ) : null}
@@ -150,7 +152,7 @@ function AssistantProse({
           Thinking
         </div>
       ) : message.text.length > 0 ? (
-        <ProseText text={message.text} />
+        <MarkdownText text={message.text} />
       ) : message.state.kind === "failed" ? (
         <div className="prose">{message.state.reason}</div>
       ) : (
@@ -195,26 +197,6 @@ function ActivityStrip({ message }: { message: ChatMessage }) {
           ))}
         </ul>
       ) : null}
-    </div>
-  );
-}
-
-/** Prose with inline markdown honoured while tokens stream into place. */
-function ProseText({ text }: { text: string }) {
-  return (
-    <div className="prose">
-      <ReactMarkdown
-        skipHtml
-        components={{
-          a: ({ children, href }) => (
-            <a href={href} target="_blank" rel="noreferrer noopener">
-              {children}
-            </a>
-          ),
-        }}
-      >
-        {text}
-      </ReactMarkdown>
     </div>
   );
 }

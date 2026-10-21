@@ -1,3 +1,5 @@
+import { validateAttachments, linkAttachments, messageAttachments } from "../attachments/store";
+import type { AttachmentInfo } from "@agni/protocol";
 /**
  * Client frame dispatch. One session per WebSocket connection:
  * connect → `hello` (token) → `hello.ok` + `agents.update` → frames.
@@ -259,7 +261,7 @@ function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<Clie
   // GATE-003: explicit remember/task commands are processed immediately — the
   // debounce exists to merge a burst of chat, not to delay a direct command.
   const gate = classifyTurn(parts.join("\n\n"));
-  if (bypassesBatch(gate.category)) {
+  if (frame.files?.length || bypassesBatch(gate.category)) {
     void runUserMessage(deps, session, frame, parts.join("\n\n"));
     return;
   }
@@ -329,6 +331,16 @@ async function runUserMessage(
   text: string,
 ): Promise<void> {
 
+  let attachments: AttachmentInfo[] = [];
+  try {
+    attachments = validateAttachments(deps.db, frame.files ?? [], session.device!.id);
+    if (attachments.some((file) => file.kind === "image") && !deps.router.supportsVision()) {
+      throw new Error("No vision model configured. Set AGNI_VISION_MODELS to a configured image-capable model ID, then restart the server.");
+    }
+  } catch (error) {
+    return sendError(deps, session, "invalid_attachment", error instanceof Error ? error.message : "Cannot use attachment.");
+  }
+
   // `@friday write the email` is a message to Friday, not to whatever chat
   // is open. Routing happens before the turn starts: the text is appended to
   // that agent's DM and the executive assistant never sees it.
@@ -356,7 +368,7 @@ async function runUserMessage(
     "SELECT count(*) AS count FROM channel_messages WHERE channel_id = 'main' AND ui_hint = 'onboarding_name_prompt'",
   ).get()?.count ?? 0;
   const primary = deps.db.query<{ onboarded: number }, []>("SELECT onboarded FROM agents WHERE id = 'ea'").get();
-  if (!mention && frame.channelId === "main" && channelID === "main" && primary?.onboarded === 0 && onboardingPrompt > 0) {
+  if (!attachments.length && !mention && frame.channelId === "main" && channelID === "main" && primary?.onboarded === 0 && onboardingPrompt > 0) {
     completeAgentRename(deps, "ea", text);
     return;
   }
@@ -420,13 +432,15 @@ async function runUserMessage(
       text: routedText,
       salience: gate.salience,
     });
+    linkAttachments(deps.db, userMessage.id, attachments.map((file) => file.id));
     deps.emit({
+      attachments,
       type: "msg.new", id: userMessage.id, channelId: channelID, fromType: "user",
       fromId: userMessage.from_id, senderName: session.device?.name ?? "You", text: routedText,
       internal: false, uiHint: "normal", createdAt: userMessage.created_at,
     });
   }
-  if (isCapture(routedText) || isStoreQuery(routedText)) {
+  if (!attachments.length && (isCapture(routedText) || isStoreQuery(routedText))) {
     void captureMessage(deps, session, thread, persona.id, routedText);
     return;
   }
@@ -440,6 +454,7 @@ async function runUserMessage(
     mailAccounts: pluginMailResolver(deps.config.pluginsPath),
   };
   const turn = runTaskTurn(deps.db, deps.router, turnSettings, {
+    attachmentIDs: attachments.map((file) => file.id),
     turnID,
     threadID: thread.id,
     text: routedText,
@@ -775,11 +790,12 @@ function handleConversationHistory(
   }
   const messages: Array<{
     id: string; role: string; text: string; createdAt: string; turnID?: string; sessionID?: string;
-    senderName?: string; senderColor?: string; uiHint?: string;
+    senderName?: string; senderColor?: string; uiHint?: string; attachments?: AttachmentInfo[];
   }> = conversationTranscript(deps.db, frame.conversationID, frame.limit ?? 200).map((message) => ({
     id: message.id,
     role: message.role,
     text: message.text,
+    attachments: messageAttachments(deps.db, message.id),
     createdAt: message.created_at,
     sessionID: message.sessionID,
   }));
@@ -812,6 +828,7 @@ function handleConversationHistory(
           ? "onboarding_completed"
           : row.ui_hint ?? undefined;
       const messageData = {
+        attachments: messageAttachments(deps.db, row.id),
         id: row.id, role, text: row.text, createdAt: row.created_at, turnID: row.turn_id ?? undefined,
         senderName: role === "user"
           ? row.device_name ?? "You"
@@ -823,6 +840,7 @@ function handleConversationHistory(
       };
       const duplicateIndex = messages.findIndex((message) =>
         message.role === role && message.text === row.text
+          && JSON.stringify(message.attachments?.map((file) => file.id) ?? []) === JSON.stringify(messageData.attachments.map((file) => file.id))
           && Math.abs(Date.parse(message.createdAt) - Date.parse(row.created_at)) < 30_000,
       );
       if (duplicateIndex >= 0) messages[duplicateIndex] = { ...messages[duplicateIndex], ...messageData };
@@ -976,6 +994,7 @@ function handleThreadHistory(
     id: message.id,
     role: message.role,
     text: message.text,
+    attachments: messageAttachments(deps.db, message.id),
     createdAt: message.created_at,
     ...(message.turn_id ? { turnID: message.turn_id } : {}),
   }));

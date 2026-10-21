@@ -1,3 +1,4 @@
+import { AttachmentInfoSchema, type AttachmentInfo } from "@agni/client";
 /**
  * The app model: pairing, the connection, the open transcript, the roster, the
  * daemon's health, and every user intent the views need. Views call methods
@@ -604,18 +605,19 @@ export class AppModel {
     return null;
   }
 
-  send(text: string): void {
-    const trimmed = text.trim();
-    if (trimmed.length === 0) return;
+  send(text: string, attachments: AttachmentInfo[] = []): boolean {
+    const content = text.trim() ? text : (attachments.length ? "Please review the attached files." : "");
+    const trimmed = content.trim();
+    if (trimmed.length === 0) return false;
     // `@friday write the email` opens Friday's chat and sends there, the way
     // a messaging app treats an address. The server routes it too, but the
     // surface has to follow or the reply would stream into a chat the owner
     // is not looking at.
     const mention = this.resolveMention(trimmed);
     if (mention && mention.agent.id !== this.conversation.agentID) this.selectAgent(mention.agent);
-    const outgoing = mention ? mention.text : trimmed;
-    if (outgoing.length === 0) return;
-    const localID = this.conversation.appendLocalUserMessage(outgoing);
+    const outgoing = mention ? mention.text : content;
+    if (outgoing.length === 0) return false;
+    const localID = this.conversation.appendLocalUserMessage(outgoing, new Date(), attachments);
     this.publish();
     const connection = this.connection;
     if (!connection || !isReady(this.connectionState)) {
@@ -624,7 +626,7 @@ export class AppModel {
         notice("failure", "Not connected", "Reconnecting. Your message was kept in the list but was not sent."),
       );
       this.publish();
-      return;
+      return false;
     }
     const specialistID = this.conversation.agentID === "ea" ? undefined : this.conversation.agentID;
     const channelID = this.boundChannelID ?? (specialistID ? `dm:${specialistID}` : "main");
@@ -632,6 +634,7 @@ export class AppModel {
       .send({
         type: "msg.send",
         text: outgoing,
+        ...(attachments.length ? { files: attachments.map((file) => file.id) } : {}),
         channelId: channelID,
         ...(specialistID ? { toAgentId: specialistID } : {}),
       })
@@ -642,6 +645,47 @@ export class AppModel {
         );
         this.publish();
       });
+    return true;
+  }
+
+  private async attachmentRequest(path: string, init: RequestInit = {}): Promise<Response> {
+    const base = healthURL(this.settings);
+    if (!base || !this.token) throw new Error("Connect to the server first.");
+    const response = await fetch(new URL(path, base), {
+      ...init,
+      headers: { ...init.headers, Authorization: `Bearer ${this.token}` },
+      signal: init.signal ?? AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as { error?: string } | null;
+      throw new Error(body?.error ?? `Attachment request failed (${response.status}).`);
+    }
+    return response;
+  }
+
+  async uploadAttachment(file: File): Promise<AttachmentInfo> {
+    const body = new FormData();
+    body.append("file", file);
+    const response = await this.attachmentRequest("/attachments", { method: "POST", body });
+    const payload = await response.json() as { attachment: unknown };
+    return AttachmentInfoSchema.parse(payload.attachment);
+  }
+
+  async removeDraftAttachment(id: string): Promise<void> {
+    await this.attachmentRequest(`/attachments/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  async attachmentBlob(id: string, signal?: AbortSignal): Promise<Blob> {
+    return (await this.attachmentRequest(`/attachments/${encodeURIComponent(id)}`, { signal })).blob();
+  }
+
+  async sendAttachments(text: string, attachments: AttachmentInfo[], expectedAgentID?: string): Promise<void> {
+    await this.attachmentRequest("/attachments/validate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: attachments.map((file) => file.id) }),
+    });
+    if (expectedAgentID && this.conversation.agentID !== expectedAgentID) throw new Error("The selected agent changed. Review your draft and send it again.");
+    if (!this.send(text, attachments)) throw new Error("Not connected. Your draft has been kept; try again after reconnecting.");
   }
 
   renameAgent(name: string, agentID = "ea"): void {

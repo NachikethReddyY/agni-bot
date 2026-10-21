@@ -121,9 +121,10 @@ describe("web shell", () => {
 
     const composer = screen.getByPlaceholderText("Message Agni Bot");
     fireEvent.change(composer, { target: { value: "are you there?" } });
-    fireEvent.keyDown(composer, { key: "Enter", metaKey: true });
+    fireEvent.keyDown(composer, { key: "Enter" });
 
-    expect(screen.getByText("are you there?")).toBeInTheDocument();
+    expect(screen.getByText("are you there?", { selector: "p" })).toBeInTheDocument();
+    expect(composer).toHaveValue("are you there?");
     expect(screen.getByText("Not connected — this message was not sent.")).toBeInTheDocument();
     expect(screen.getByText("Not connected")).toBeInTheDocument();
   });

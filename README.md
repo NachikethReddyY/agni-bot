@@ -311,3 +311,22 @@ P0–P2 is the "faster than Hermes and usable daily" milestone.
   money is approval-gated before it is implemented.
 - No IDE features, ever. Repo-shaped work is delegated through ACP harnesses.
 - `bun test` and `bun run typecheck` pass before every commit.
+
+### Writing messages and attaching files (web)
+
+Enter sends; Shift+Enter adds a new line. Messages support Markdown, including
+code blocks with a copy button, tables, and checklists. Use **+ → Attach files**,
+drop files onto the composer, or paste an image. The draft keeps files when an
+upload fails so it can be retried. Attachments remain available in chat history.
+
+Supported: PNG/JPEG/WebP, UTF-8 text/source files, and PDFs with selectable text.
+Up to five files per message, 10 MB each; large text/PDF inputs have extraction
+and model-context limits. Scanned PDFs require OCR, which is not included.
+To enable image analysis, set `AGNI_VISION_MODELS` in the server's `.env` to the
+exact IDs of already-configured models that support image input. A missing
+vision model is reported before the message is sent; text/PDF uploads do not
+need vision. Provider keys continue to live only on the server.
+
+After installing this update, restart the daemon (`bun run daemon restart`)
+and Vite (`Ctrl+C`, then `pnpm web`). Database migrations apply automatically at
+server startup. The native SwiftUI app has not gained attachment controls yet.

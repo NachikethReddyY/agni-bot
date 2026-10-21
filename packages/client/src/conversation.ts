@@ -4,7 +4,7 @@
  * delivers folds in here, so the reducer is testable without a socket or a
  * window, and the views stay dumb.
  */
-import type { AgentInfo, Decision, MessageInfo, TaskInfo, Usage } from "@agni/protocol";
+import type { AttachmentInfo, AgentInfo, Decision, MessageInfo, TaskInfo, Usage } from "@agni/protocol";
 import { parseISO } from "./format.js";
 import { stopReasonExplanation, type IncomingFrame } from "./protocol";
 
@@ -24,6 +24,7 @@ export interface ToolActivity {
 }
 
 export interface ChatMessage {
+  attachments?: AttachmentInfo[];
   id: string;
   role: MessageRole;
   text: string;
@@ -207,10 +208,10 @@ export class Conversation {
   // MARK: intent from the UI
 
   /** Local echo: the bubble appears before the socket answers (S6). */
-  appendLocalUserMessage(text: string, at: Date = new Date()): string {
+  appendLocalUserMessage(text: string, at: Date = new Date(), attachments: AttachmentInfo[] = []): string {
     const id = `local_${randomID()}`;
     this.messages.push(
-      newMessage({ id, role: "user", text, createdAt: at, sessionID: this.threadID, isLocalEcho: true }),
+      newMessage({ id, role: "user", text, attachments, createdAt: at, sessionID: this.threadID, isLocalEcho: true }),
     );
     return id;
   }
@@ -307,6 +308,7 @@ export class Conversation {
           ? info.role
           : "system") as MessageRole,
         text: info.text,
+        attachments: info.attachments,
         createdAt: parseISO(info.createdAt),
         turnID: info.turnID ?? null,
         sessionID: info.sessionID ?? null,
@@ -393,11 +395,12 @@ export class Conversation {
           frame.fromType === "user" ? "user" : frame.fromType === "system" ? "system" : "assistant";
         if (this.messages.some((message) => message.id === frame.id)) return [];
         if (role === "user") {
-          const echo = this.messages.find((message) => message.isLocalEcho && message.text === frame.text);
+          const echo = this.messages.find((message) => message.isLocalEcho && message.text === frame.text && JSON.stringify(message.attachments?.map((file) => file.id) ?? []) === JSON.stringify(frame.attachments?.map((file) => file.id) ?? []));
           if (echo) {
             echo.id = frame.id;
             echo.isLocalEcho = false;
             echo.senderName = frame.senderName;
+            echo.attachments = frame.attachments;
             return [];
           }
         }
@@ -419,6 +422,7 @@ export class Conversation {
             id: frame.id,
             role,
             text: frame.text,
+            attachments: frame.attachments,
             createdAt: parseISO(frame.createdAt),
             agentID: role === "assistant" ? frame.fromId : null,
             senderName: frame.senderName,
