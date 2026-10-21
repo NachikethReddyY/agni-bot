@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@agni/protocol": "workspace:*",
+    "image-size": "^2.0.4",
+    "pdfjs-dist": "^6.4.299",
     "zod": "^4"
   },
   "devDependencies": {

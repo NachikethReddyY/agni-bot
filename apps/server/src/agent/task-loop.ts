@@ -1,3 +1,4 @@
+import { linkAttachments, messageAttachments, withAttachmentContent } from "../attachments/store";
 /** Bounded Plan → Act → Observe runner for the task lane. The instant lane
  * remains a separate, one-call path in agent/loop.ts. */
 import type { Database } from "bun:sqlite";
@@ -49,6 +50,7 @@ export interface TaskTurnSettings {
   minRecallScore?: number;
 }
 export interface TaskTurnRun {
+  attachmentIDs?: string[];
   turnID?: string;
   threadID: string;
   text: string;
@@ -254,11 +256,12 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     createTurn(db, { id: turnID, threadID, agentID: persona.id });
     messages = recentMessages(db, threadID, MAX_HISTORY_MESSAGES)
       .filter((message) => message.role === "user" || message.role === "assistant")
-      .map((message) => ({ role: message.role as "user" | "assistant", content: message.text }));
+      .map((message) => ({ role: message.role as "user" | "assistant", content: message.text, attachmentIDs: messageAttachments(db, message.id).map((file) => file.id) }));
   }
-  appendMessage(db, { threadID, turnID, role: run.inputRole ?? "user", text: run.inputText ?? run.text });
+  const inputMessage = appendMessage(db, { threadID, turnID, role: run.inputRole ?? "user", text: run.inputText ?? run.text });
+  if (run.attachmentIDs?.length) linkAttachments(db, inputMessage.id, run.attachmentIDs);
   titleThreadFromFirstMessage(db, threadID, run.text);
-  messages.push({ role: "user", content: run.text });
+  messages.push({ role: "user", content: run.text, attachmentIDs: run.attachmentIDs });
   run.emit({
     type: "turn.start",
     turnID,
@@ -449,7 +452,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
       ];
       activeStepText = "";
       const result = await router.route({
-        messages: requestMessages,
+        messages: await withAttachmentContent(db, requestMessages),
         signal: controller.signal,
         firstTokenTimeoutMs: settings.firstTokenTimeoutMs,
         tools,

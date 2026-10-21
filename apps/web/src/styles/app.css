@@ -2199,3 +2199,50 @@ button:disabled {
     width: 180px;
   }
 }
+
+/* Multiline composer, Markdown, and authenticated file attachments. */
+.composer { border-radius: 22px; align-items: flex-end; }
+.composer-input { max-height: 220px; overflow-y: auto; white-space: pre-wrap; }
+.composer-plus, .composer-send, .composer-stop { flex-shrink: 0; margin-bottom: 5px; }
+.composer-hint { padding: 6px 14px 0; color: var(--ink-tertiary); font-size: 11px; }
+.composer-error, .attachment-error { color: #fca5a5; font-size: 12px; padding: 8px; overflow-wrap: anywhere; }
+.draft-attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 0 10px; }
+.draft-attachment { display: flex; align-items: center; gap: 8px; max-width: 260px; padding: 8px; border: 1px solid var(--hairline); border-radius: 12px; background: var(--surface-raised); }
+.draft-attachment img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; }
+.draft-attachment span { min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
+.draft-attachment small { display: block; color: var(--ink-tertiary); }
+.draft-attachment button, .attachment-download { background: transparent; color: inherit; border: 0; cursor: pointer; }
+.attachment-card { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px; margin-top: 10px; border: 1px solid var(--hairline); border-radius: 12px; }
+.attachment-image { width: 100%; max-height: 280px; object-fit: contain; border-radius: 8px; }
+.attachment-label { display: flex; flex: 1; min-width: 0; flex-direction: column; font-size: 12px; overflow-wrap: anywhere; }
+.attachment-label span { color: var(--ink-tertiary); }
+.user-bubble-text { white-space: normal; }
+.user-bubble .prose { color: inherit; }
+.prose { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+.prose h1, .prose h2, .prose h3 { line-height: 1.35; margin: 1em 0 .5em; }
+.prose h1 { font-size: 1.4em; }
+.prose h2 { font-size: 1.2em; }
+.prose h3 { font-size: 1.05em; }
+.prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
+.prose blockquote { border-left: 3px solid var(--ink-tertiary); padding-left: 12px; margin-left: 0; color: var(--ink-secondary); }
+.prose ul, .prose ol { padding-left: 1.5em; }
+.prose li { margin: .25em 0; }
+.prose .task-list-item { list-style: none; }
+.code-block { position: relative; margin: 12px 0; border: 1px solid var(--hairline); border-radius: 10px; overflow: hidden; background: var(--canvas); }
+.code-block pre { margin: 0; padding: 40px 12px 12px; overflow-x: auto; white-space: pre; }
+.code-copy { position: absolute; right: 8px; top: 6px; padding: 4px 8px; background: var(--surface-raised); color: var(--ink-secondary); border: 1px solid var(--hairline); border-radius: 6px; font-size: 11px; cursor: pointer; }
+.markdown-table { overflow-x: auto; max-width: 100%; margin: 12px 0; }
+.markdown-table table { border-collapse: collapse; width: 100%; font-size: .9em; }
+.markdown-table th, .markdown-table td { border: 1px solid var(--hairline); padding: 8px 10px; text-align: left; }
+.markdown-table th { background: var(--surface-raised); }
+
+.user-bubble .attachment-card { color: #18181b; border-color: rgb(0 0 0 / 15%); }
+.user-bubble .attachment-label span { color: #52525b; }
+.user-bubble .attachment-error { color: #9f1239; }
+.user-bubble .prose a { color: #1d4ed8; }
+.user-bubble .prose blockquote { color: #52525b; }
+.user-bubble .markdown-table th { background: rgb(0 0 0 / 7%); }
+.user-bubble .markdown-table th, .user-bubble .markdown-table td { border-color: rgb(0 0 0 / 18%); }
+.code-block { color: var(--ink); }
+.code-block pre code { padding: 0; background: none; border-radius: 0; }

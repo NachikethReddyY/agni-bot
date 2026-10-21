@@ -155,3 +155,32 @@ connection, not the shared stream: they consume a `seq` like every frame but
 are skipped on replay. A client never "missed" a reply addressed to someone
 else. Everything else — turns, tokens, tool strips, approvals, notifications —
 is replayable.
+
+### Attachments (additive v2 extension)
+
+`msg.send.files` carries up to five opaque uploaded attachment IDs. Files must
+have been uploaded by the sending device. Text remains required; the web app
+uses "Please review the attached files." for an attachment-only message.
+`msg.new` and history `MessageInfo` objects optionally include `attachments`:
+`{ id, name, mimeType, size, kind: "image" | "text" | "pdf" }[]`.
+Existing text-only clients remain compatible; no version bump is required.
+
+File bytes use HTTP with `Authorization: Bearer <device-token>` (never a token
+in a URL). `POST /attachments` accepts one multipart `file` and returns
+`{attachment}`; `POST /attachments/validate` accepts `{ids}` and checks ownership
+and vision availability before sending. `GET /attachments/:id` downloads a file;
+`DELETE /attachments/:id` removes an unlinked draft owned by that device.
+`GET /attachments` reports limits and whether a vision model is configured.
+Paired devices share sent attachments; unlinked uploads remain private to their
+uploading device. Unlinked files expire after 24 hours and are pruned on upload.
+
+Limits: five files per message, 10 MB each, 500 MB total stored attachments;
+images at most 8192 pixels on either side and 20 megapixels; UTF-8 text and PDF
+extraction at most 60,000 characters per file; PDFs at most 100 pages with a
+15-second extraction timeout. Model requests include at most five recent files
+and 24,000 characters of extracted text, with explicit truncation notices.
+Scanned PDFs, Office documents, audio, and video are not supported.
+Image-capable configured model IDs are explicitly listed in `AGNI_VISION_MODELS`.
+Provider failover for images only uses that allowlist. File contents are treated
+as untrusted user data. Binary image content is expanded at the provider boundary,
+not stored as base64 in session logs.

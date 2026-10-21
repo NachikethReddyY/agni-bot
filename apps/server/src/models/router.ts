@@ -124,6 +124,10 @@ export class Router {
     return [...healthy, ...cooling];
   }
 
+  supportsVision(): boolean {
+    return this.providers.some((provider) => provider.supportsVision === true);
+  }
+
   async route(options: RouteOptions): Promise<RouteResult> {
     if (this.activeRoutes >= this.maxConcurrentRoutes) throw new RouterBusyError(this.maxConcurrentRoutes);
     this.activeRoutes += 1;
@@ -135,7 +139,11 @@ export class Router {
   }
 
   private async routeWithSlot(options: RouteOptions): Promise<RouteResult> {
-    const candidates = this.candidates();
+    const needsVision = options.messages.some((message) => message.images?.length);
+    const candidates = this.candidates().filter((provider) => !needsVision || provider.supportsVision === true);
+    if (needsVision && candidates.length === 0) {
+      throw new RouterError("no_provider", "No vision model configured. Set AGNI_VISION_MODELS to a configured model ID that supports images.");
+    }
     if (candidates.length === 0) {
       throw new RouterError(
         "no_provider",

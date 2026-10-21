@@ -8,6 +8,9 @@ import { log } from "../log";
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  /** Durable IDs persisted in sessions; expanded just before the provider call. */
+  attachmentIDs?: string[];
+  images?: string[];
   /** Tool calls the assistant made (only on `assistant` messages). */
   toolCalls?: ToolCall[];
   /** Required on tool replies so OpenAI-compatible APIs can pair the result. */
@@ -125,7 +128,9 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
         model: request.model,
         messages: request.messages.map((message) => ({
           role: message.role,
-          content: message.content,
+          content: message.images?.length
+            ? [{ type: "text", text: message.content }, ...message.images.map((url) => ({ type: "image_url", image_url: { url } }))]
+            : message.content,
           ...(message.toolCalls ? { tool_calls: message.toolCalls } : {}),
           ...(message.toolCallID ? { tool_call_id: message.toolCallID } : {}),
         })),

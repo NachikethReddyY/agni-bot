@@ -13,6 +13,7 @@ import { resolve } from "node:path";
  */
 
 export interface ProviderConfig {
+  supportsVision?: boolean;
   id: string;
   label: string;
   baseUrl: string;
@@ -241,5 +242,6 @@ export function loadProviders(env: Record<string, string | undefined>): Provider
       model,
     });
   }
-  return providers;
+  const visionModels = new Set((env.AGNI_VISION_MODELS ?? "").split(",").map((model) => model.trim()).filter(Boolean));
+  return providers.map((provider) => ({ ...provider, supportsVision: visionModels.has(provider.model) }));
 }

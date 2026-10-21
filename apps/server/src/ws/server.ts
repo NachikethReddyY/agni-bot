@@ -1,3 +1,4 @@
+import { attachmentRequest } from "../attachments/http";
 /**
  * HTTP + WebSocket entry. Binds to AGNI_HOST only (loopback in dev, the
  * Tailscale interface on bb-1) — nothing listens on the public internet.
@@ -83,8 +84,12 @@ export function startServer(config: Config, db: Database, router: Router, starte
   const server = Bun.serve<Session>({
     hostname: config.host,
     port: config.port,
+    maxRequestBodySize: 10 * 1024 * 1024 + 65_536,
     async fetch(request, srv) {
       const url = new URL(request.url);
+      if (url.pathname === "/attachments" || url.pathname.startsWith("/attachments/")) {
+        return attachmentRequest(request, db, config.dbPath, router);
+      }
       if (url.pathname === "/health") {
         if (request.method === "OPTIONS") {
           return new Response(null, { status: 204, headers: CORS_HEADERS });

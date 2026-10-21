@@ -70,7 +70,20 @@ export const ThreadInfoSchema = z.object({
 export type ThreadInfo = z.infer<typeof ThreadInfoSchema>;
 
 /** One durable message, as returned by `thread.history`. */
+/** Durable attachment metadata; file bytes travel over authenticated HTTP. */
+export const MAX_ATTACHMENTS = 5;
+export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+export const AttachmentInfoSchema = z.object({
+  id: z.string().regex(/^att_[a-zA-Z0-9_-]+$/),
+  name: z.string(),
+  mimeType: z.string(),
+  size: z.number().int().nonnegative(),
+  kind: z.enum(["image", "text", "pdf"]),
+});
+export type AttachmentInfo = z.infer<typeof AttachmentInfoSchema>;
+
 export const MessageInfoSchema = z.object({
+  attachments: z.array(AttachmentInfoSchema).max(MAX_ATTACHMENTS).optional(),
   id: z.string().min(1),
   role: z.string().min(1),
   text: z.string(),
@@ -221,7 +234,8 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
      */
     threadID: z.string().optional(),
     text: z.string().min(1),
-    files: z.array(z.string()).optional(),
+    /** Uploaded attachment IDs. Older clients may omit this field. */
+    files: z.array(z.string()).max(MAX_ATTACHMENTS).optional(),
     /**
      * v2 conversation model: send into the conversation's active session
      * block. Takes precedence over threadID.
@@ -585,6 +599,7 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
   /** A new message arrived; clients render it as a message row. */
   z.object({
     type: z.literal("msg.new"),
+    attachments: z.array(AttachmentInfoSchema).max(MAX_ATTACHMENTS).optional(),
     seq,
     id: z.string(),
     channelId: z.string(),
