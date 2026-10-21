@@ -97,6 +97,24 @@ The secret is injected via stdin and a short-lived 0600 askpass file in a 0700
 temp directory; it is removed when the command exits. Output is scrubbed of the
 exact value before it reaches the model.
 
+**On a Mac, the operating system can ask instead.** `run_privileged` takes an
+`auth` mode:
+
+- `auto` (default) — machine-level commands (`sudo …`) go to the macOS
+  authorization dialog (password or Touch ID); everything else (`ssh`, `git`)
+  goes to the one-time prompt, because those must run as the owner, not as
+  root.
+- `os` — always the macOS authorization.
+- `password` — always the one-time prompt.
+
+The command is written into a private directory (`mkdtemp`, 0700) as a 0700
+script, never into a bare temp file and never into a command line, and the
+script is deleted the moment the run ends. The authorization dialog shows the
+**command itself**, because the approval covers the whole script.
+
+The owner's password is never stored anywhere — not in the Keychain, not in a
+file. The Keychain holds the device token and nothing else.
+
 ### Agent visibility
 
 Every agent has a visibility that says what *other* agents may see of its
