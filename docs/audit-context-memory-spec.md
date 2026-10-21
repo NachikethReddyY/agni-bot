@@ -1,5 +1,17 @@
 # Audit: agni-context-memory-spec v2.0 against the Agni codebase
 
+> **SUPERSEDED — do not use this as a source of truth.**
+>
+> This audit was written against `eb56aac`, before the memory, delegation,
+> mention-routing and secure-input work landed. Several of its `MISSING` and
+> `PARTIAL` verdicts are now wrong, and its build order and effort estimates
+> no longer hold.
+>
+> - Current plan: [`docs/remaining-work.md`](remaining-work.md)
+> - Requirements: [`docs/agni-context-memory-spec.md`](agni-context-memory-spec.md)
+>
+> Kept for history and for the reasoning behind the early build order only.
+
 Read-only audit. Every status is backed by a file:line reference or a direct code
 search. `TUNABLE` numbers are treated as guesses, not facts.
 
