@@ -15,6 +15,17 @@ export function openDatabase(path: string): Database {
   return db;
 }
 
+/**
+ * Open a database without touching it. A scan (the canary scan) has to
+ * read the live database without migrating it: the schema belongs to the
+ * daemon that owns it.
+ */
+export function openDatabaseReadOnly(path: string): Database {
+  const db = new Database(path, { create: false, readonly: true });
+  db.exec("PRAGMA query_only = ON;");
+  return db;
+}
+
 /** Apply pending migrations; returns the ids that ran. */
 export function migrate(db: Database): number[] {
   db.exec(`

@@ -12,7 +12,7 @@
  *   AGNI_CANARY="CANARY-ONE,CANARY-TWO" bun run scan:canary
  *   AGNI_DB_PATH=data/agni.sqlite AGNI_LOG_PATH=data/agni.log bun run scan:canary
  */
-import { openDatabase } from "../apps/server/src/db";
+import { openDatabaseReadOnly } from "../apps/server/src/db";
 import { scanForCanaries } from "../apps/server/src/db/canary";
 
 function argCanaries(): string[] {
@@ -33,7 +33,8 @@ if (canaries.length === 0) {
 const dbPath = process.env.AGNI_DB_PATH?.trim() || "data/agni.sqlite";
 const logPath = process.env.AGNI_LOG_PATH?.trim() || "data/agni.log";
 
-const db = openDatabase(dbPath);
+// Read-only: the schema belongs to the daemon, not to the scanner.
+const db = openDatabaseReadOnly(dbPath);
 let logText: string | undefined;
 try {
   logText = await Bun.file(logPath).text();
