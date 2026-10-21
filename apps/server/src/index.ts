@@ -33,9 +33,8 @@ import { seedAgentPromptTemplates, setOwnerName, loadRuntimeAgents } from "./age
 import { setSlotBudgets } from "./context/compiler";
 import { JobRunner } from "./jobs/runner";
 import { registerTurnJob, type TurnJobPayload } from "./jobs/turn";
-import { registerBriefJob } from "./jobs/brief";
-import { registerTaggerJob, scheduleTagger } from "./jobs/tagger";
-import { registerMemoryJobs } from "./jobs/memory";
+import { registerAllJobs } from "./jobs/registry";
+import { scheduleTagger } from "./jobs/tagger";
 import { log } from "./log";
 import { HealthTracker } from "./models/health";
 import { Router } from "./models/router";
@@ -91,12 +90,15 @@ async function serve(): Promise<void> {
     mailAccounts: pluginMailResolver(config.pluginsPath),
   };
   const runner = new JobRunner(db, running.emit, { pollMs: config.jobPollMs });
-  registerTurnJob(runner, { db, router, settings, emit: running.emit });
-  registerBriefJob(runner, { db, emit: running.emit });
-  // TAG-001: memory is extracted in batches, never on the path of a turn.
-  registerTaggerJob(runner, { db, router, emit: running.emit });
-  // MEM-003/MEM-006: vectors and the nightly sweep.
-  registerMemoryJobs(runner, { db, router });
+  // Every job kind, in one place: a kind that is enqueued but never
+  // registered is a job that silently fails.
+  registerAllJobs(runner, {
+    db,
+    router,
+    settings,
+    firstTokenTimeoutMs: config.firstTokenTimeoutMs,
+    emit: running.emit,
+  });
   // The sweep keeps itself alive; the embedding runs whenever there is
   // something left to embed.
   if (!listJobs(db, { limit: 50 }).some((job) => job.kind === "memory.consolidate")) {
