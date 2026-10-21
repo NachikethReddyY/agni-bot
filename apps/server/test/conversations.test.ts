@@ -15,6 +15,8 @@ import {
   updateSummary,
 } from "../src/stores/conversations";
 import { rolloverIfNeeded, rotateById, rotate, SESSION_ROLLOVER_CHARS } from "../src/agent/rollover";
+import { JobRunner } from "../src/jobs/runner";
+import { registerRolloverJob } from "../src/jobs/rollover";
 import { runTaskTurn } from "../src/agent/task-loop";
 import { defaultResolvedPersona } from "../src/agent/personas";
 
@@ -151,7 +153,7 @@ describe("rollover", () => {
     expect(result.carry).toBe("existing carry");
   });
 
-  test("a pressured block rotates with a summarized carry", async () => {
+  test("a pressured block rotates at once, and the summary follows in the background", async () => {
     db = openDatabase(":memory:");
     const conversation = ensureConversation(db!, "agni");
     const block = openSession(db!, conversation, "manual", null);
@@ -161,15 +163,39 @@ describe("rollover", () => {
     }
     expect(sessionCharLoad(db!, block.id)).toBeGreaterThan(SESSION_ROLLOVER_CHARS);
 
+    // ROL-002: the rotation does not wait for a model. The block is closed,
+    // a new one opens, and the summary is a background job.
     const result = await rolloverIfNeeded({ db: db!, router: makeRouter("We fixed the login bug; task list still open."), firstTokenTimeoutMs: 1000 }, conversation);
     expect(result.rolledOver).toBe(true);
     expect(result.reason).toBe("context");
-    // The old block is closed, the carry is bounded and stored.
     const closed = getThread(db!, block.id);
     expect(closed?.closed_at).not.toBeNull();
     expect(closed?.closed_by).toBe("context");
-    expect(ensureConversation(db!, "agni").summary).toBe("We fixed the login bug; task list still open.");
-    expect((result.carry ?? "").length).toBeLessThanOrEqual(900);
+    // The new block is open and the old block's summary is still to come.
+    expect(activeSession(db!, conversation)?.id).toBe(result.threadID);
+    expect(ensureConversation(db!, "agni").summary).toBeNull();
+
+    // The background job writes it.
+    const runner = new JobRunner(db!, () => undefined, { maxPerTick: 5 });
+    registerRolloverJob(runner, {
+      db: db!,
+      router: makeRouter('{"decisions":["We fixed the login bug"],"open_loops":["task list still open"],"entities":[],"tone":"plain","source_turn_range":{"from":0,"to":3}}'),
+      firstTokenTimeoutMs: 1000,
+      emit: () => undefined,
+    });
+    await runner.tick();
+    expect(ensureConversation(db!, "agni").summary).toContain("We fixed the login bug");
+  });
+
+  test("the new block opens with the tail of the old one", async () => {
+    db = openDatabase(":memory:");
+    const conversation = ensureConversation(db!, "agni");
+    const block = openSession(db!, conversation, "manual", null);
+    appendMessage(db!, { threadID: block.id, role: "user", text: "the invoice is due Friday" });
+    appendMessage(db!, { threadID: block.id, role: "assistant", text: "noted, Friday" });
+    const result = await rotate({ db: db!, router: makeRouter("summary"), firstTokenTimeoutMs: 1000 }, conversation, "manual");
+    const opened = getThread(db!, result.threadID);
+    expect(opened?.opened_tail).toContain("the invoice is due Friday");
   });
 
   test("a failed summary falls back to the previous carry and never blocks", async () => {

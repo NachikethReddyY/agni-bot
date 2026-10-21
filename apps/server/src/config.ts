@@ -60,6 +60,7 @@ function slotBudgets(env: Record<string, string | undefined>): SlotBudgets {
     ledger: int(env, "AGNI_SLOT_LEDGER", DEFAULT_SLOT_BUDGETS.ledger),
     summaries: int(env, "AGNI_SLOT_SUMMARIES", DEFAULT_SLOT_BUDGETS.summaries),
     recall: int(env, "AGNI_SLOT_RECALL", DEFAULT_SLOT_BUDGETS.recall),
+    previous_tail: int(env, "AGNI_SLOT_PREVIOUS_TAIL", DEFAULT_SLOT_BUDGETS.previous_tail),
   };
 }
 

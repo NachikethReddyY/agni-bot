@@ -14,6 +14,12 @@ export interface ThreadRow {
   closed_by: string | null;
   /** The carried summary this block opened with (debuggability only). */
   opened_carry: string | null;
+  /**
+   * The last turns of the block before this one, verbatim (ROL-006). The
+   * new block opens with them, so the boundary does not lose the stretch
+   * of conversation that the summary has not caught up with.
+   */
+  opened_tail: string | null;
 }
 
 export interface MessageRow {
@@ -45,9 +51,10 @@ export function createThread(
     closed_at: null,
     closed_by: null,
     opened_carry: null,
+    opened_tail: null,
   };
   db.run(
-    "INSERT INTO threads (id, agent_id, title, created_at, updated_at, conversation_id, closed_at, closed_by, opened_carry) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO threads (id, agent_id, title, created_at, updated_at, conversation_id, closed_at, closed_by, opened_carry, opened_tail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     [
       row.id,
       row.agent_id,
@@ -58,6 +65,7 @@ export function createThread(
       row.closed_at,
       row.closed_by,
       row.opened_carry,
+      row.opened_tail,
     ],
   );
   return row;
@@ -67,7 +75,7 @@ export function getThread(db: Database, id: string): ThreadRow | null {
   return (
     db
       .query<ThreadRow, [string]>(
-        `SELECT id, agent_id, title, created_at, updated_at, conversation_id, closed_at, closed_by, opened_carry
+        `SELECT id, agent_id, title, created_at, updated_at, conversation_id, closed_at, closed_by, opened_carry, opened_tail
          FROM threads WHERE id = ?`,
       )
       .get(id) ?? null
@@ -89,7 +97,7 @@ export function listThreadsWithPreview(db: Database, limit = 20): ThreadListRow[
   const rows = db
     .query<ThreadRow & { preview_text: string | null }, [number]>(
       `SELECT t.id, t.agent_id, t.title, t.created_at, t.updated_at,
-              t.conversation_id, t.closed_at, t.closed_by, t.opened_carry,
+              t.conversation_id, t.closed_at, t.closed_by, t.opened_carry, t.opened_tail,
               (SELECT m.text FROM messages m WHERE m.thread_id = t.id
                ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1) AS preview_text
        FROM threads t ORDER BY t.updated_at DESC LIMIT ?`,
