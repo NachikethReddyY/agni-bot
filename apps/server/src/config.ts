@@ -1,4 +1,5 @@
 import { loadProviders, type ProviderConfig } from "./models/providers";
+import { DEFAULT_SLOT_BUDGETS, type SlotBudgets } from "./context/compiler";
 
 export interface Config {
   host: string;
@@ -25,6 +26,16 @@ export interface Config {
   pluginsPath: string;
   /** Optional first name for first-run onboarding; never inferred from secrets. */
   userFirstName?: string;
+  /**
+   * ASM-007: the context assembler's slot budgets, in tokens. Configuration,
+   * not constants, so an eval can move a number without a code change.
+   */
+  slotBudgets?: Partial<SlotBudgets>;
+  /**
+   * ASM-004: the confidence floor for automatic retrieval. Below it, nothing
+   * is injected — a plausible match that is not good enough is still nothing.
+   */
+  minRecallScore?: number;
 }
 
 function int(env: Record<string, string | undefined>, key: string, fallback: number): number {
@@ -32,6 +43,24 @@ function int(env: Record<string, string | undefined>, key: string, fallback: num
   if (!raw) return fallback;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function float(env: Record<string, string | undefined>, key: string, fallback: number): number {
+  const raw = env[key];
+  if (!raw) return fallback;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+/** The slot budgets, each overridable by environment (ASM-007). */
+function slotBudgets(env: Record<string, string | undefined>): SlotBudgets {
+  return {
+    pinned_core: int(env, "AGNI_SLOT_PINNED_CORE", DEFAULT_SLOT_BUDGETS.pinned_core),
+    anchor: int(env, "AGNI_SLOT_ANCHOR", DEFAULT_SLOT_BUDGETS.anchor),
+    ledger: int(env, "AGNI_SLOT_LEDGER", DEFAULT_SLOT_BUDGETS.ledger),
+    summaries: int(env, "AGNI_SLOT_SUMMARIES", DEFAULT_SLOT_BUDGETS.summaries),
+    recall: int(env, "AGNI_SLOT_RECALL", DEFAULT_SLOT_BUDGETS.recall),
+  };
 }
 
 export function loadConfig(env: Record<string, string | undefined> = Bun.env): Config {
@@ -50,5 +79,7 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): C
     maxConcurrentTurns: int(env, "AGNI_MAX_CONCURRENT_TURNS", 4),
     pluginsPath: env.AGNI_PLUGINS_PATH?.trim() || "data/plugins.json",
     userFirstName: env.AGNI_USER_FIRST_NAME?.trim() || undefined,
+    slotBudgets: slotBudgets(env),
+    minRecallScore: float(env, "AGNI_MIN_RECALL_SCORE", 0.15),
   };
 }

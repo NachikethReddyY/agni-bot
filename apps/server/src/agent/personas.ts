@@ -109,7 +109,7 @@ export const PERSONAS: Persona[] = [
     color: "#f0b95a",
     role: "front desk — replies fast, decides who should do the work, and synthesizes the answers",
     systemPromptTemplate: AGNI_PROMPT_TEMPLATE,
-    tools: ["memory_search", "memory_write", "links_search", "link_save", "tasks_list", "task_create", "task_update", "grep", "glob", "read_file", "write_file", "web_search", "web_fetch", "deep_research", "bash", "skills_list", "skills_load", "skills_resource", "mail_search", "mail_read", "mail_send", "remember_fact", "recall_fact", "forget_fact", "handoff", "delegate_task", "delegate_wait", "task_status", "task_cancel", "rename_agent", "create_agent", "share_thread", "job_schedule", "job_list", "job_cancel", "update_agent"],
+    tools: ["memory_search", "memory_write", "transcript_search", "links_search", "link_save", "tasks_list", "task_create", "task_update", "grep", "glob", "read_file", "write_file", "web_search", "web_fetch", "deep_research", "bash", "skills_list", "skills_load", "skills_resource", "mail_search", "mail_read", "mail_send", "remember_fact", "recall_fact", "forget_fact", "handoff", "delegate_task", "delegate_wait", "task_status", "task_cancel", "rename_agent", "create_agent", "share_thread", "job_schedule", "job_list", "job_cancel", "update_agent"],
     visibility: "shared",
   },
   {
@@ -168,7 +168,7 @@ export function registerPersona(persona: Persona): void {
 }
 
 /** The toolset a new agent gets when the caller does not pick one. */
-export const DEFAULT_AGENT_TOOLS = ["memory_search", "recall_fact", "web_search", "web_fetch", "tasks_list", "job_schedule", "job_list", "job_cancel", "update_agent"];
+export const DEFAULT_AGENT_TOOLS = ["memory_search", "recall_fact", "transcript_search", "web_search", "web_fetch", "tasks_list", "job_schedule", "job_list", "job_cancel", "update_agent"];
 
 /**
  * Rebuild the roster from the agents the assistant created at runtime.

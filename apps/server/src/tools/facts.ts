@@ -3,7 +3,9 @@ import {
   deleteAgentMemory,
   getAgentMemory,
   listAgentMemories,
+  markMemoryUsed,
   putAgentMemory,
+  searchAgentMemories,
   type AgentMemoryRow,
 } from "../stores/agent-memories";
 
@@ -53,17 +55,57 @@ export interface RecallFactArgs {
   agentID?: string | null;
   /** The agent asking. Scope and visibility are enforced against it. */
   callerAgentID?: string | null;
+  /**
+   * ASM-004: below this score, nothing is injected. The automatic prompt
+   * prefix passes a threshold; an explicit tool call does not, because the
+   * model asked for the best match on purpose.
+   */
+  minScore?: number;
 }
-export interface RecallFactResult { facts: { id: string; fact: string; summary: string | null; tags: string | null }[] }
+export interface RecallFactResult {
+  facts: { id: string; fact: string; summary: string | null; tags: string | null; score?: number }[];
+  /** True when the best match was under the threshold and nothing was injected. */
+  belowThreshold?: boolean;
+}
+
+/** The default confidence floor for automatic injection (TUNABLE). */
+export const DEFAULT_MIN_RECALL_SCORE = 0.15;
 
 export function recallFact(db: Database, args: RecallFactArgs): RecallFactResult {
   const limit = clampLimit(args.limit);
   const scope = args.scope ?? "global_user";
+  const query = args.query?.trim();
+  if (query) {
+    const hits = searchAgentMemories(db, {
+      query,
+      scope,
+      agentID: args.agentID ?? null,
+      callerAgentID: args.callerAgentID ?? null,
+      limit,
+    });
+    // A fact that was recalled is a fact that was used: the ranking inputs
+    // have to move, or the formula is decoration.
+    markMemoryUsed(db, hits.map((hit) => hit.row.id));
+    const threshold = args.minScore;
+    const kept = threshold === undefined ? hits : hits.filter((hit) => hit.score >= threshold);
+    if (threshold !== undefined && kept.length === 0 && hits.length > 0) {
+      // ASM-004: a plausible match that is not good enough is still nothing.
+      return { facts: [], belowThreshold: true };
+    }
+    return {
+      facts: kept.map((hit) => ({
+        id: hit.row.id,
+        fact: hit.row.content,
+        summary: null,
+        tags: hit.row.tags,
+        score: Number(hit.score.toFixed(4)),
+      })),
+    };
+  }
   const rows = listAgentMemories(db, {
     scope,
     agentID: args.agentID ?? null,
     limit,
-    query: args.query,
     callerAgentID: args.callerAgentID ?? null,
   });
   return { facts: rows.map((row) => ({ id: row.id, fact: row.content, summary: null, tags: row.tags })) };

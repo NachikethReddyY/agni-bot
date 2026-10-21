@@ -222,6 +222,180 @@ export function getAgentMemory(db: Database, id: string): AgentMemoryRow | null 
   );
 }
 
+/**
+ * A search hit, with the score that ranked it.
+ */
+export interface MemoryHit {
+  row: AgentMemoryRow;
+  /** 0..1 — higher is a better match. */
+  score: number;
+  /** The text relevance, before the ranking multipliers. */
+  relevance: number;
+}
+
+/**
+ * The ranking formula from the spec:
+ *   score = relevance * recency_decay(last_used_at) * salience * (1 + log(1 + use_count))
+ *
+ * `relevance` comes from FTS5's bm25; the rest is how much the item matters
+ * and how fresh it is. A formula whose inputs never change is dead code, so
+ * `markMemoryUsed` moves `last_used_at` and `use_count` on every recall.
+ */
+export function rankMemory(
+  row: AgentMemoryRow,
+  relevance: number,
+  now = Date.now(),
+): number {
+  const recency = recencyDecay(row.last_used_at ?? row.updated_at, now);
+  const salience = row.salience > 0 ? row.salience : 0.5;
+  const use = 1 + Math.log(1 + (row.use_count ?? 0));
+  return relevance * recency * salience * use;
+}
+
+/** A half-life of two weeks, floored so a stale item is not worthless. */
+export function recencyDecay(timestamp: string | null, now = Date.now()): number {
+  if (!timestamp) return 0.5;
+  const at = Date.parse(timestamp);
+  if (!Number.isFinite(at)) return 0.5;
+  const days = Math.max(0, (now - at) / 86_400_000);
+  return Math.max(0.2, Math.pow(0.5, days / 14));
+}
+
+/**
+ * Full-text search over the facts, with the same caller-filter the list
+ * uses. The filter is applied in SQL, so a private fact cannot be ranked
+ * into a result set the caller will see.
+ */
+export function searchAgentMemories(
+  db: Database,
+  input: {
+    query: string;
+    scope?: string;
+    agentID?: string | null;
+    callerAgentID?: string | null;
+    limit?: number;
+  },
+): MemoryHit[] {
+  const query = input.query.trim();
+  if (!query) return [];
+  const scope = input.scope ?? "global_user";
+  const agentID = input.agentID === undefined ? null : input.agentID;
+  const caller = input.callerAgentID ?? null;
+  if (scope === "agent" && !agentID) return [];
+  if (scope === "agent" && caller && caller !== agentID) return [];
+  const limit = Math.min(50, Math.max(1, Math.floor(input.limit ?? 10)));
+
+  const rows = runFtsSearch(db, {
+    table: "agent_memories_fts",
+    columns: MEMORY_COLUMNS.split(", ").map((column) => `m.${column}`).join(", "),
+    join: "JOIN agent_memories m ON m.rowid = agent_memories_fts.rowid",
+    filter: memoryFilter(scope, agentID, caller),
+    query,
+    limit: limit * 4,
+  });
+  if (rows.length === 0) return [];
+
+  const now = Date.now();
+  const hits: MemoryHit[] = rows.map((row) => {
+    // bm25 is negative and smaller is better; turn it into a 0..1 relevance.
+    const relevance = 1 / (1 + Math.max(0, row.rank));
+    return { row: row as unknown as AgentMemoryRow, relevance, score: rankMemory(row as unknown as AgentMemoryRow, relevance, now) };
+  });
+  hits.sort((a, b) => b.score - a.score);
+  return hits.slice(0, limit);
+}
+
+interface SqlFilter {
+  clauses: string[];
+  values: string[];
+}
+
+/** The caller-filter, shared by the list and the search. */
+function memoryFilter(scope: string, agentID: string | null, caller: string | null): SqlFilter {
+  const clauses = ["m.valid_to IS NULL"];
+  const values: string[] = [];
+  if (scope === "agent") {
+    clauses.push("m.agent_id = ?");
+    values.push(agentID ?? "");
+  } else {
+    clauses.push("(m.agent_id IS NULL OR m.agent_id = ?)");
+    values.push(caller ?? "");
+  }
+  clauses.push("(m.visibility <> 'private' OR COALESCE(m.agent_id, 'ea') = ?)");
+  values.push(caller ?? "");
+  return { clauses, values };
+}
+
+/**
+ * Run an FTS query with the caller's filter. Precision first (`AND`), then
+ * recall (`OR`): a paraphrase that misses every term still finds the item.
+ */
+function runFtsSearch(
+  db: Database,
+  input: {
+    table: string;
+    columns: string;
+    join: string;
+    filter: SqlFilter;
+    query: string;
+    limit: number;
+  },
+): Array<Record<string, unknown> & { rank: number }> {
+  for (const mode of ["and", "or"] as const) {
+    const params: (string | number)[] = [toMatchQuery(input.query, mode), ...input.filter.values, input.limit];
+    try {
+      const rows = db
+        .query<Record<string, unknown> & { rank: number }, (string | number)[]>(
+          `SELECT ${input.columns}, bm25(${input.table}) AS rank
+           FROM ${input.table}
+           ${input.join}
+           WHERE ${input.table} MATCH ? AND ${input.filter.clauses.join(" AND ")}
+           ORDER BY rank ASC
+           LIMIT ?`,
+        )
+        .all(...params);
+      if (rows.length > 0) return rows;
+    } catch {
+      // A malformed FTS query must not take the turn down.
+      return [];
+    }
+  }
+  return [];
+}
+
+/**
+ * Mark facts as used. The ranking formula reads `last_used_at` and
+ * `use_count`, so a recall has to move them or the formula is decoration.
+ */
+export function markMemoryUsed(db: Database, ids: string[]): void {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => "?").join(",");
+  db.run(
+    `UPDATE agent_memories SET last_used_at = ?, use_count = use_count + 1 WHERE id IN (${placeholders})`,
+    [nowISO(), ...ids],
+  );
+}
+
+/**
+ * Turn free text into an FTS5 MATCH expression. Every term is quoted, so a
+ * stray quote or operator in the user's words cannot become a query error.
+ *
+ * `mode` is the trade-off between precision and recall: `and` wants every
+ * term, `or` wants any of them. The search tries `and` first and falls back
+ * to `or`, so a paraphrase ("when do we deploy") still finds the fact that
+ * says "deployments happen on Tuesday".
+ */
+export function toMatchQuery(query: string, mode: "and" | "or" = "and"): string {
+  const terms = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}_-]+/u)
+    .filter((term) => term.length > 0)
+    .slice(0, 16);
+  if (terms.length === 0) return '""';
+  const joiner = mode === "and" ? " AND " : " OR ";
+  return terms.map((term) => `"${term.replace(/"/g, "")}"`).join(joiner);
+}
+
 export function getAgentMemoryByKey(
   db: Database,
   input: { scope?: string; agentID?: string | null; keySlug: string },
