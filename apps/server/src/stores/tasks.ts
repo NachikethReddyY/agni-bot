@@ -22,6 +22,8 @@ export interface DelegationBrief {
   constraints?: string[];
   deadline?: string | null;
   outputSchema?: string | null;
+  /** Facts the child may need. Their text travels with the brief. */
+  factIDs?: string[];
 }
 
 export function createTask(db: Database, input: { title: string; dueAt?: string|null; priority?: TaskPriority; ownerDeviceID?: string }): TaskRow {

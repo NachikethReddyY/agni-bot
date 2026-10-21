@@ -711,4 +711,19 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_memory_conflicts_open ON memory_conflicts(resolved, created_at);
     `,
   },
+  {
+    id: 26,
+    name: "memory_embeddings",
+    sql: `
+      -- D-02/D-03: the embedder is optional and the vectors live in the
+      -- database. The model and its dimensions ride along, so a change of
+      -- model re-embeds instead of mixing two vector spaces.
+      ALTER TABLE agent_memories ADD COLUMN embedding_model TEXT;
+      ALTER TABLE agent_memories ADD COLUMN embedding_dim INTEGER;
+      -- MEM-006: consolidation archives what nothing uses; an archived item
+      -- is still there, it is just not recalled.
+      ALTER TABLE agent_memories ADD COLUMN archived_at TEXT;
+      CREATE INDEX idx_agent_memories_archived ON agent_memories(archived_at, valid_to);
+    `,
+  },
 ];

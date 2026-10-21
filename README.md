@@ -156,6 +156,19 @@ The agent can search the transcript itself with `transcript_search`; the
 search respects the same visibility rules as everything else, so a private
 agent's conversation is not searchable from outside.
 
+Retrieval is hybrid when a local embedder is configured
+(`AGNI_EMBEDDING_BASE_URL` or `AGNI_OLLAMA_BASE_URL`, plus
+`AGNI_EMBEDDING_MODEL`). The text search comes first — it is local and
+fast — and the embedder is the *lift* for the cases the text search cannot
+serve. If the embedder is down, recall falls back to FTS alone. There is no
+vector service: the vectors live in the database and the similarity is
+computed in JavaScript.
+
+A nightly sweep keeps the store honest: it closes what is already
+superseded, merges duplicates, archives what nothing has used in months,
+and promotes what is used often into the pinned profile. It never deletes
+anything — forgetting is still the owner's call.
+
 The slot budgets of the context assembler are configuration:
 `AGNI_SLOT_PINNED_CORE`, `AGNI_SLOT_ANCHOR`, `AGNI_SLOT_LEDGER`,
 `AGNI_SLOT_SUMMARIES`, `AGNI_SLOT_RECALL` (tokens).

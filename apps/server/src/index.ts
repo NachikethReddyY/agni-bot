@@ -35,6 +35,7 @@ import { JobRunner } from "./jobs/runner";
 import { registerTurnJob, type TurnJobPayload } from "./jobs/turn";
 import { registerBriefJob } from "./jobs/brief";
 import { registerTaggerJob, scheduleTagger } from "./jobs/tagger";
+import { registerMemoryJobs } from "./jobs/memory";
 import { log } from "./log";
 import { HealthTracker } from "./models/health";
 import { Router } from "./models/router";
@@ -94,6 +95,16 @@ async function serve(): Promise<void> {
   registerBriefJob(runner, { db, emit: running.emit });
   // TAG-001: memory is extracted in batches, never on the path of a turn.
   registerTaggerJob(runner, { db, router, emit: running.emit });
+  // MEM-003/MEM-006: vectors and the nightly sweep.
+  registerMemoryJobs(runner, { db, router });
+  // The sweep keeps itself alive; the embedding runs whenever there is
+  // something left to embed.
+  if (!listJobs(db, { limit: 50 }).some((job) => job.kind === "memory.consolidate")) {
+    enqueueJob(db, { kind: "memory.consolidate", payload: {} });
+  }
+  if (!listJobs(db, { limit: 50 }).some((job) => job.kind === "memory.embed")) {
+    enqueueJob(db, { kind: "memory.embed", payload: {}, runAt: new Date(Date.now() + 30_000).toISOString() });
+  }
   runner.start();
 
   log.info(`agni server v${PROTOCOL_VERSION} listening on ${running.url} (pid ${process.pid})`);

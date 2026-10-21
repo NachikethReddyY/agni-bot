@@ -88,6 +88,8 @@ export function buildDelegationPrefix(params: {
   team?: Array<{ id: string; name: string; role: string }>;
   /** ASM-002: short always-present note of the current topic, if available. */
   anchor?: Anchor | null;
+  /** ASM-004: what this turn needs, retrieved rather than carried. */
+  recall?: string[];
 }): string {
   const summaries: string[] = [];
   if (params.carrySummary) {
@@ -124,6 +126,7 @@ export function buildDelegationPrefix(params: {
     facts: params.facts,
     anchor: params.anchor ?? null,
     summaries,
+    recall: params.recall ?? [],
     tail,
   });
 }

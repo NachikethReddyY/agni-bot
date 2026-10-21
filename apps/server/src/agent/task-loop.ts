@@ -23,6 +23,9 @@ import { registerRenameTool } from "../tools/rename-tool";
 import { registerCreateAgentTool } from "../tools/create-agent-tool";
 import { createUpdateAgentTool } from "../tools/update-agent-tool";
 import { recallFact } from "../tools/facts";
+import { retrieveFacts, rewriteForRetrieval, previousBlockTail } from "./retrieval";
+import { embedderConfig } from "./embeddings";
+import { registerExpandTool } from "../tools/expand-tool";
 import { buildDelegationPrefix } from "./prompts";
 import { appendChannelMessage, getChannelSummary } from "../stores/channels";
 import { compactChannelHistory } from "./compactor";
@@ -37,6 +40,11 @@ export interface TaskTurnSettings {
    * them from there, so a connected mailbox is actually usable.
    */
   mailAccounts?: MailAccountResolver;
+  /**
+   * ASM-004: the confidence floor for automatic retrieval. Below it,
+   * nothing is injected.
+   */
+  minRecallScore?: number;
 }
 export interface TaskTurnRun {
   turnID?: string;
@@ -229,6 +237,22 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     history: messages,
     userText: run.text,
   });
+  // ASM-003/004/006: what this turn needs, retrieved rather than carried.
+  // The query is rewritten when the message points back, the search is
+  // hybrid, and when nothing good enough comes back the tail of the
+  // previous block is used instead of a wider, worse search.
+  const rewritten = rewriteForRetrieval(run.text, { anchor, history: messages });
+  const retrieved = await retrieveFacts(db, {
+    query: rewritten.query,
+    callerAgentID: persona.id,
+    limit: 6,
+    minScore: settings.minRecallScore,
+    embedder: embedderConfig(),
+  });
+  const recall: string[] = retrieved.hits.map((hit) => hit.row.content);
+  if (retrieved.belowThreshold) {
+    recall.push(...previousBlockTail(db, { conversationID: run.conversationID ?? null, threadID }));
+  }
   const delegationPrefix = buildDelegationPrefix({
     persona,
     facts,
@@ -302,6 +326,8 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // DEL-004: the full result of a delegated task, read through the same
   // visibility filter as everything else.
   registerArtifactTool(registry, { db, currentAgentID: persona.id });
+  // ASM-005: a reference is a pointer; this is how the model follows it.
+  registerExpandTool(registry, { db, currentAgentID: persona.id });
   // Redefining an agent is an action too: the owner's words become the
   // agent's role and prompt, durably.
   registry.register(createUpdateAgentTool({ db, emit: run.emit }));

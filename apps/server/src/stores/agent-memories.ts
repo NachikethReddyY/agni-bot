@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { newID, nowISO } from "../util/ids";
+import { cosineSimilarity, packVector, unpackVector } from "../agent/embeddings";
 
 export const MEMORY_TYPES = ["fact", "preference", "style", "entity", "decision", "procedure", "insight"] as const;
 export type MemoryType = (typeof MEMORY_TYPES)[number];
@@ -31,10 +32,13 @@ export interface AgentMemoryRow {
   salience: number;
   visibility: string;
   source: string;
+  embedding_model: string | null;
+  embedding_dim: number | null;
+  archived_at: string | null;
 }
 
 const MEMORY_COLUMNS =
-  "id, scope, agent_id, type, key_slug, content, tags, importance, created_at, updated_at, kind, valid_from, valid_to, supersedes_id, source_block_id, source_turn_ids, last_used_at, use_count, embedding, confidence, salience, visibility, source";
+  "id, scope, agent_id, type, key_slug, content, tags, importance, created_at, updated_at, kind, valid_from, valid_to, supersedes_id, source_block_id, source_turn_ids, last_used_at, use_count, embedding, confidence, salience, visibility, source, embedding_model, embedding_dim, archived_at";
 
 export interface AgentMemoryInput {
   scope?: string;
@@ -193,6 +197,9 @@ export function putAgentMemory(db: Database, input: AgentMemoryInput): AgentMemo
     salience: clampImportance(input.salience ?? importance),
     visibility: normalizeMemoryVisibility(input.visibility),
     source,
+    embedding_model: null,
+    embedding_dim: null,
+    archived_at: null,
   };
   db.run(
     `INSERT INTO agent_memories (id, scope, agent_id, type, key_slug, content, tags, importance, created_at, updated_at, kind, valid_from, valid_to, supersedes_id, source_block_id, source_turn_ids, last_used_at, use_count, embedding, confidence, salience, visibility, source)
@@ -375,6 +382,124 @@ function runFtsSearch(
     }
   }
   return [];
+}
+
+/**
+ * Store a vector with the model that produced it. A different model means a
+ * different vector space, so the old vector is replaced rather than mixed
+ * with the new one.
+ */
+export function setMemoryEmbedding(
+  db: Database,
+  id: string,
+  vector: Float32Array,
+  model: string,
+): void {
+  db.run("UPDATE agent_memories SET embedding = ?, embedding_model = ?, embedding_dim = ? WHERE id = ?", [
+    packVector(vector),
+    model,
+    vector.length,
+    id,
+  ]);
+}
+
+/** Facts that have no vector, or one from an older model. */
+export function listMemoriesNeedingEmbedding(
+  db: Database,
+  options: { model: string; limit?: number } = { model: "" },
+): AgentMemoryRow[] {
+  const limit = Math.min(500, Math.max(1, Math.floor(options.limit ?? 100)));
+  return db
+    .query<AgentMemoryRow, [string, number]>(
+      `SELECT ${MEMORY_COLUMNS} FROM agent_memories
+       WHERE valid_to IS NULL AND archived_at IS NULL
+         AND (embedding IS NULL OR embedding_model IS NULL OR embedding_model <> ?)
+       ORDER BY updated_at ASC LIMIT ?`,
+    )
+    .all(options.model, limit);
+}
+
+/**
+ * The vector neighbours of a query, filtered by the same caller-filter as
+ * the text search. A private fact is not a neighbour of another agent.
+ */
+export function searchMemoriesByVector(
+  db: Database,
+  input: {
+    vector: Float32Array;
+    scope?: string;
+    agentID?: string | null;
+    callerAgentID?: string | null;
+    limit?: number;
+  },
+): MemoryHit[] {
+  const scope = input.scope ?? "global_user";
+  const agentID = input.agentID === undefined ? null : input.agentID;
+  const caller = input.callerAgentID ?? null;
+  if (scope === "agent" && !agentID) return [];
+  if (scope === "agent" && caller && caller !== agentID) return [];
+  const limit = Math.min(50, Math.max(1, Math.floor(input.limit ?? 10)));
+
+  const params: (string | number)[] = [];
+  const clauses = ["m.valid_to IS NULL", "m.embedding IS NOT NULL"];
+  if (scope === "agent") {
+    clauses.push("m.agent_id = ?");
+    params.push(agentID!);
+  } else {
+    clauses.push("(m.agent_id IS NULL OR m.agent_id = ?)");
+    params.push(caller ?? "");
+  }
+  clauses.push("(m.visibility <> 'private' OR COALESCE(m.agent_id, 'ea') = ?)");
+  params.push(caller ?? "");
+  params.push(limit * 4);
+
+  const rows = db
+    .query<AgentMemoryRow & { embedding: Uint8Array | null }, (string | number)[]>(
+      `SELECT ${MEMORY_COLUMNS.split(", ").map((column) => `m.${column}`).join(", ")}, m.embedding AS embedding
+       FROM agent_memories m
+       WHERE ${clauses.join(" AND ")}
+       LIMIT ?`,
+    )
+    .all(...params);
+
+  const now = Date.now();
+  const hits: MemoryHit[] = [];
+  for (const row of rows) {
+    const vector = unpackVector(row.embedding);
+    if (!vector) continue;
+    // Cosine similarity maps into 0..1 so it can be fused with bm25.
+    const relevance = (cosineSimilarity(input.vector, vector) + 1) / 2;
+    hits.push({ row, relevance, score: rankMemory(row, relevance, now) });
+  }
+  hits.sort((a, b) => b.score - a.score);
+  return hits.slice(0, limit);
+}
+
+/**
+ * Hybrid retrieval: the text hits and the vector hits fused with
+ * reciprocal rank fusion (RRF). RRF is used because the two scores live on
+ * different scales — a bm25 rank and a cosine similarity — and pretending
+ * otherwise makes the fusion a tuning trap.
+ */
+export function fuseHits(textHits: MemoryHit[], vectorHits: MemoryHit[]): MemoryHit[] {
+  const RRF_K = 60;
+  const scores = new Map<string, number>();
+  const rows = new Map<string, MemoryHit>();
+  const add = (hits: MemoryHit[]): void => {
+    hits.forEach((hit, index) => {
+      const id = hit.row.id;
+      scores.set(id, (scores.get(id) ?? 0) + 1 / (RRF_K + index + 1));
+      if (!rows.has(id)) rows.set(id, hit);
+    });
+  };
+  add(textHits);
+  add(vectorHits);
+  return [...scores.entries()]
+    .map(([id, fused]) => {
+      const hit = rows.get(id)!;
+      return { ...hit, score: fused, relevance: hit.relevance };
+    })
+    .sort((a, b) => b.score - a.score);
 }
 
 /**
