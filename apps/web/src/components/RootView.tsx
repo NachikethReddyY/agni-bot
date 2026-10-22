@@ -14,6 +14,7 @@ import { SidebarView } from "./SidebarView";
 import { ThreadHeader } from "./ThreadHeader";
 import { ThreadView } from "./ThreadView";
 import { InspectorView } from "./InspectorView";
+import { ChatGPTPlanNotice } from "./ChatGPTConnectionView";
 
 export function RootView() {
   const model = useAppModel();
@@ -62,6 +63,7 @@ export function RootView() {
       {snapshot.screen === "pairing" ? <PairingView /> : <ChatView />}
       {snapshot.isAgentSwitcherPresented ? <AgentSwitcherView /> : null}
       {snapshot.isSettingsPresented ? <SettingsView /> : null}
+      <ChatGPTPlanNotice />
       {snapshot.toast ? <Toast /> : null}
     </div>
   );

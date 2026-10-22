@@ -22,9 +22,9 @@
  * behaviour, it persists, and it does not help over SSH or Tailscale.
  */
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { privateTempDir } from "../util/private-temp";
 
 /** Is this host a Mac? The OS authorization path exists nowhere else. */
 export function isMacOS(): boolean {
@@ -58,8 +58,7 @@ const APPLE_SCRIPT = [
  * pass or fail.
  */
 export function writePrivilegedScript(command: string): { dir: string; scriptPath: string } {
-  const dir = mkdtempSync(join(tmpdir(), "agni-privileged-"));
-  chmodSync(dir, 0o700);
+  const dir = privateTempDir("agni-privileged-");
   const scriptPath = join(dir, "command.sh");
   writeFileSync(scriptPath, `#!/bin/sh\n${command}\n`, { mode: 0o700 });
   chmodSync(scriptPath, 0o700);

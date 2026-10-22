@@ -20,6 +20,7 @@ import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import { PresenceDot, Spinner, Switch } from "./bits";
 import { AddProviderView } from "./AddProviderView";
 import { ConfigurePluginView } from "./ConfigurePluginView";
+import { ChatGPTConnectionView } from "./ChatGPTConnectionView";
 
 type Section = "general" | "plugins" | "models" | "device";
 
@@ -40,7 +41,7 @@ const SECTIONS: { id: Section; title: string; icon: typeof Settings; subtitle: s
     id: "models",
     title: "Models & providers",
     icon: Cpu,
-    subtitle: "Connect API providers. Keys are stored on the server and never in this browser.",
+    subtitle: "Connect ChatGPT or an API provider. Credentials stay on your Agni server.",
   },
   {
     id: "device",
@@ -108,7 +109,7 @@ export function SettingsView() {
                 model.prepareToAddProvider();
                 setAddingProvider(true);
               }}
-              onEdit={setEditingProvider}
+              onEdit={(provider) => { model.prepareToAddProvider(); setEditingProvider(provider); }}
             />
           ) : null}
           {section === "device" ? <DeviceSection /> : null}
@@ -367,8 +368,7 @@ function ModelsSection({ onAdd, onEdit }: { onAdd: () => void; onEdit: (provider
           <div className="empty-note" style={{ background: "transparent", border: "none", padding: 0 }}>
             <strong>No model providers connected</strong>
             <span>
-              Add a provider key to let Agni answer using hosted models. The key is sent
-              directly to your daemon.
+              Connect your ChatGPT account or add an API provider to start chatting.
             </span>
           </div>
         ) : (
@@ -379,7 +379,7 @@ function ModelsSection({ onAdd, onEdit }: { onAdd: () => void; onEdit: (provider
           <span style={{ color: "#4ade80", fontSize: 12 }}>✓ {snapshot.providerAddSuccess}</span>
         ) : null}
         <span className="settings-note">
-          Supported API providers include Groq, Cerebras, NVIDIA NIM, Gemini, and OpenRouter.
+          Connect ChatGPT with your existing plan, or use Groq, Cerebras, NVIDIA NIM, Gemini, and OpenRouter API keys.
           Local models can be served by LM Studio on the daemon host.
         </span>
         <span className="settings-note">
@@ -387,6 +387,7 @@ function ModelsSection({ onAdd, onEdit }: { onAdd: () => void; onEdit: (provider
           in its mode-600 .env file.
         </span>
       </div>
+      {snapshot.configuredProviders.length === 0 || (snapshot.chatgpt?.accounts.length ?? 0) > 0 || snapshot.chatgpt?.status === "pending" ? <div className="settings-group"><ChatGPTConnectionView manage /></div> : null}
     </div>
   );
 }
@@ -513,8 +514,9 @@ function ProviderModelEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot.providerAddSuccess]);
 
-  const showInput = snapshot.providerModels.length === 0 || custom;
-  const canSave = !snapshot.isAddingProvider && draft.trim().length > 0;
+  const isChatGPT = provider.id === "chatgpt";
+  const showInput = !isChatGPT && (snapshot.providerModels.length === 0 || custom);
+  const canSave = !snapshot.isAddingProvider && draft.trim().length > 0 && (!isChatGPT || snapshot.providerModels.includes(draft));
 
   return (
     <div
@@ -528,8 +530,7 @@ function ProviderModelEditor({
         <div>
           <h2>Choose a model</h2>
           <p style={{ marginTop: 4 }}>
-            Enter a model ID supported by {provider.label}. The daemon will route future
-            requests to it.
+            {isChatGPT ? "Choose a model available to your ChatGPT account." : `Enter a model ID supported by ${provider.label}. The daemon will route future requests to it.`}
           </p>
         </div>
 
@@ -553,10 +554,10 @@ function ProviderModelEditor({
             >
               {snapshot.providerModels.map((modelID) => (
                 <option key={modelID} value={modelID}>
-                  {modelID}
+                  {isChatGPT ? snapshot.chatgpt?.models.find((m) => m.id === modelID)?.label ?? modelID : modelID}
                 </option>
               ))}
-              <option value="__custom__">Enter a custom model ID…</option>
+              {!isChatGPT ? <option value="__custom__">Enter a custom model ID…</option> : null}
             </select>
           </label>
         ) : null}

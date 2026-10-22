@@ -218,7 +218,25 @@ export type PluginInfo = z.infer<typeof PluginInfoSchema>;
 // client → server
 // ---------------------------------------------------------------------------
 
+/** Public account metadata only. OAuth credentials never cross the socket. */
+export const ChatGPTConnectionSchema = z.object({
+  status: z.enum(["disconnected", "pending", "connected", "reauth_required", "error"]),
+  accounts: z.array(z.object({ id: z.string(), label: z.string(), connected: z.boolean() })),
+  activeAccountID: z.string().nullable(),
+  model: z.string(),
+  models: z.array(z.object({ id: z.string(), label: z.string() })),
+  message: z.string().optional(),
+  showWelcome: z.boolean().optional(),
+});
+export type ChatGPTConnection = z.infer<typeof ChatGPTConnectionSchema>;
+
 export const ClientFrameSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("provider.auth.status"), providerID: z.literal("chatgpt") }),
+  z.object({ type: z.literal("provider.auth.start"), providerID: z.literal("chatgpt"), accountID: z.string().max(64).optional() }),
+  z.object({ type: z.literal("provider.auth.cancel"), providerID: z.literal("chatgpt"), loginID: z.string().max(64) }),
+  z.object({ type: z.literal("provider.auth.disconnect"), providerID: z.literal("chatgpt"), accountID: z.string().max(64) }),
+  z.object({ type: z.literal("provider.auth.select"), providerID: z.literal("chatgpt"), accountID: z.string().max(64) }),
+  z.object({ type: z.literal("provider.auth.acknowledge"), providerID: z.literal("chatgpt"), accountID: z.string().max(64) }),
   z.object({
     type: z.literal("hello"),
     v: z.number().int(),
@@ -609,6 +627,9 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     lastSuccessAt: z.number().optional(),
   })) }),
   z.object({ type: z.literal("provider.models.ok"), seq, providerID: z.string(), models: z.array(z.string()) }),
+  /** Login URLs are requester-only and never replayed; they contain no tokens. */
+  z.object({ type: z.literal("provider.auth.started"), seq, providerID: z.literal("chatgpt"), loginID: z.string(), authorizeURL: z.string().url(), expiresAt: z.string() }),
+  z.object({ type: z.literal("provider.auth.state"), seq, providerID: z.literal("chatgpt"), connection: ChatGPTConnectionSchema }),
   /** Answer to `plugin.list`; addressed to the requester, not replayed. */
   z.object({ type: z.literal("plugin.list.ok"), seq, plugins: z.array(PluginInfoSchema) }),
   z.object({

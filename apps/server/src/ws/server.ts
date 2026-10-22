@@ -17,6 +17,8 @@ import { dayTotals, type DayTotals } from "../stores/usage";
 import { readShareFile } from "../share/document";
 import { dispatch, newSession, type Session } from "./dispatch";
 import { FrameLog } from "./frame-log";
+import { dirname, resolve } from "node:path";
+import { ChatGPTAuth } from "../models/chatgpt-auth";
 
 export interface RunningServer {
   readonly port: number;
@@ -80,6 +82,15 @@ export function startServer(config: Config, db: Database, router: Router, starte
 
   const plugins = new PluginService({ config, db, emit, pluginsPath: config.pluginsPath });
   plugins.autoConnect();
+  const chatgpt = new ChatGPTAuth({
+    filePath: config.dbPath === ":memory:" ? null : resolve(dirname(config.dbPath), "chatgpt/accounts.json"),
+    onChange: () => {
+      const connection = chatgpt.state();
+      if (connection.status === "connected" && !connection.message) router.connectionReady("chatgpt");
+      emit({ type: "provider.auth.state", providerID: "chatgpt", connection });
+    },
+  });
+  router.setChatGPT(chatgpt);
 
   const server = Bun.serve<Session>({
     hostname: config.host,
@@ -119,6 +130,7 @@ export function startServer(config: Config, db: Database, router: Router, starte
     },
     websocket: {
       open(socket) {
+        socket.data.local = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(socket.remoteAddress);
         sessions.set(socket, socket.data);
         socket.data.helloTimer = setTimeout(() => {
           if (!socket.data.authed) socket.close(4001, "hello timeout");
@@ -136,6 +148,7 @@ export function startServer(config: Config, db: Database, router: Router, starte
             frameLog,
             emit,
             plugins,
+            chatgpt,
             reply: (body) => {
               const frame = frameLog.next(body, { replay: false });
               socket.send(encodeFrame(frame));
@@ -165,6 +178,7 @@ export function startServer(config: Config, db: Database, router: Router, starte
     plugins,
     emit,
     stop() {
+      chatgpt.stop();
       server.stop(true);
       frameLog.flush();
     },

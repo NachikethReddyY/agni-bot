@@ -377,6 +377,8 @@ export class Conversation {
       case "memory.list.ok":
       case "provider.add.ok":
       case "provider.models.ok":
+      case "provider.auth.started":
+      case "provider.auth.state":
       case "plugin.list.ok":
       case "plugin.connect.ok":
       case "plugin.state":

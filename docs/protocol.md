@@ -68,6 +68,12 @@ never reason about thread ids.
 | `bind.direct` | `{agentID}` | Pins this client to an agent: the server resolves that agent's conversation, its active session block and its DM channel, and answers with them. |
 | `provider.add` | `{providerID, apiKey, model?, baseUrl?, label?}` | Adds a supported API provider over the authenticated socket. `providerID: "custom"` adds an endpoint of the owner's own: `baseUrl` is an OpenAI-compatible base (`https://host/v1`), `label` names it in the list. The daemon stores the key in its mode-600 `.env` and the endpoint in `data/providers.json`; neither is ever returned. |
 | `provider.model.set` | `{providerID, model}` | Changes a configured provider's model ID on the daemon and updates the live router. |
+| `provider.auth.status` | `{providerID: "chatgpt"}` | Reads public ChatGPT connection/account metadata. Requires device authentication. |
+| `provider.auth.start` | `{providerID: "chatgpt", accountID?}` | Starts official OAuth on the daemon host with a loopback callback, fresh PKCE/state/nonce. A saved account ID reuses its registration. Requires a local authenticated connection. |
+| `provider.auth.cancel` | `{providerID: "chatgpt", loginID}` | Cancels the initiating device's pending login. |
+| `provider.auth.select` | `{providerID: "chatgpt", accountID}` | Selects a saved connected account after loading its eligible model catalog. |
+| `provider.auth.acknowledge` | `{providerID: "chatgpt", accountID}` | Persists dismissal of the first-sign-in ChatGPT plan notice for the selected registration. |
+| `provider.auth.disconnect` | `{providerID: "chatgpt", accountID}` | Aborts active ChatGPT requests, clears local tokens, and attempts remote revocation. Keeps registration metadata for later sign-in. |
 | `plugin.list` | `{}` | The plugin catalog bound to accounts (see below); answer: `plugin.list.ok`. |
 | `plugin.connect` | `{pluginID, account}` | Begin connecting `pluginID` to `account` (`agent` = Agni's own, `owner` = the user's). OAuth kinds answer `plugin.connect.ok` with an authorize URL to open in the system browser; MCP kinds are not connectable until their server pass lands. |
 | `plugin.configure` | `{pluginID, account, user?, pass?, key?, url?, clientID?, clientSecret?}` | Gives a plugin its credentials and connects it in one step. `app-password` kinds take `user` + `pass`; `api-key` kinds take `key` and/or `url`; `oauth` kinds take the Google `clientID` + `clientSecret`. The daemon writes them to its mode-600 `plugins.json` and answers `plugin.connect.ok` (with an authorize URL for OAuth). |
@@ -124,6 +130,8 @@ accountLabel?, error?, connectedAt?}`.
 | `task.answer.ok` | `{task: {...}}` | The answer was accepted; the task is running again. |
 | `bind.direct.ok` | `{agentID, conversationID, sessionID, channelID}` | The client is bound to that agent's conversation; `sessionID` is the active block, `""` before the first one. Addressed, not replayed. |
 | `provider.add.ok` | `{providers: [...]}` | Provider metadata after adding a key; contains no credentials. |
+| `provider.auth.started` | `{providerID: "chatgpt", loginID, authorizeURL, expiresAt}` | Requester-only, never replayed. Opens OpenAI's authorization page. Contains no access, refresh, or ID token. |
+| `provider.auth.state` | `{providerID: "chatgpt", connection}` | Public state: `status`, saved `accounts [{id,label,connected}]`, `activeAccountID`, selected `model`, eligible `models [{id,label}]`, optional safe `message` and first-sign-in `showWelcome`. Never includes credentials. |
 | `presence` | `{state}` | `online \| offline`. |
 | `status.update` | `{channelId, agentId?, text, transient}` | Activity text; transient updates clear on the next message. |
 | `msg.new` | `{id, channelId, fromType, fromId, senderName, senderColor?, text, internal, uiHint?, toAgentId?, taskId?, questionId?, createdAt}` | Durable channel message; `uiHint` can be `onboarding_name_prompt`, `handoff_notice`, `progress`, `needs_input`, or `normal`. `toAgentId` names the agent a handoff notice is about, so the client can render the name as a link to that agent's chat. `taskId` + `questionId` mark a question from a delegated task: the client renders an answer field that sends `task.answer`. |
@@ -149,7 +157,7 @@ live streaming.
 `bad_frame`, `unauthorized`, `version_mismatch`, `unknown_thread`, `unknown_conversation`,
 `unknown_agent`, `unknown_request`, `unknown_job`, `unknown_task`,
 `bad_task_action`, `capture_failed`, `job_running`, `no_provider`, `provider_failed`,
-`unknown_provider`, `invalid_key`, `provider_exists`, `provider_storage`,
+`unknown_provider`, `invalid_key`, `provider_exists`, `provider_storage`, `provider_auth`,
 `unknown_plugin`, `unknown_connection`, `plugin_not_configured`, `plugin_unavailable`,
 `plugin_connect_failed`, `resync_gap`, `internal`.
 

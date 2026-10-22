@@ -4,10 +4,12 @@
  * one case it cannot fix: a stream that already emitted tokens cannot be
  * retried on another provider (that would duplicate text into the thread).
  */
-import { ProviderError, streamChat, type ChatMessage, type ToolSpec } from "./client";
+import { ProviderError, streamChat, type ChatMessage, type ChatResult, type ToolSpec } from "./client";
 import type { ProviderConfig } from "./providers";
 import type { HealthTracker } from "./health";
 import { log } from "../log";
+import type { ChatGPTAuth } from "./chatgpt-auth";
+import { streamChatGPT } from "./chatgpt-responses";
 
 export class RouterError extends Error {
   readonly code: "no_provider" | "provider_failed";
@@ -69,6 +71,7 @@ export interface RouteResult {
   toolCalls?: import("./client").ToolCall[];
   /** The model's own reasoning, when the provider streams it. */
   reasoning?: string;
+  responseItems?: import("./client").ResponseContextItem[];
 }
 
 export interface ProviderStatus {
@@ -83,6 +86,10 @@ export interface ProviderStatus {
 
 export class Router {
   private activeRoutes = 0;
+  private chatgpt?: ChatGPTAuth;
+
+  setChatGPT(connection: ChatGPTAuth): void { this.chatgpt = connection; }
+  connectionReady(providerID: string): void { this.health.markSuccess(providerID); }
 
   constructor(
     private providers: ProviderConfig[],
@@ -102,6 +109,7 @@ export class Router {
   }
 
   async listModels(providerID: string): Promise<string[]> {
+    if (providerID === "chatgpt" && this.chatgpt) return (await this.chatgpt.models()).map((model) => model.id);
     const provider = this.providers.find((candidate) => candidate.id === providerID);
     if (!provider) throw new Error("Provider is not configured on the daemon.");
     const response = await this.fetchFn(`${provider.baseUrl.replace(/\/$/, "")}/models`, {
@@ -117,6 +125,10 @@ export class Router {
 
   /** Configured providers, healthiest first, cooling ones last. */
   candidates(): ProviderConfig[] {
+    // Choosing ChatGPT is an explicit billing choice. Never silently fall back
+    // to API-key billing when its grant, usage allowance, or connection fails.
+    const chatgpt = this.chatgpt?.provider();
+    if (chatgpt) return [chatgpt];
     const healthy = this.providers.filter((provider) => this.health.isAvailable(provider.id));
     const cooling = this.providers.filter((provider) => !this.health.isAvailable(provider.id));
     // Cooling providers stay in the list as a last resort — a spent cooldown
@@ -125,7 +137,7 @@ export class Router {
   }
 
   supportsVision(): boolean {
-    return this.providers.some((provider) => provider.supportsVision === true);
+    return this.candidates().some((provider) => provider.supportsVision === true);
   }
 
   async route(options: RouteOptions): Promise<RouteResult> {
@@ -160,22 +172,27 @@ export class Router {
         const beganAt = Date.now();
         let emitted = false;
         try {
-          const result = await streamChat({
-            baseUrl: provider.baseUrl,
-            apiKey: provider.apiKey,
-            model: provider.model,
-            messages: options.messages,
-            signal: options.signal,
-            firstTokenTimeoutMs: options.firstTokenTimeoutMs,
-            fetchFn: this.fetchFn,
-            tools: options.tools,
-            toolChoice: options.toolChoice,
-            maxTokens: options.maxTokens,
-            onDelta: (delta) => {
-              emitted = true;
-              options.onDelta(delta);
-            },
-          });
+          const connection = provider.id === "chatgpt" ? this.chatgpt : undefined;
+          const lease = connection?.requestSignal(options.signal);
+          let result: ChatResult;
+          try {
+            result = await (connection ? streamChatGPT : streamChat)({
+              baseUrl: provider.baseUrl,
+              apiKey: connection ? await connection.accessToken() : provider.apiKey,
+              model: provider.model,
+              messages: options.messages,
+              signal: lease?.signal ?? options.signal,
+              firstTokenTimeoutMs: options.firstTokenTimeoutMs,
+              fetchFn: this.fetchFn,
+              tools: options.tools,
+              toolChoice: options.toolChoice,
+              maxTokens: options.maxTokens,
+              onDelta: (delta) => {
+                emitted = true;
+                options.onDelta(delta);
+              },
+            });
+          } finally { lease?.release(); }
           this.health.markSuccess(provider.id);
           return {
             provider: provider.id,
@@ -188,12 +205,17 @@ export class Router {
             attempts,
             ...(result.toolCalls ? { toolCalls: result.toolCalls } : {}),
             ...(result.reasoning ? { reasoning: result.reasoning } : {}),
+            ...(result.responseItems ? { responseItems: result.responseItems } : {}),
           };
         } catch (error) {
           const providerError =
             error instanceof ProviderError ? error : new ProviderError(String(error), { kind: "network" });
           if (providerError.kind === "aborted" || options.signal?.aborted) throw providerError;
           if (emitted) throw new MidStreamError(provider.id, providerError);
+          if (provider.id === "chatgpt") {
+            this.health.markFailure(provider.id, this.cooldownFor(providerError), providerError.message);
+            throw new RouterError("provider_failed", providerError.message);
+          }
           lastError = providerError;
           const cooldownMs = this.cooldownFor(providerError);
           this.health.markFailure(provider.id, cooldownMs, providerError.message);
@@ -221,13 +243,14 @@ export class Router {
   }
 
   status(): ProviderStatus[] {
-    return this.providers.map((provider) => {
+    const chatgpt = this.chatgpt?.provider();
+    return [...(chatgpt ? [chatgpt] : []), ...this.providers].map((provider) => {
       const snapshot = this.health.snapshot([provider.id])[0];
       return {
         id: provider.id,
         label: provider.label,
         model: provider.model,
-        available: snapshot?.available ?? true,
+        available: provider.id === "chatgpt" && this.chatgpt?.state().status === "reauth_required" ? false : snapshot?.available ?? true,
         cooldownRemainingMs: snapshot?.cooldownRemainingMs ?? 0,
         lastError: snapshot?.lastError,
         lastSuccessAt: snapshot?.lastSuccessAt,

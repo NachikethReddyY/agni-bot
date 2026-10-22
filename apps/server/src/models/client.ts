@@ -21,6 +21,15 @@ export interface ChatMessage {
    * to the provider and never rendered in the chat.
    */
   reasoning?: string;
+  /** Opaque Responses reasoning items, round-tripped for stateless tool turns. */
+  responseItems?: ResponseContextItem[];
+}
+
+export interface ResponseContextItem {
+  type: "reasoning";
+  id?: string;
+  encrypted_content?: string;
+  summary: Array<{ type: "summary_text"; text: string }>;
 }
 
 /** One tool-call fragment, as returned by the provider. */
@@ -86,6 +95,7 @@ export interface ChatResult {
    * expose `reasoning_content`). Absent for models that do not.
    */
   reasoning?: string;
+  responseItems?: ResponseContextItem[];
 }
 
 /** Parse an HTTP Retry-After header (seconds or HTTP date) into milliseconds. */

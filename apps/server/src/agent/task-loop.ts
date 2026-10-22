@@ -522,7 +522,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         break;
       }
 
-      messages.push({ role: "assistant", content: result.text, toolCalls: result.toolCalls, ...(result.reasoning ? { reasoning: result.reasoning } : {}) });
+      messages.push({ role: "assistant", content: result.text, toolCalls: result.toolCalls, ...(result.reasoning ? { reasoning: result.reasoning } : {}), ...(result.responseItems ? { responseItems: result.responseItems } : {}) });
       // The narration that introduced these tools is not a message. The model
       // keeps it, the owner sees the tools' activity and the `say` updates.
       persistSession(db, threadID, turnID, "running", messages, summary, stepCount, tokenCount);

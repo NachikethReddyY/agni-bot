@@ -3493,3 +3493,7 @@ button:disabled {
     transform: translate(-50%, -50%);
   }
 }
+.chatgpt-connection { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.chatgpt-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.chatgpt-connection .settings-row { flex-wrap: wrap; gap: 10px; overflow-wrap: anywhere; }
+.chatgpt-welcome { z-index: 110; }
