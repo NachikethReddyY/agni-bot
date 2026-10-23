@@ -37,6 +37,20 @@ export function AgentProfileView() {
 
   if (!agent) return null;
 
+  /** Enter or leaving the field both commit — no lost typing on the way out. */
+  const commitName = () => {
+    const trimmed = name.trim();
+    if (trimmed.length === 0 || trimmed === agent.name) return;
+    model.renameAgent(trimmed, agent.id);
+    setSaved("name");
+  };
+  const commitTag = () => {
+    const trimmed = tag.trim();
+    if (trimmed.length === 0 || trimmed === (agent.role ?? "")) return;
+    model.updateAgentProfile(agent.id, { role: trimmed });
+    setSaved("tag");
+  };
+
   const tasks = snapshot.tasks.filter((task) => task.ownerAgentId === agent.id);
   const visibility = agent.visibility ?? "summary";
 
@@ -67,12 +81,10 @@ export function AgentProfileView() {
             value={name}
             maxLength={64}
             onChange={(event) => setName(event.target.value)}
+            onBlur={commitName}
             onKeyDown={(event) => {
               if (event.key !== "Enter") return;
-              const trimmed = name.trim();
-              if (trimmed.length === 0 || trimmed === agent.name) return;
-              model.renameAgent(trimmed, agent.id);
-              setSaved("name");
+              commitName();
             }}
           />
           <div className="profile-by">by {agent.id}</div>
@@ -87,12 +99,10 @@ export function AgentProfileView() {
             maxLength={160}
             placeholder="What is it for?"
             onChange={(event) => setTag(event.target.value)}
+            onBlur={commitTag}
             onKeyDown={(event) => {
               if (event.key !== "Enter") return;
-              const trimmed = tag.trim();
-              if (trimmed === (agent.role ?? "")) return;
-              model.updateAgentProfile(agent.id, { role: trimmed });
-              setSaved("tag");
+              commitTag();
             }}
           />
         </div>

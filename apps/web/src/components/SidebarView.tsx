@@ -5,7 +5,6 @@
  * Each agent has one enduring conversation surface; sessions are seams in it,
  * not list entries (blueprint v3 §5).
  */
-import { useState } from "react";
 import { Plus, Search, Star, X } from "lucide-react";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import { AppTile, SidebarAgentBadge, connectionShortStatus, initials } from "./bits";
@@ -20,7 +19,6 @@ function stateLabel(state: string): string {
 export function SidebarView() {
   const model = useAppModel();
   const snapshot = useAppSnapshot();
-  const [creating, setCreating] = useState(false);
 
   // Pinned agents go into the grid at the top; the rest keep the roster's
   // order in the list below.
@@ -126,8 +124,9 @@ export function SidebarView() {
         <button
           type="button"
           className="icon-btn"
-          aria-label="Create an agent"
-          onClick={() => setCreating(true)}
+          aria-label="Start a new chat"
+          title="New chat"
+          onClick={() => model.openNewChat()}
         >
           <Plus size={15} />
         </button>
@@ -215,88 +214,7 @@ export function SidebarView() {
           ) : null}
         </button>
       </div>
-
-      {creating ? <NewAgentSheet onClose={() => setCreating(false)} /> : null}
     </aside>
-  );
-}
-
-/**
- * The "+" in the roster: name the agent, say what it is for, say what it
- * should do. The daemon creates it the same way the `create_agent` chat tool
- * does, so it lands in the roster with a prompt and a colour.
- */
-function NewAgentSheet({ onClose }: { onClose: () => void }) {
-  const model = useAppModel();
-  const [name, setName] = useState("");
-  const [role, setRole] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const ready = name.trim().length > 0 && prompt.trim().length > 0;
-
-  return (
-    <div
-      className="overlay new-agent-overlay"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <div className="dialog" role="dialog" aria-label="New agent">
-        <div className="dialog-head">
-          <h2>New agent</h2>
-          <button type="button" className="icon-btn" aria-label="Cancel" onClick={onClose}>
-            <X size={15} />
-          </button>
-        </div>
-        <label className="field">
-          <span className="field-label">Name</span>
-          <input
-            className="text-input"
-            value={name}
-            maxLength={64}
-            placeholder="FRIDAY"
-            onChange={(event) => setName(event.target.value)}
-          />
-        </label>
-        <label className="field">
-          <span className="field-label">Tag</span>
-          <input
-            className="text-input"
-            value={role}
-            maxLength={160}
-            placeholder="inbox manager"
-            onChange={(event) => setRole(event.target.value)}
-          />
-        </label>
-        <label className="field">
-          <span className="field-label">What it should do</span>
-          <textarea
-            className="text-area"
-            rows={4}
-            value={prompt}
-            maxLength={8000}
-            placeholder="You are FRIDAY. You read my inbox, draft replies, and never send without asking."
-            onChange={(event) => setPrompt(event.target.value)}
-          />
-        </label>
-        <div className="dialog-actions">
-          <span className="spacer" />
-          <button type="button" className="btn" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn primary"
-            disabled={!ready}
-            onClick={() => {
-              model.createAgent({ name, prompt, role });
-              onClose();
-            }}
-          >
-            Create
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }
 

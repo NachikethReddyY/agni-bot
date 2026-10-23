@@ -305,6 +305,34 @@ describe("websocket end-to-end", () => {
     expect(row?.role_detail).toBe("inbox manager");
   });
 
+  test("a bot made as New bot can be named straight afterwards", async () => {
+    await startTestServer();
+    // Exactly what the app sends when the roster's "+" makes a bot: nothing
+    // is asked for first, the bot simply exists under a placeholder name.
+    client!.send({
+      type: "agent.create",
+      id: "new_bot",
+      name: "New bot",
+      role: "unnamed",
+      prompt: "You are {name}, an agent {user} just created in the app.",
+    });
+    const roster = await client!.next("agents.update");
+    const created = roster.agents.find((agent) => agent.id === "new_bot");
+    expect(created?.name).toBe("New bot");
+    expect(created?.role).toBe("unnamed");
+
+    // Naming it by telling it in chat is the same rename the profile uses.
+    client!.send({ type: "agent.rename", agentId: "new_bot", name: "Bob" });
+    const renamed = await client!.next("agent.updated", {
+      match: (frame) => frame.agentId === "new_bot" && frame.displayName === "Bob",
+    });
+    expect(renamed.displayName).toBe("Bob");
+    const row = db!
+      .query<{ display_name: string | null }, []>("SELECT display_name FROM agents WHERE id = 'new_bot'")
+      .get();
+    expect(row?.display_name).toBe("Bob");
+  });
+
   test("refuses to create an agent that already exists", async () => {
     await startTestServer();
     client!.send({ type: "agent.create", name: "Vision", id: "ea", prompt: "A second primary agent." });

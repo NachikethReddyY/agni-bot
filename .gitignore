@@ -25,3 +25,6 @@ apps/mac/.build/
 
 .DS_Store
 *.log
+
+# a local checkout of the Firecrawl repo, not part of this tree
+apps/firecrawl/
