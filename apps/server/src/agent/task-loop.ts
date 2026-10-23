@@ -159,7 +159,7 @@ const TASK_SYSTEM_PROMPT = [
   // Communication shape: separate progress messages, not one wall. A long
   // install or research pass should announce itself and keep the final answer
   // distinct. Passwords only ever go through `run_privileged`'s secure prompt.
-  "When work will take more than a few seconds, send a one- or two-sentence progress update with `say` before starting and after each milestone; keep the final answer short, separate, and do not repeat the updates. " +
+  "For any task with more than one step, call `say` with a one- or two-sentence update before starting and after each milestone, so the owner sees separate messages as the work progresses; keep the final answer short, separate, and do not repeat the updates. " +
   "For work that will take minutes, put it on a background job or delegate it and return, so the owner can keep chatting while the UI tracks it. " +
   "Never ask the owner to type a password in chat: use `run_privileged` for commands that need one, and never put a secret in a command.",
 ].join(" ");
@@ -415,7 +415,9 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, settings.turnTimeoutMs);
   const abort = (): void => controller.abort();
   run.signal.addEventListener("abort", abort, { once: true });
-  let finalText = "";
+  // The last thing the agent said, for the turn result. Each utterance has
+  // already been published as its own message.
+  let answerText = "";
   let stopReason: StopReason = "end";
   // What the tools actually did this turn. A turn that runs out of budget has
   // to say what it managed — "I reached the limit" alone is not an answer.
@@ -437,6 +439,27 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   let saidSomething = false;
   const offRoadGuard = !persona.id.startsWith("coder") && !CODE_REQUEST.test(run.text) && !FILE_REQUEST.test(run.text);
   let activeStepText = "";
+  // Channel turns show progress where the owner asked for it: `say` messages
+  // and the final answer. A model's between-tool narration is thinking aloud,
+  // so it stays in the model's context instead of becoming a bubble for every
+  // internal step. Direct turns (the CLI) keep streaming live for feedback.
+  const channelBacked = Boolean(run.channelID);
+  const publish = (text: string, uiHint: "normal" | "progress" = "normal"): void => {
+    if (text.trim().length === 0) return;
+    appendMessage(db, { threadID, turnID, role: "assistant", text });
+    if (!run.channelID) return;
+    const row = appendChannelMessage(db, {
+      channelID: run.channelID, fromType: "agent", fromID: persona.id, text, turnID, uiHint,
+    });
+    const agent = db.query<{ display_name: string; avatar_color: string }, [string]>(
+      "SELECT display_name, avatar_color FROM agents WHERE id = ?",
+    ).get(persona.id);
+    run.emit({
+      type: "msg.new", id: row.id, channelId: run.channelID, fromType: "agent", fromId: persona.id,
+      senderName: agent?.display_name ?? persona.name, senderColor: agent?.avatar_color,
+      text, internal: false, uiHint, createdAt: row.created_at,
+    });
+  };
   try {
     while (stepCount < MAX_STEPS && tokenCount < MAX_TOKENS) {
       if (controller.signal.aborted) { stopReason = timedOut ? "timeout" : "cancelled"; break; }
@@ -460,7 +483,9 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         maxTokens: Math.max(1, Math.min(2_048, MAX_TOKENS - tokenCount)),
         onDelta: (delta: string) => {
           activeStepText += delta;
-          run.emit({ type: "token", turnID, threadID, delta });
+          // Hold channel turns until the step is known to be the answer: a
+          // step that calls tools is narration, not something to show.
+          if (!channelBacked) run.emit({ type: "token", turnID, threadID, delta });
         },
       });
       activeStepText = "";
@@ -471,14 +496,21 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
       tokenCount += result.outputTokens ?? estimateTokens(result.text + JSON.stringify(result.toolCalls ?? []));
       usage = { provider: result.provider, model: result.model, inputTokens: result.inputTokens, outputTokens: result.outputTokens, latencyMs: result.latencyMs };
       if (!result.toolCalls?.length) {
-        finalText += result.text;
+        answerText = result.text;
         messages.push(assistantMessage(result.text, result.reasoning));
         consecutiveNonTextSteps = 0;
+        // The buffered answer arrives as one token so the client fills the
+        // bubble it already owns, then the durable message seals it.
+        if (channelBacked && result.text.length > 0) {
+          run.emit({ type: "token", turnID, threadID, delta: result.text });
+        }
+        publish(result.text);
         break;
       }
 
       messages.push({ role: "assistant", content: result.text, toolCalls: result.toolCalls, ...(result.reasoning ? { reasoning: result.reasoning } : {}) });
-      finalText += result.text;
+      // The narration that introduced these tools is not a message. The model
+      // keeps it, the owner sees the tools' activity and the `say` updates.
       persistSession(db, threadID, turnID, "running", messages, summary, stepCount, tokenCount);
       let stepProgressed = false;
       for (const call of result.toolCalls) {
@@ -541,16 +573,21 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
       // nothing is flailing, and that is what the guard is for.
       consecutiveNonTextSteps = stepProgressed ? 0 : consecutiveNonTextSteps + 1;
       if (consecutiveNonTextSteps > MAX_NONTEXT_STEPS) {
-        finalText += "I couldn't make progress on this — please rephrase or continue in a new message.";
-        messages.push({ role: "assistant", content: finalText });
+        const text = "I couldn't make progress on this — please rephrase or continue in a new message.";
+        answerText = text;
+        run.emit({ type: "token", turnID, threadID, delta: text });
+        messages.push({ role: "assistant", content: text });
+        publish(text);
         break;
       }
       // The turn is reading the app's own source instead of doing the work.
       // Say so plainly, and say what it can actually do.
       if (offRoadSteps >= OFF_ROAD_STOP_AT && !acted) {
-        finalText = offRoadMessage(persona.tools);
-        run.emit({ type: "token", turnID, threadID, delta: finalText });
-        messages.push({ role: "assistant", content: finalText });
+        const text = offRoadMessage();
+        answerText = text;
+        run.emit({ type: "token", turnID, threadID, delta: text });
+        messages.push({ role: "assistant", content: text });
+        publish(text);
         break;
       }
       if (stepCount >= MAX_STEPS || tokenCount >= MAX_TOKENS) break;
@@ -559,10 +596,12 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     for (const [sig, step] of recentCalls) {
       if (stepCount - step > DUPLICATE_WINDOW) recentCalls.delete(sig);
     }
-    if (!finalText && stopReason === "end" && (tokenCount >= MAX_TOKENS || stepCount >= MAX_STEPS)) {
-      finalText = budgetExhaustedMessage(toolOutcomes);
-      run.emit({ type: "token", turnID, threadID, delta: finalText });
-      messages.push({ role: "assistant", content: finalText });
+    if (!answerText && stopReason === "end" && (tokenCount >= MAX_TOKENS || stepCount >= MAX_STEPS)) {
+      const text = budgetExhaustedMessage(toolOutcomes);
+      answerText = text;
+      run.emit({ type: "token", turnID, threadID, delta: text });
+      messages.push({ role: "assistant", content: text });
+      publish(text);
     }
   } catch (error) {
     if (error instanceof GuardrailError) {
@@ -570,23 +609,40 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
       // error frame so the user sees why the chain stopped.
       stopReason = "error";
       run.emit({ type: "error", code: error.code, message: error.message });
-      finalText = error.message;
-      messages.push({ role: "assistant", content: finalText });
+      answerText = error.message;
+      messages.push({ role: "assistant", content: answerText });
+      publish(answerText);
     } else {
       stopReason = controller.signal.aborted ? (timedOut ? "timeout" : "cancelled") : "error";
-      const code = error instanceof RouterBusyError ? "server_busy" : error instanceof RouterError ? error.code : "task_turn_failed";
-      const message = error instanceof Error ? error.message : String(error);
-      run.emit({ type: "error", code, message });
-      if (activeStepText) {
-        // Keep the streamed fragment in durable history, but leave the turn
-        // marked failed so the UI never presents an interrupted task as done.
-        finalText += activeStepText;
-        messages.push({ role: "assistant", content: activeStepText });
-      } else if (!finalText && stopReason === "error") {
-        // A turn that failed with nothing to say still owes the user a trace:
-        // they asked something, and silence reads as "still thinking".
-        finalText = `This turn failed: ${message}`;
-        messages.push({ role: "assistant", content: finalText });
+      if (stopReason === "cancelled") {
+        // The owner stopped the turn on purpose. Keep whatever streamed so
+        // the transcript ends where the work did, and let `turn.end` explain
+        // it — an error frame would make the client show a failure instead.
+        if (activeStepText) {
+          answerText = activeStepText;
+          messages.push({ role: "assistant", content: activeStepText });
+          if (channelBacked) run.emit({ type: "token", turnID, threadID, delta: activeStepText });
+          publish(activeStepText);
+          activeStepText = "";
+        }
+      } else {
+        const code = error instanceof RouterBusyError ? "server_busy" : error instanceof RouterError ? error.code : "task_turn_failed";
+        const message = error instanceof Error ? error.message : String(error);
+        run.emit({ type: "error", code, message });
+        if (activeStepText) {
+          // Keep the streamed fragment in durable history, but leave the turn
+          // marked failed so the UI never presents an interrupted task as done.
+          answerText = activeStepText;
+          messages.push({ role: "assistant", content: activeStepText });
+          if (channelBacked) run.emit({ type: "token", turnID, threadID, delta: activeStepText });
+          publish(activeStepText);
+        } else if (!answerText && stopReason === "error") {
+          // A turn that failed with nothing to say still owes the user a trace:
+          // they asked something, and silence reads as "still thinking".
+          answerText = `This turn failed: ${message}`;
+          messages.push({ role: "assistant", content: answerText });
+          publish(answerText);
+        }
       }
     }
   } finally {
@@ -596,22 +652,6 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     if (runningTurns.get(threadID)?.turnID === turnID) runningTurns.delete(threadID);
   }
 
-  if (finalText) {
-    appendMessage(db, { threadID, turnID, role: "assistant", text: finalText });
-    if (run.channelID) {
-      const row = appendChannelMessage(db, {
-        channelID: run.channelID, fromType: "agent", fromID: persona.id, text: finalText, turnID,
-      });
-      const agent = db.query<{ display_name: string; avatar_color: string }, [string]>(
-        "SELECT display_name, avatar_color FROM agents WHERE id = ?",
-      ).get(persona.id);
-      run.emit({
-        type: "msg.new", id: row.id, channelId: run.channelID, fromType: "agent", fromId: persona.id,
-        senderName: agent?.display_name ?? persona.name, senderColor: agent?.avatar_color,
-        text: finalText, internal: false, uiHint: "normal", createdAt: row.created_at,
-      });
-    }
-  }
   if (run.channelID) void compactChannelHistory(db, router, run.channelID, persona.id);
   finishTurn(db, { id: turnID, stopReason, ...usage });
   touchThread(db, threadID);
@@ -628,7 +668,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     state: stopReason === "needs_input" ? "waiting" : "idle",
     ...(run.delegation?.taskID ? { taskId: run.delegation.taskID } : {}),
   });
-  return { turnID, text: finalText, stopReason };
+  return { turnID, text: answerText, stopReason };
 }
 
 /** What one tool call achieved, so a turn can report it in words. */
@@ -739,15 +779,12 @@ function offRoadNote(tools: string[]): string {
   ].join(" ");}
 
 /** The honest ending for a turn that spent itself reading the source. */
-function offRoadMessage(tools: string[]): string {
-  const available = actionTools(tools);
+function offRoadMessage(): string {
   return [
-    "I went looking through the app's own source instead of doing the work — reading the code does not give me a new capability, " +
-    "and I cannot add features to the app I run in.",
-    available.length > 0
-      ? `What I can do right now: ${available.join(", ")}.`
-      : "I do not have a tool that covers this yet.",
-    "If what you asked for is not in that list, say so and I will tell you what it would take.",
+    "I can't change how the app itself works — I'm the assistant running inside it, and reading its source doesn't " +
+    "let me add features.",
+    "I can still help with mail, tasks, memory, search, files, and research.",
+    "If your request needs a change to the app, it has to come from a developer.",
   ].join(" ");
 }
 

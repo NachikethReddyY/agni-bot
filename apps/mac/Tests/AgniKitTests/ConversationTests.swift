@@ -54,6 +54,22 @@ private func errorFrame(code: String, message: String) throws -> ServerFrame {
   try ServerFrame(wire: ["type": "error", "seq": 110, "code": code, "message": message])
 }
 
+private func msgNewFrame(
+  id: String,
+  text: String,
+  uiHint: String? = nil,
+  seq: Int = 95,
+  createdAt: String = "2026-10-22T11:00:01.000Z"
+) throws -> ServerFrame {
+  var object: [String: Any] = [
+    "type": "msg.new", "seq": seq, "id": id, "channelId": "main",
+    "fromType": "agent", "fromId": "agni", "senderName": "Agni",
+    "text": text, "internal": false, "createdAt": createdAt,
+  ]
+  if let uiHint { object["uiHint"] = uiHint }
+  return try ServerFrame(wire: object)
+}
+
 @Suite("transcript")
 struct TranscriptTests {
   @Test func aTurnStreamsIntoOneBubbleAndClosesWithItsUsage() throws {
@@ -80,6 +96,34 @@ struct TranscriptTests {
     #expect(conversation.messages[0].usage?.latencyMs == 412)
     #expect(conversation.isStreaming == false)
     #expect(effects.contains(.refreshThreadList))
+  }
+
+  @Test func eachStepIsSealedAsItsOwnBubble() throws {
+    var conversation = Conversation(agentID: "agni", threadID: "thr_1")
+    _ = conversation.apply(try startFrame(turnID: "trn_steps", threadID: "thr_1"))
+    _ = conversation.apply(try tokenFrame(turnID: "trn_steps", threadID: "thr_1", delta: "Checking."))
+    _ = conversation.apply(try msgNewFrame(id: "msg_step1", text: "Checking."))
+    _ = conversation.apply(try tokenFrame(turnID: "trn_steps", threadID: "thr_1", delta: "All set.", seq: 96))
+    _ = conversation.apply(try msgNewFrame(
+      id: "msg_step2", text: "All set.", seq: 97, createdAt: "2026-10-22T11:00:02.000Z"
+    ))
+    _ = conversation.apply(try endFrame(turnID: "trn_steps", threadID: "thr_1", reason: "end"))
+
+    #expect(conversation.messages.map(\.id) == ["msg_step1", "msg_step2"])
+    #expect(conversation.messages.map(\.text) == ["Checking.", "All set."])
+    #expect(conversation.messages.allSatisfy { $0.state == .complete })
+    #expect(conversation.isStreaming == false)
+  }
+
+  @Test func aCancelledTurnMarksItsSealedAnswerStopped() throws {
+    var conversation = Conversation(agentID: "agni", threadID: "thr_1")
+    _ = conversation.apply(try startFrame(turnID: "trn_half", threadID: "thr_1"))
+    _ = conversation.apply(try tokenFrame(turnID: "trn_half", threadID: "thr_1", delta: "half a thought"))
+    _ = conversation.apply(try msgNewFrame(id: "msg_half", text: "half a thought"))
+    _ = conversation.apply(try endFrame(turnID: "trn_half", threadID: "thr_1", reason: "cancelled"))
+
+    #expect(conversation.messages.count == 1)
+    #expect(conversation.messages[0].state == .stopped(.cancelled))
   }
 
   @Test func aCancelledTurnSaysSoAndKeepsThePartialText() throws {

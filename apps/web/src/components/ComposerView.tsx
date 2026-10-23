@@ -230,15 +230,15 @@ export function ComposerView() {
             model.updateTypingState(event.target.value.trim().length > 0);
           }}
           onKeyDown={onKeyDown}
-          placeholder={isStreaming ? "Agni is writing…" : `Message ${model.agent?.name ?? "Agni"}`}
-          aria-label={isStreaming ? "Agni is writing" : `Message ${model.agent?.name ?? "Agni"}`}
+          placeholder={isStreaming ? "Agni is working — send “stop” to interrupt" : `Message ${model.agent?.name ?? "Agni"}`}
+          aria-label={isStreaming ? "Agni is working; send stop to interrupt" : `Message ${model.agent?.name ?? "Agni"}`}
         />
 
         {isStreaming ? (
           <button
             type="button"
             className="composer-stop"
-            title="Stop this turn (⌘.)"
+            title="Stop this turn (⌘.) — or send “stop”"
             aria-label="Stop"
             onClick={() => model.stopTurn()}
           >
@@ -247,18 +247,17 @@ export function ComposerView() {
               style={{ width: 10, height: 10, borderRadius: 2, background: "currentColor" }}
             />
           </button>
-        ) : (
-          <button
-            type="button"
-            className="composer-send"
-            disabled={sending || (trimmed.length === 0 && attachments.length === 0)}
-            title="Send (Enter); new line (Shift+Enter)"
-            aria-label="Send"
-            onClick={() => void submit()}
-          >
-            {trimmed.length === 0 && attachments.length === 0 ? <Mic size={14} /> : <ArrowUp size={15} strokeWidth={2.4} />}
-          </button>
-        )}
+        ) : null}
+        <button
+          type="button"
+          className={`composer-send${trimmed.length === 0 && attachments.length === 0 ? " is-mic" : ""}`}
+          disabled={sending || (trimmed.length === 0 && attachments.length === 0)}
+          title="Send (Enter); new line (Shift+Enter)"
+          aria-label="Send"
+          onClick={() => void submit()}
+        >
+          {trimmed.length === 0 && attachments.length === 0 ? <Mic size={14} /> : <ArrowUp size={15} strokeWidth={2.4} />}
+        </button>
       </div>
       <div className="composer-hint">Enter to send · Shift+Enter for a new line · Drop files here</div>
     </div>

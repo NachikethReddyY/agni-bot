@@ -183,6 +183,8 @@ public struct Conversation: Sendable, Equatable {
   public var notices: [NoticeRow] = []
   /// Failure text by turn, so a turn that dies explains itself in place.
   private var failures: [String: String] = [:]
+  /// The last sealed answer of a running turn, so its fate lands on the right bubble.
+  private var turnAnswers: [String: String] = [:]
   /// The turn currently streaming into this thread, if any.
   public var inFlightTurnID: String?
   public var inFlightThreadID: String?
@@ -255,6 +257,7 @@ public struct Conversation: Sendable, Equatable {
     if let agentID { self.agentID = agentID }
     inFlightTurnID = nil
     inFlightThreadID = nil
+    turnAnswers.removeAll()
     messages = []
   }
 
@@ -269,6 +272,7 @@ public struct Conversation: Sendable, Equatable {
     inFlightTurnID = nil
     inFlightThreadID = nil
     adoptedTurns.removeAll()
+    turnAnswers.removeAll()
   }
 
   /// A session block boundary arrived: everything after this lands in the new
@@ -360,10 +364,23 @@ public struct Conversation: Sendable, Equatable {
         messages[index].senderName = incoming.senderName
         return []
       }
-      if role == .assistant, let index = messages.firstIndex(where: { $0.id == Self.assistantID(turnID: inFlightTurnID ?? "") && $0.isStreaming }) {
+      let isAnswer = role == .assistant && (incoming.uiHint == nil || incoming.uiHint == "normal")
+      if isAnswer, let index = messages.firstIndex(where: { $0.id == Self.assistantID(turnID: inFlightTurnID ?? "") && $0.isStreaming }) {
+        // Seal the text streamed for this step under its durable id; the next
+        // token opens a fresh bubble, so each message stays its own row.
+        messages[index].id = incoming.id
+        messages[index].text = incoming.text
+        messages[index].createdAt = ISO8601DateFormatter().date(from: incoming.createdAt)
+        messages[index].state = .complete
         messages[index].senderName = incoming.senderName
         messages[index].senderColor = incoming.senderColor
         messages[index].uiHint = incoming.uiHint
+        messages[index].agentID = incoming.fromId
+        if let turnID = inFlightTurnID {
+          messages[index].turnID = turnID
+          turnAnswers[turnID] = incoming.id
+        }
+        openStreamingBubble(agentID: incoming.fromId)
         return []
       }
       messages.append(ChatMessage(
@@ -371,6 +388,14 @@ public struct Conversation: Sendable, Equatable {
         agentID: role == .assistant ? incoming.fromId : nil, state: .complete,
         senderName: incoming.senderName, senderColor: incoming.senderColor, uiHint: incoming.uiHint
       ))
+      if isAnswer, let turnID = inFlightTurnID { turnAnswers[turnID] = incoming.id }
+      // The empty bubble opened for the next step sits before a progress row
+      // that just arrived; keep it last so progress reads above the answer.
+      if role == .assistant, incoming.uiHint == "progress",
+         let index = messages.firstIndex(where: { $0.id == Self.assistantID(turnID: inFlightTurnID ?? "") && $0.isStreaming }) {
+        let streamed = messages.remove(at: index)
+        messages.append(streamed)
+      }
       return []
 
     case .agentUpdated(let updated):
@@ -431,19 +456,38 @@ public struct Conversation: Sendable, Equatable {
       let isOurs = adopted || belongsTo(threadID: end.threadID, conversationID: end.conversationID)
         || inFlightTurnID == end.turnID
       let id = Self.assistantID(turnID: end.turnID)
+      let answerID = turnAnswers[end.turnID]
       if let index = messages.firstIndex(where: { $0.id == id }) {
-        // A turn that ended badly keeps the daemon's own explanation when one
-        // arrived while it was running. "Failed" is not an answer to "why did
-        // nothing come back"; the provider's message is.
-        if end.reason == .end {
-          messages[index].state = .complete
-        } else if let reason = failures.removeValue(forKey: end.turnID) {
+        if messages[index].text.isEmpty, answerID != nil {
+          // The answer lives under its own durable id; this is only the empty
+          // bubble opened for a next step that never came.
+          messages.remove(at: index)
+        } else {
+          // A turn that ended badly keeps the daemon's own explanation when one
+          // arrived while it was running. "Failed" is not an answer to "why did
+          // nothing come back"; the provider's message is.
+          if end.reason == .end {
+            messages[index].state = .complete
+          } else if let reason = failures[end.turnID] {
+            messages[index].state = .failed(reason)
+          } else {
+            messages[index].state = .stopped(end.reason)
+          }
+          messages[index].usage = end.usage
+        }
+      }
+      if let answerID, end.reason.wire != "end", end.reason.wire != "needs_input",
+         let index = messages.firstIndex(where: { $0.id == answerID }) {
+        // The streamed bubble is now a durable message, so turn.end has to
+        // find it by id to mark a cancelled or failed answer honestly.
+        if let reason = failures[end.turnID] {
           messages[index].state = .failed(reason)
         } else {
           messages[index].state = .stopped(end.reason)
         }
         messages[index].usage = end.usage
       }
+      turnAnswers[end.turnID] = nil
       failures[end.turnID] = nil
       guard isOurs else { return [.unread(threadID: end.threadID), .refreshThreadList] }
       if inFlightTurnID == end.turnID {
@@ -571,6 +615,21 @@ public struct Conversation: Sendable, Equatable {
         return
       }
     }
+  }
+
+  /// A sealed answer frees `asst_<turnID>` for the next step. Keep an empty
+  /// streaming bubble so the next token (and its tool activity) has a home; it
+  /// is removed at turn.end if the turn says nothing more.
+  private mutating func openStreamingBubble(agentID: String? = nil) {
+    guard let turnID = inFlightTurnID, let threadID = inFlightThreadID else { return }
+    let id = Self.assistantID(turnID: turnID)
+    guard !messages.contains(where: { $0.id == id }) else { return }
+    messages.append(
+      ChatMessage(
+        id: id, role: .assistant, text: "", createdAt: Date(), turnID: turnID,
+        agentID: agentID ?? self.agentID, sessionID: threadID, state: .streaming
+      )
+    )
   }
 
   private func streamingIndex() -> Int? {

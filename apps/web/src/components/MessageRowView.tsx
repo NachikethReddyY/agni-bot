@@ -43,6 +43,7 @@ export function MessageRowView({
   return (
     <div
       className={`message-row ${message.role}${isSelected ? " selected" : ""}`}
+      data-message-id={message.id}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenu({
@@ -138,6 +139,7 @@ function AssistantProse({
   agent: AgentInfo | null | undefined;
   explanation: string | null;
 }) {
+  const snapshot = useAppSnapshot();
   const failureText = explanation
     ? `No reply — ${explanation.toLowerCase()}.`
     : `${agent?.name ?? "The assistant"} produced no reply, and the daemon recorded no reason. Ask it to share this thread to see the records.`;
@@ -163,7 +165,9 @@ function AssistantProse({
         <div className="stop-explanation">Response didn't finish · {explanation}</div>
       ) : null}
 
-      {message.tools.length > 0 ? <ActivityStrip message={message} /> : null}
+      {message.tools.length > 0 && snapshot.preferences.showActivity ? (
+        <ActivityStrip message={message} />
+      ) : null}
     </div>
   );
 }

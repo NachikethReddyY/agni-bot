@@ -129,7 +129,7 @@ describe("web shell", () => {
     expect(screen.getByText("Not connected")).toBeInTheDocument();
   });
 
-  it("opens the agent switcher with Command-K and closes on Escape", () => {
+  it("opens the search overlay with Command-K and closes on Escape", () => {
     SecretStore.save("test-token");
     const model = new AppModel({
       makeTransport: idleTransport,
@@ -141,9 +141,9 @@ describe("web shell", () => {
     renderApp(model);
 
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    expect(screen.getByRole("dialog", { name: "Switch agent" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Search" })).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "Switch agent" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
   });
 });

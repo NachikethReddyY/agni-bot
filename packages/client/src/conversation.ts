@@ -164,6 +164,8 @@ export class Conversation {
 
   /** Failure text by turn, so a turn that dies explains itself in place. */
   private failures = new Map<string, string>();
+  /** The last sealed answer of a running turn, so its fate lands on the right bubble. */
+  private turnAnswers = new Map<string, string>();
   /**
    * Turns whose start bound them into this conversation by conversationID;
    * their tokens carry only a block id, so attribution survives the seam.
@@ -253,6 +255,7 @@ export class Conversation {
     if (agentID) this.agentID = agentID;
     this.inFlightTurnID = null;
     this.inFlightThreadID = null;
+    this.turnAnswers.clear();
     this.messages = [];
   }
 
@@ -265,6 +268,7 @@ export class Conversation {
     this.inFlightTurnID = null;
     this.inFlightThreadID = null;
     this.adoptedTurns.clear();
+    this.turnAnswers.clear();
   }
 
   /** A session block boundary arrived: everything after this lands in the new block. */
@@ -404,16 +408,29 @@ export class Conversation {
             return [];
           }
         }
-        // A progress update is its own bubble even while the turn is
-        // streaming; only the final answer folds into the streaming message.
-        if (role === "assistant" && frame.uiHint !== "progress") {
+        // An ordinary answer is its own bubble: seal the text that streamed for
+        // this step under the durable id, then let the next token open a fresh
+        // bubble. Progress and notices were never part of the answer, so they
+        // are always separate rows.
+        const isAnswer = role === "assistant" && (frame.uiHint === undefined || frame.uiHint === "normal");
+        if (isAnswer) {
           const streamed = this.messages.find(
             (message) => message.id === Conversation.assistantID(this.inFlightTurnID ?? "") && isStreaming(message),
           );
           if (streamed) {
+            streamed.id = frame.id;
+            streamed.text = frame.text;
+            streamed.createdAt = parseISO(frame.createdAt);
+            streamed.state = { kind: "complete" };
             streamed.senderName = frame.senderName;
             streamed.senderColor = frame.senderColor ?? null;
             streamed.uiHint = frame.uiHint ?? null;
+            streamed.agentID = frame.fromId;
+            if (this.inFlightTurnID) {
+              streamed.turnID = this.inFlightTurnID;
+              this.turnAnswers.set(this.inFlightTurnID, frame.id);
+            }
+            this.openStreamingBubble(frame.fromId);
             return [];
           }
         }
@@ -433,6 +450,7 @@ export class Conversation {
             questionId: frame.questionId ?? null,
           }),
         );
+        if (isAnswer && this.inFlightTurnID) this.turnAnswers.set(this.inFlightTurnID, frame.id);
         // The in-flight answer bubble was created at turn.start, before the
         // progress update. Keep it last so progress reads above the answer.
         if (role === "assistant" && frame.uiHint === "progress") {
@@ -527,18 +545,37 @@ export class Conversation {
           this.inFlightTurnID === frame.turnID;
         const id = Conversation.assistantID(frame.turnID);
         const message = this.messages.find((candidate) => candidate.id === id);
+        const answerID = this.turnAnswers.get(frame.turnID);
         if (message) {
-          // A turn that ended badly keeps the daemon's own explanation when one
-          // arrived while it was running.
-          if (frame.stopReason === "end") {
-            message.state = { kind: "complete" };
+          if (message.text.length === 0 && answerID !== undefined) {
+            // The answer was sealed under its durable id; this is only the
+            // empty bubble opened for a next step that never came.
+            this.messages = this.messages.filter((candidate) => candidate !== message);
           } else {
-            const reason = this.failures.get(frame.turnID);
-            if (reason !== undefined) message.state = { kind: "failed", reason };
-            else message.state = { kind: "stopped", reason: frame.stopReason };
+            // A turn that ended badly keeps the daemon's own explanation when
+            // one arrived while it was running.
+            if (frame.stopReason === "end") {
+              message.state = { kind: "complete" };
+            } else {
+              const reason = this.failures.get(frame.turnID);
+              if (reason !== undefined) message.state = { kind: "failed", reason };
+              else message.state = { kind: "stopped", reason: frame.stopReason };
+            }
+            message.usage = frame.usage ?? null;
           }
-          message.usage = frame.usage ?? null;
         }
+        if (answerID !== undefined && frame.stopReason !== "end" && frame.stopReason !== "needs_input") {
+          // The streamed bubble is now a durable message, so turn.end has to
+          // find it by id to mark a cancelled or failed answer honestly.
+          const answer = this.messages.find((candidate) => candidate.id === answerID);
+          if (answer) {
+            const reason = this.failures.get(frame.turnID);
+            if (reason !== undefined) answer.state = { kind: "failed", reason };
+            else answer.state = { kind: "stopped", reason: frame.stopReason };
+            answer.usage = frame.usage ?? null;
+          }
+        }
+        this.turnAnswers.delete(frame.turnID);
         this.failures.delete(frame.turnID);
         if (!isOurs) return [{ kind: "unread", threadID: frame.threadID }, { kind: "refreshThreadList" }];
         if (this.inFlightTurnID === frame.turnID) {
@@ -662,6 +699,29 @@ export class Conversation {
 
   private adopt(threadID: string): void {
     if (this.threadID === null) this.threadID = threadID;
+  }
+
+  /**
+   * A sealed answer frees `asst_<turnID>` for the next step. Keep an empty
+   * streaming bubble so the next token (and its tool activity) has a home; it
+   * is removed at turn.end if the turn says nothing more.
+   */
+  private openStreamingBubble(agentID: string = this.agentID): void {
+    if (this.inFlightTurnID === null || this.inFlightThreadID === null) return;
+    const id = Conversation.assistantID(this.inFlightTurnID);
+    if (this.messages.some((message) => message.id === id)) return;
+    this.messages.push(
+      newMessage({
+        id,
+        role: "assistant",
+        text: "",
+        createdAt: new Date(),
+        turnID: this.inFlightTurnID,
+        agentID,
+        sessionID: this.inFlightThreadID,
+        state: { kind: "streaming" },
+      }),
+    );
   }
 
   private attach(tool: ToolActivity): void {

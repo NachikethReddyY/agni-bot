@@ -2,7 +2,7 @@
  * App settings reached from the account control at the bottom of the sidebar:
  * account, plugins, model providers, and this browser's pairing.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   Cpu,
@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import type { PluginInfo, ProviderStatus } from "@agni/client";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
-import { PresenceDot, Spinner } from "./bits";
+import { PresenceDot, Spinner, Switch } from "./bits";
 import { AddProviderView } from "./AddProviderView";
 import { ConfigurePluginView } from "./ConfigurePluginView";
 
@@ -70,20 +70,22 @@ export function SettingsView() {
     <div className="settings-overlay" role="dialog" aria-label="Settings">
       <nav className="settings-rail">
         <h2>Settings</h2>
-        {SECTIONS.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button
-              type="button"
-              key={item.id}
-              className={`settings-tab${section === item.id ? " active" : ""}`}
-              onClick={() => setSection(item.id)}
-            >
-              <Icon size={14} />
-              {item.title}
-            </button>
-          );
-        })}
+        <div className="settings-tabs">
+          {SECTIONS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                type="button"
+                key={item.id}
+                className={`settings-tab${section === item.id ? " active" : ""}`}
+                onClick={() => setSection(item.id)}
+              >
+                <Icon size={14} />
+                {item.title}
+              </button>
+            );
+          })}
+        </div>
         <span className="settings-rail-spacer" />
         <button type="button" className="settings-back" onClick={() => model.closeSettings()}>
           <ArrowLeft size={13} />
@@ -138,7 +140,79 @@ function GeneralSection() {
           </div>
         </div>
       </div>
+      <PreferencesGroup />
       <ConnectionGroup />
+    </div>
+  );
+}
+
+/**
+ * Browser-local preferences. Each switch changes something real, right away:
+ * the notification is posted or not, the typing indicator is sent or not, and
+ * the tool activity is drawn or not.
+ */
+function PreferencesGroup() {
+  const model = useAppModel();
+  const snapshot = useAppSnapshot();
+  const preferences = snapshot.preferences;
+  return (
+    <div className="settings-section">
+      <div>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 500 }}>This browser</h3>
+        <div className="settings-note">Preferences live in this browser, not on the daemon.</div>
+      </div>
+      <div className="settings-group preference-group">
+        <PreferenceRow
+          label="Desktop notifications"
+          note="A quiet notification when the agent answers while you are elsewhere."
+        >
+          <Switch
+            label="Desktop notifications"
+            checked={preferences.notifications}
+            onChange={(next) => model.setPreference("notifications", next)}
+          />
+        </PreferenceRow>
+        <PreferenceRow
+          label="Show that you are typing"
+          note="Tells the agent you are mid-sentence, so it does not answer too early."
+        >
+          <Switch
+            label="Show that you are typing"
+            checked={preferences.typingIndicator}
+            onChange={(next) => model.setPreference("typingIndicator", next)}
+          />
+        </PreferenceRow>
+        <PreferenceRow
+          label="Tool activity"
+          note="Show the quiet strip under an answer that says what the agent ran."
+        >
+          <Switch
+            label="Tool activity"
+            checked={preferences.showActivity}
+            onChange={(next) => model.setPreference("showActivity", next)}
+          />
+        </PreferenceRow>
+      </div>
+    </div>
+  );
+}
+
+function PreferenceRow({
+  label,
+  note,
+  children,
+}: {
+  label: string;
+  note: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="preference-row">
+      <div className="preference-text">
+        <div className="preference-label">{label}</div>
+        <div className="settings-note">{note}</div>
+      </div>
+      {children}
     </div>
   );
 }

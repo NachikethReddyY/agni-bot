@@ -134,6 +134,78 @@ describe("transcript", () => {
     expect(conversation.messages[1]?.text).toBe("Working on it.");
   });
 
+  test("each step is sealed as its own bubble, not one growing reply", () => {
+    const conversation = new Conversation("agni", "thr_1");
+    conversation.apply(startFrame("trn_steps", "thr_1"));
+    conversation.apply(tokenFrame("trn_steps", "thr_1", "Checking the installer."));
+    conversation.apply(wire({
+      type: "msg.new", seq: 95, id: "msg_step1", channelId: "main",
+      fromType: "agent", fromId: "agni", senderName: "Agni",
+      text: "Checking the installer.", internal: false, uiHint: "normal",
+      createdAt: "2026-10-22T11:00:01.000Z",
+    }));
+    conversation.apply(tokenFrame("trn_steps", "thr_1", "All set.", 96));
+    conversation.apply(wire({
+      type: "msg.new", seq: 97, id: "msg_step2", channelId: "main",
+      fromType: "agent", fromId: "agni", senderName: "Agni",
+      text: "All set.", internal: false, uiHint: "normal",
+      createdAt: "2026-10-22T11:00:02.000Z",
+    }));
+    conversation.apply(endFrame("trn_steps", "thr_1", "end"));
+
+    expect(conversation.messages.map((message) => [message.id, message.text])).toEqual([
+      ["msg_step1", "Checking the installer."],
+      ["msg_step2", "All set."],
+    ]);
+    expect(conversation.messages.every((message) => isComplete(message))).toBe(true);
+    expect(conversation.isStreaming).toBe(false);
+  });
+
+  test("progress stays separate from the sealed answers", () => {
+    const conversation = new Conversation("agni", "thr_1");
+    conversation.apply(startFrame("trn_mix", "thr_1"));
+    conversation.apply(tokenFrame("trn_mix", "thr_1", "Checking."));
+    conversation.apply(wire({
+      type: "msg.new", seq: 95, id: "msg_a", channelId: "main",
+      fromType: "agent", fromId: "agni", senderName: "Agni",
+      text: "Checking.", internal: false, uiHint: "normal",
+      createdAt: "2026-10-22T11:00:01.000Z",
+    }));
+    conversation.apply(wire({
+      type: "msg.new", seq: 96, id: "msg_progress", channelId: "main",
+      fromType: "agent", fromId: "agni", senderName: "Agni",
+      text: "Looking at the list.", internal: false, uiHint: "progress",
+      createdAt: "2026-10-22T11:00:02.000Z",
+    }));
+    conversation.apply(tokenFrame("trn_mix", "thr_1", "All done.", 97));
+    conversation.apply(wire({
+      type: "msg.new", seq: 98, id: "msg_b", channelId: "main",
+      fromType: "agent", fromId: "agni", senderName: "Agni",
+      text: "All done.", internal: false, uiHint: "normal",
+      createdAt: "2026-10-22T11:00:03.000Z",
+    }));
+    conversation.apply(endFrame("trn_mix", "thr_1", "end"));
+
+    expect(conversation.messages.map((message) => message.id)).toEqual(["msg_a", "msg_progress", "msg_b"]);
+  });
+
+  test("a cancelled turn marks its sealed answer stopped", () => {
+    const conversation = new Conversation("agni", "thr_1");
+    conversation.apply(startFrame("trn_2", "thr_1"));
+    conversation.apply(tokenFrame("trn_2", "thr_1", "half a thought"));
+    conversation.apply(wire({
+      type: "msg.new", seq: 95, id: "msg_half", channelId: "main",
+      fromType: "agent", fromId: "agni", senderName: "Agni",
+      text: "half a thought", internal: false, uiHint: "normal",
+      createdAt: "2026-10-22T11:00:01.000Z",
+    }));
+    conversation.apply(endFrame("trn_2", "thr_1", "cancelled"));
+
+    expect(conversation.messages).toHaveLength(1);
+    expect(isStopped(conversation.messages[0]!, "cancelled")).toBe(true);
+    expect(stopExplanation(conversation.messages[0]!)).toBe("Stopped");
+  });
+
   test("a cancelled turn says so and keeps the partial text", () => {
     const conversation = new Conversation("agni", "thr_1");
     conversation.apply(startFrame("trn_2", "thr_1"));

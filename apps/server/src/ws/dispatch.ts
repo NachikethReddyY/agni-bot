@@ -20,10 +20,11 @@ import {
   type ServerFrameBody,
   type TaskInfo,
 } from "@agni/protocol";
-import { defaultPersona, getPersona, personaInfo, mentionRoster, defaultResolvedPersona, resolvePersona, canonicalAgentID } from "../agent/personas";
+import { defaultPersona, getPersona, personaInfo, mentionRoster, defaultResolvedPersona, resolvePersona, canonicalAgentID, updatePersona } from "../agent/personas";
+import { createAgentPersona } from "../agent/creation";
 import { renameAgent } from "../agent/identity";
 import { resolveAgentMention } from "../agent/mentions";
-import { runTaskTurn } from "../agent/task-loop";
+import { cancelThreadTurn, isThreadActive, runTaskTurn } from "../agent/task-loop";
 import { resolveApprovalWaiter } from "../agent/approval-broker";
 import { cancelSecret, listPendingSecrets, resolveSecret } from "../agent/secret-broker";
 import { verifyToken } from "../auth/tokens";
@@ -46,6 +47,7 @@ import { appendMessage, createThread, createTurn, finishTurn, getThread, listThr
 import {
   activeSession,
   backgroundSession,
+  conversationOfAgent,
   conversationTranscript,
   ensureConversation,
   getConversation,
@@ -175,6 +177,10 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleUserTyping(deps, session, frame);
     case "agent.rename":
       return handleAgentRename(deps, session, frame);
+    case "agent.profile":
+      return handleAgentProfile(deps, session, frame);
+    case "agent.create":
+      return handleAgentCreate(deps, session, frame);
   }
 }
 
@@ -253,16 +259,159 @@ function batchKey(frame: Extract<ClientFrame, { type: "msg.send" }>, session: Se
   return `${frame.channelId ?? frame.conversationID ?? frame.threadID ?? session.agentID}:${frame.toAgentId ?? session.agentID}`;
 }
 
+/** A message the owner sent while its thread was mid-turn: run it next. */
+interface QueuedMessage {
+  deps: DispatchDeps;
+  frame: Extract<ClientFrame, { type: "msg.send" }>;
+  session: Session;
+  text: string;
+}
+
+/**
+ * FIFO of messages waiting on a busy thread. Keyed by the database — the one
+ * object shared across messages — because `DispatchDeps` is rebuilt for every
+ * frame and a queue has to outlive the frame that filled it.
+ */
+const threadQueues = new WeakMap<Database, Map<string, QueuedMessage[]>>();
+
+/**
+ * `stop`, `cancel`, `never mind` — a control message, not a turn. Matched
+ * whole, so "stop by the store" is ordinary text.
+ */
+const STOP_COMMAND =
+  /^\s*(?:please\s+)?(?:stop|stop\s+(?:it|that|now|this|working|everything)|cancel(?:\s+(?:it|that|this))?|abort(?:\s+(?:it|that))?|halt|quit|enough|never\s*mind|nevermind)(?:\s+please)?\s*[.!]*\s*$/i;
+
+function isStopCommand(text: string): boolean {
+  return STOP_COMMAND.test(text.trim());
+}
+
+/**
+ * The session block a message targets, resolved before its turn starts so a
+ * stop can find the running turn and a follow-up can see the thread is busy.
+ */
+function targetThread(
+  deps: DispatchDeps,
+  session: Session,
+  frame: Extract<ClientFrame, { type: "msg.send" }>,
+  text: string,
+): ThreadRow | null {
+  if (frame.threadID) return getThread(deps.db, frame.threadID);
+  if (frame.conversationID) {
+    const conversation = getConversation(deps.db, frame.conversationID);
+    return conversation ? activeSession(deps.db, conversation) : null;
+  }
+  const mention = resolveAgentMention(deps.db, text);
+  const channelAgent = frame.channelId === "main"
+    ? "ea"
+    : frame.channelId?.startsWith("dm:")
+      ? frame.channelId.slice(3)
+      : frame.channelId
+        ? getChannel(deps.db, frame.channelId)?.agent_id
+        : undefined;
+  const agentID = canonicalAgentID(mention?.agentID ?? frame.toAgentId ?? channelAgent ?? session.agentID);
+  const conversation = conversationOfAgent(deps.db, agentID);
+  return conversation ? activeSession(deps.db, conversation) : null;
+}
+
+/**
+ * Work runs in the background, so a new message must not cancel the turn it
+ * arrived during. It joins that thread's queue and starts when the turn ends;
+ * `stop` is the deliberate way to interrupt. A message to another agent has a
+ * different thread and starts immediately.
+ */
+function dispatchUserMessage(
+  deps: DispatchDeps,
+  session: Session,
+  frame: Extract<ClientFrame, { type: "msg.send" }>,
+  text: string,
+): void {
+  const thread = targetThread(deps, session, frame, text);
+  if (thread && isThreadActive(thread.id)) {
+    const queues = threadQueues.get(deps.db) ?? new Map<string, QueuedMessage[]>();
+    threadQueues.set(deps.db, queues);
+    const queue = queues.get(thread.id) ?? [];
+    queue.push({ deps, frame, session, text });
+    queues.set(thread.id, queue);
+    deps.emit({
+      type: "status.update",
+      channelId: frame.channelId ?? "main",
+      agentId: frame.toAgentId,
+      text: queue.length === 1
+        ? "Queued — I'll pick this up when this step finishes."
+        : `Queued behind ${queue.length - 1} more.`,
+      transient: true,
+    });
+    return;
+  }
+  void runUserMessage(deps, session, frame, text);
+}
+
+/** After a turn ends, start the next message waiting on that thread. */
+function drainThreadQueue(deps: DispatchDeps, threadID: string): void {
+  const queues = threadQueues.get(deps.db);
+  const queue = queues?.get(threadID);
+  if (!queues || !queue || queue.length === 0) return;
+  const next = queue.shift()!;
+  if (queue.length === 0) queues.delete(threadID);
+  // A stop that somehow landed in the queue still means "stop", not a turn.
+  if (isStopCommand(next.text)) return;
+  dispatchUserMessage(next.deps, next.session, next.frame, next.text);
+}
+
+/** Forget everything waiting on a thread; returns how many messages. */
+function clearThreadQueue(deps: DispatchDeps, threadID: string): number {
+  const queues = threadQueues.get(deps.db);
+  const queue = queues?.get(threadID);
+  if (!queues || !queue) return 0;
+  queues.delete(threadID);
+  return queue.length;
+}
+
+/**
+ * Stop the turn running in the message's thread. The interruption is
+ * acknowledged on the status line; the partial answer is marked `cancelled`
+ * by its own `turn.end`, so the transcript says "Stopped" where it stopped.
+ */
+function stopActiveTurn(
+  deps: DispatchDeps,
+  frame: Extract<ClientFrame, { type: "msg.send" }>,
+  thread: ThreadRow,
+): void {
+  const dropped = clearThreadQueue(deps, thread.id);
+  if (!cancelThreadTurn(thread.id, "the owner asked to stop")) return;
+  const channelID = frame.channelId ?? (thread.agent_id === "ea" ? "main" : `dm:${thread.agent_id}`);
+  deps.emit({
+    type: "status.update",
+    channelId: channelID,
+    agentId: thread.agent_id,
+    text: dropped > 0
+      ? `Stopped · ${dropped} queued message${dropped === 1 ? "" : "s"} cleared.`
+      : "Stopped.",
+    transient: true,
+  });
+}
+
 function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "msg.send" }>): void {
   if (!requireAuth(deps, session)) return;
 
   const parts = frame.texts?.length ? frame.texts : (frame.text.trim() ? [frame.text] : []);
   if (parts.length === 0) return sendError(deps, session, "bad_frame", "msg.send needs text or a non-empty texts array");
+  const combined = parts.join("\n\n");
+  // "stop" is a control message, not a turn — but only while a turn is
+  // actually running in the thread the owner is looking at. When nothing is
+  // running, it is ordinary text and goes through normally.
+  if (isStopCommand(combined)) {
+    const thread = targetThread(deps, session, frame, combined);
+    if (thread && isThreadActive(thread.id)) {
+      stopActiveTurn(deps, frame, thread);
+      return;
+    }
+  }
   // GATE-003: explicit remember/task commands are processed immediately — the
   // debounce exists to merge a burst of chat, not to delay a direct command.
-  const gate = classifyTurn(parts.join("\n\n"));
+  const gate = classifyTurn(combined);
   if (frame.files?.length || bypassesBatch(gate.category)) {
-    void runUserMessage(deps, session, frame, parts.join("\n\n"));
+    dispatchUserMessage(deps, session, frame, combined);
     return;
   }
   const batches = messageBatches.get(deps) ?? new Map<string, PendingMessageBatch>();
@@ -321,7 +470,7 @@ function flushMessageBatch(deps: DispatchDeps, key: string): void {
     return;
   }
   batches.delete(key);
-  void runUserMessage(deps, batch.session, batch.frame, batch.texts.join("\n\n"));
+  dispatchUserMessage(deps, batch.session, batch.frame, batch.texts.join("\n\n"));
 }
 
 async function runUserMessage(
@@ -475,6 +624,9 @@ async function runUserMessage(
     })
     .finally(() => {
       session.aborts.delete(turnID);
+      // Background-first: a message sent during this turn is waiting, so the
+      // freed thread starts it now instead of leaving it stranded.
+      drainThreadQueue(deps, thread.id);
       // TAG-001: memory is extracted in batches, after the turn — never on
       // the path of one.
       scheduleTagger(deps.db, {
@@ -1235,6 +1387,69 @@ function handleAgentRename(deps: DispatchDeps, session: Session, frame: Extract<
   if (!requireAuth(deps, session)) return;
   const ok = completeAgentRename(deps, frame.agentId, frame.name);
   if (!ok) sendError(deps, session, "bad_frame", "agent name must be 1–64 characters");
+}
+
+function handleAgentProfile(
+  deps: DispatchDeps,
+  session: Session,
+  frame: Extract<ClientFrame, { type: "agent.profile" }>,
+): void {
+  if (!requireAuth(deps, session)) return;
+  const role = frame.role?.trim();
+  if (!role && !frame.visibility) {
+    sendError(deps, session, "bad_frame", "give a role or a visibility to change");
+    return;
+  }
+  try {
+    const updated = updatePersona(deps.db, frame.agentId, { role, visibility: frame.visibility });
+    if (!updated) {
+      sendError(deps, session, "unknown_agent", `no agent with id ${frame.agentId}`);
+      return;
+    }
+    deps.emit({
+      type: "agent.updated",
+      agentId: updated.id,
+      displayName: updated.name,
+      onboarded: true,
+      role: updated.role,
+      visibility: updated.visibility,
+    });
+  } catch (error) {
+    sendError(deps, session, "bad_frame", error instanceof Error ? error.message : "could not update the agent");
+  }
+}
+
+function handleAgentCreate(
+  deps: DispatchDeps,
+  session: Session,
+  frame: Extract<ClientFrame, { type: "agent.create" }>,
+): void {
+  if (!requireAuth(deps, session)) return;
+  try {
+    // No tool list from the app: a bot made here starts with the default set.
+    const created = createAgentPersona(
+      deps.db,
+      {
+        name: frame.name,
+        prompt: frame.prompt,
+        role: frame.role,
+        id: frame.id,
+        color: frame.color,
+      },
+      [],
+    );
+    deps.emit({ type: "agents.update", agents: personaInfo(deps.db), mentions: mentionRoster(deps.db) });
+    deps.reply({
+      type: "agent.updated",
+      agentId: created.id,
+      displayName: created.name,
+      onboarded: true,
+      role: created.role,
+      visibility: created.visibility,
+    });
+  } catch (error) {
+    sendError(deps, session, "bad_frame", error instanceof Error ? error.message : "could not create the agent");
+  }
 }
 
 function completeAgentRename(deps: DispatchDeps, agentID: string, proposedName: string): boolean {

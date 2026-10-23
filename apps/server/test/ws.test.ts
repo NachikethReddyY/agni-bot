@@ -264,6 +264,54 @@ describe("websocket end-to-end", () => {
     expect(prompt?.senderName).toBe("Vision");
   });
 
+  test("edits an agent's tag and visibility over the socket", async () => {
+    await startTestServer();
+    client!.send({ type: "agent.profile", agentId: "ea", role: "chief of staff", visibility: "private" });
+    const updated = await client!.next("agent.updated");
+    expect(updated.agentId).toBe("ea");
+    expect(updated.role).toBe("chief of staff");
+    expect(updated.visibility).toBe("private");
+
+    const row = db!.query<{ role_detail: string | null; visibility: string | null }, [string]>(
+      "SELECT role_detail, visibility FROM agents WHERE id = 'ea'",
+    ).get("ea");
+    expect(row?.role_detail).toBe("chief of staff");
+    expect(row?.visibility).toBe("private");
+  });
+
+  test("refuses a profile edit that changes nothing", async () => {
+    await startTestServer();
+    client!.send({ type: "agent.profile", agentId: "ea" });
+    const error = await client!.next("error");
+    expect(error.code).toBe("bad_frame");
+  });
+
+  test("creates an agent from the app and puts it in the roster", async () => {
+    await startTestServer();
+    client!.send({
+      type: "agent.create",
+      name: "FRIDAY",
+      role: "inbox manager",
+      prompt: "You read my inbox and draft replies.",
+    });
+    const roster = await client!.next("agents.update");
+    const created = roster.agents.find((agent) => agent.id === "friday");
+    expect(created?.name).toBe("FRIDAY");
+    expect(created?.role).toBe("inbox manager");
+    const row = db!.query<{ display_name: string | null; role_detail: string | null }, [string]>(
+      "SELECT display_name, role_detail FROM agents WHERE id = 'friday'",
+    ).get("friday");
+    expect(row?.display_name).toBe("FRIDAY");
+    expect(row?.role_detail).toBe("inbox manager");
+  });
+
+  test("refuses to create an agent that already exists", async () => {
+    await startTestServer();
+    client!.send({ type: "agent.create", name: "Vision", id: "ea", prompt: "A second primary agent." });
+    const error = await client!.next("error");
+    expect(error.code).toBe("bad_frame");
+  });
+
   test("opens a direct channel for a specialist", async () => {
     await startTestServer();
     client!.send({ type: "msg.send", channelId: "dm:researcher", toAgentId: "researcher", text: "hello researcher" });
@@ -512,6 +560,60 @@ describe("websocket end-to-end", () => {
     client!.send({ type: "bind.direct", agentID: "ea" });
     const main = await client!.next("bind.direct.ok");
     expect(main.channelID).toBe("main");
+  });
+
+  test("a stop message cancels the running turn and says so", async () => {
+    await startTestServer((async (_url: string, init?: RequestInit) => {
+      // Hold the turn open until the stop aborts it.
+      await new Promise<void>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+      return sseResponse("never arrives");
+    }) as unknown as typeof fetch);
+
+    client!.send({ type: "agent.rename", agentId: "ea", name: "Agni" });
+    await client!.next("agent.updated");
+
+    client!.send({ type: "msg.send", channelId: "main", text: "work on the long thing" });
+    const started = await client!.next("turn.start");
+    // Let the runner register the turn before the stop arrives.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    client!.send({ type: "msg.send", channelId: "main", text: "stop" });
+    const ack = await client!.next("status.update", { match: (frame) => frame.text === "Stopped." });
+    expect(ack.transient).toBe(true);
+
+    const end = await client!.next("turn.end", { match: (frame) => frame.turnID === started.turnID });
+    expect(end.stopReason).toBe("cancelled");
+  });
+
+  test("a message sent mid-turn waits instead of cancelling the turn", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let call = 0;
+    await startTestServer((async () => {
+      call += 1;
+      if (call === 1) await gate;
+      return sseResponse(call === 1 ? "first answer" : "second answer");
+    }) as unknown as typeof fetch);
+
+    client!.send({ type: "agent.rename", agentId: "ea", name: "Agni" });
+    await client!.next("agent.updated");
+
+    client!.send({ type: "msg.send", channelId: "main", text: "the first thing" });
+    const first = await client!.next("turn.start");
+
+    // A second message while the first is still running joins the queue.
+    client!.send({ type: "msg.send", channelId: "main", text: "the second thing" });
+    await client!.next("status.update", { match: (frame) => frame.text.startsWith("Queued") });
+
+    release();
+    const firstEnd = await client!.next("turn.end", { match: (frame) => frame.turnID === first.turnID });
+    expect(firstEnd.stopReason).toBe("end");
+
+    const second = await client!.next("turn.start", { match: (frame) => frame.turnID !== first.turnID });
+    const secondEnd = await client!.next("turn.end", { match: (frame) => frame.turnID === second.turnID });
+    expect(secondEnd.stopReason).toBe("end");
   });
 });
 

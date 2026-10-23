@@ -2,10 +2,12 @@
  * The root: pairing or the two-column chat window, plus the overlays that can
  * appear over either. Keyboard commands mirror the Agni menu in the Mac app.
  */
-import { useEffect } from "react";
+import { useEffect, type CSSProperties } from "react";
 import { AlertTriangle, BellRing, X } from "lucide-react";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
+import { themeFor, themeVariables } from "../theme";
 import { AgentSwitcherView } from "./AgentSwitcherView";
+import { AgentProfileView } from "./AgentProfileView";
 import { PairingView } from "./PairingView";
 import { SettingsView } from "./SettingsView";
 import { SidebarView } from "./SidebarView";
@@ -46,15 +48,17 @@ export function RootView() {
           model.closeSettings();
         } else if (snapshot.isAgentSwitcherPresented) {
           model.closeAgentSwitcher();
+        } else if (snapshot.isAgentProfilePresented) {
+          model.closeAgentProfile();
         }
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [model, snapshot.isAgentSwitcherPresented, snapshot.isSettingsPresented]);
+  }, [model, snapshot.isAgentSwitcherPresented, snapshot.isSettingsPresented, snapshot.isAgentProfilePresented]);
 
   return (
-    <div className="app">
+    <div className="app" style={themeVariables(themeFor(model.agent?.color)) as CSSProperties}>
       {snapshot.screen === "pairing" ? <PairingView /> : <ChatView />}
       {snapshot.isAgentSwitcherPresented ? <AgentSwitcherView /> : null}
       {snapshot.isSettingsPresented ? <SettingsView /> : null}
@@ -65,13 +69,18 @@ export function RootView() {
 
 function ChatView() {
   const snapshot = useAppSnapshot();
+  const model = useAppModel();
   return (
     <>
       <SidebarView />
+      {snapshot.isSidebarPresented ? (
+        <div className="drawer-backdrop" onClick={() => model.closeSidebar()} />
+      ) : null}
       <main className="chat-main">
         <ThreadHeader />
         <ThreadView />
       </main>
+      {snapshot.isAgentProfilePresented ? <AgentProfileView /> : null}
       {snapshot.isInspectorPresented ? <InspectorView /> : null}
     </>
   );

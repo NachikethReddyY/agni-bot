@@ -164,6 +164,34 @@ export function Spinner() {
   return <span className="spinner" role="status" aria-label="Working" />;
 }
 
+/**
+ * A switch, the way the reference app sets a preference: one tap, one state,
+ * and the label says what it changes. It is a real button, so it works with
+ * a keyboard and a screen reader.
+ */
+export function Switch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      className={`switch${checked ? " on" : ""}`}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="switch-knob" aria-hidden="true" />
+    </button>
+  );
+}
+
 export function connectionStatusText(state: ConnectionState): string {
   switch (state.kind) {
     case "connecting":

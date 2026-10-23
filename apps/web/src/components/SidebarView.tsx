@@ -1,8 +1,12 @@
 /**
- * The roster, and nothing else. Each agent has one enduring conversation
- * surface; sessions are seams in it, not list entries (blueprint v3 §5).
+ * The roster: every agent, pinned ones first, each with its tag and the last
+ * thing it said. On a phone it is the same list in a drawer.
+ *
+ * Each agent has one enduring conversation surface; sessions are seams in it,
+ * not list entries (blueprint v3 §5).
  */
-import { Search, X } from "lucide-react";
+import { useState } from "react";
+import { Plus, Search, Star, X } from "lucide-react";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import { AppTile, SidebarAgentBadge, connectionShortStatus, initials } from "./bits";
 
@@ -16,94 +20,148 @@ function stateLabel(state: string): string {
 export function SidebarView() {
   const model = useAppModel();
   const snapshot = useAppSnapshot();
-  const agents = model.filteredAgents;
+  const [creating, setCreating] = useState(false);
+
+  // Pinned agents come first; the rest keep the roster's order.
+  const pinned = new Set(snapshot.preferences.favorites);
+  const agents = [
+    ...model.filteredAgents.filter((agent) => pinned.has(agent.id)),
+    ...model.filteredAgents.filter((agent) => !pinned.has(agent.id)),
+  ];
   const connected = snapshot.plugins.filter((plugin) => plugin.status === "connected");
   const total = snapshot.plugins.length;
   const owner = profileName(snapshot.settings.deviceName);
 
-  return (
-    <aside className="sidebar">
-      <div className="sidebar-header" />
+  /** The newest thing each agent said, one line. */
+  const previewFor = (agentID: string): string | undefined => {
+    let newest: { updatedAt: string; preview?: string } | undefined;
+    for (const thread of snapshot.threads) {
+      if (thread.agentID !== agentID) continue;
+      if (!newest || thread.updatedAt > newest.updatedAt) {
+        newest = { updatedAt: thread.updatedAt, preview: thread.preview };
+      }
+    }
+    return newest?.preview;
+  };
 
-      <div className="sidebar-search">
-        <Search size={12} aria-hidden="true" />
-        <input
-          value={snapshot.searchText}
-          onChange={(event) => model.setSearchText(event.target.value)}
-          placeholder="Search"
-          aria-label="Search agents"
-        />
-        {snapshot.searchText.length > 0 ? (
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="Clear search"
-            onClick={() => model.setSearchText("")}
-          >
-            <X size={12} />
-          </button>
+  const row = (agent: (typeof agents)[number]) => {
+    const selected = snapshot.conversation.agentID === agent.id;
+    // A private agent is worth saying out loud: other agents see a
+    // receipt for its work, not the work itself.
+    const state = snapshot.agentStates[agent.id];
+    const visibilityNote =
+      agent.visibility === "private"
+        ? " · private"
+        : agent.visibility === "summary"
+          ? " · summary"
+          : "";
+    const preview = previewFor(agent.id);
+    return (
+      <button
+        type="button"
+        key={agent.id}
+        className={`sidebar-row${selected ? " selected" : ""}`}
+        onClick={() => model.selectAgent(agent)}
+        aria-label={`Open ${agent.name} chat`}
+        aria-current={selected ? "true" : undefined}
+        title={
+          agent.visibility
+            ? `${agent.name} — other agents see ${agent.visibility} of its work`
+            : undefined
+        }
+      >
+        <SidebarAgentBadge agent={agent} size={36} />
+        <span className="sidebar-row-text">
+          <span className="sidebar-row-top">
+            <span className="sidebar-row-title">{agent.name}</span>
+            {agent.role ? <span className="sidebar-tag-chip">{agent.role}</span> : null}
+          </span>
+          <span className="sidebar-row-subtitle">
+            {preview ?? agent.role ?? agent.model ?? "Assistant"}
+            {visibilityNote}
+          </span>
+        </span>
+        <span
+          className={`sidebar-star${snapshot.preferences.favorites.includes(agent.id) ? " on" : ""}`}
+          role="button"
+          tabIndex={0}
+          aria-label={
+            snapshot.preferences.favorites.includes(agent.id)
+              ? `Unpin ${agent.name}`
+              : `Pin ${agent.name}`
+          }
+          onClick={(event) => {
+            event.stopPropagation();
+            model.toggleFavorite(agent.id);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            event.stopPropagation();
+            model.toggleFavorite(agent.id);
+          }}
+        >
+          <Star size={13} />
+        </span>
+        {model.unreadBlocks(agent.id) ? <span className="unread-dot" aria-label="Unread" /> : null}
+        {state && state !== "idle" ? (
+          <span className={`agent-state ${state}`} aria-label={state} title={stateLabel(state)} />
         ) : null}
+      </button>
+    );
+  };
+
+  return (
+    <aside className={`sidebar${snapshot.isSidebarPresented ? " open" : ""}`}>
+      <div className="sidebar-bar">
+        <span className="sidebar-bar-spacer" />
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="Search agents and messages"
+          onClick={() => model.openAgentSwitcher()}
+        >
+          <Search size={15} />
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="Create an agent"
+          onClick={() => setCreating(true)}
+        >
+          <Plus size={15} />
+        </button>
+        <button
+          type="button"
+          className="icon-btn sidebar-close"
+          aria-label="Close the agent list"
+          onClick={() => model.closeSidebar()}
+        >
+          <X size={16} />
+        </button>
       </div>
 
       <div className="sidebar-sections">
-        <div className="sidebar-section-title">Agents</div>
         {agents.length === 0 ? (
           <div className="sidebar-empty">
             {snapshot.searchText.trim().length === 0 ? "No agents available" : "No matching agents"}
           </div>
         ) : (
-          agents.map((agent) => {
-            const selected = snapshot.conversation.agentID === agent.id;
-            // A private agent is worth saying out loud: other agents see a
-            // receipt for its work, not the work itself.
-            const state = snapshot.agentStates[agent.id];
-            const visibilityNote =
-              agent.visibility === "private"
-                ? " · private"
-                : agent.visibility === "summary"
-                  ? " · summary"
-                  : "";
-            return (
-              <button
-                type="button"
-                key={agent.id}
-                className={`sidebar-row${selected ? " selected" : ""}`}
-                onClick={() => model.selectAgent(agent)}
-                aria-label={`Open ${agent.name} chat`}
-                aria-current={selected ? "true" : undefined}
-                title={
-                  agent.visibility
-                    ? `${agent.name} — other agents see ${agent.visibility} of its work`
-                    : undefined
-                }
-              >
-                <SidebarAgentBadge agent={agent} size={36} />
-                <span className="sidebar-row-text">
-                  <span className="sidebar-row-title">{agent.name}</span>
-                  <span className="sidebar-row-subtitle">
-                    {agent.role ?? agent.model ?? "Assistant"}
-                    {visibilityNote}
-                  </span>
-                </span>
-                {model.unreadBlocks(agent.id) ? <span className="unread-dot" aria-label="Unread" /> : null}
-                {state && state !== "idle" ? (
-                  <span className={`agent-state ${state}`} aria-label={state} title={stateLabel(state)} />
-                ) : null}
-              </button>
-            );
-          })
+          agents.map(row)
         )}
       </div>
 
       <div className="sidebar-footer">
-        <button
-          type="button"
-          className="sidebar-owner"
-          onClick={() => model.openSettings()}
-          title={`${owner} — settings`}
-          aria-label={`Open settings for ${owner}`}
-        >
-          <span className="sidebar-owner-avatar">{initials(owner)}</span>
+        <div className="sidebar-owner-row">
+          <button
+            type="button"
+            className="sidebar-owner"
+            onClick={() => model.openSettings()}
+            title={`${owner} — settings`}
+            aria-label={`Open settings for ${owner}`}
+          >
+            <span className="sidebar-owner-avatar">{initials(owner)}</span>
+          </button>
           {snapshot.connectionState.kind !== "ready" ? (
             <span
               className="presence-dot"
@@ -111,7 +169,7 @@ export function SidebarView() {
               title={connectionShortStatus(snapshot.connectionState)}
             />
           ) : null}
-        </button>
+        </div>
 
         <button
           type="button"
@@ -130,7 +188,88 @@ export function SidebarView() {
           ) : null}
         </button>
       </div>
+
+      {creating ? <NewAgentSheet onClose={() => setCreating(false)} /> : null}
     </aside>
+  );
+}
+
+/**
+ * The "+" in the roster: name the agent, say what it is for, say what it
+ * should do. The daemon creates it the same way the `create_agent` chat tool
+ * does, so it lands in the roster with a prompt and a colour.
+ */
+function NewAgentSheet({ onClose }: { onClose: () => void }) {
+  const model = useAppModel();
+  const [name, setName] = useState("");
+  const [role, setRole] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const ready = name.trim().length > 0 && prompt.trim().length > 0;
+
+  return (
+    <div
+      className="overlay new-agent-overlay"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="dialog" role="dialog" aria-label="New agent">
+        <div className="dialog-head">
+          <h2>New agent</h2>
+          <button type="button" className="icon-btn" aria-label="Cancel" onClick={onClose}>
+            <X size={15} />
+          </button>
+        </div>
+        <label className="field">
+          <span className="field-label">Name</span>
+          <input
+            className="text-input"
+            value={name}
+            maxLength={64}
+            placeholder="FRIDAY"
+            onChange={(event) => setName(event.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span className="field-label">Tag</span>
+          <input
+            className="text-input"
+            value={role}
+            maxLength={160}
+            placeholder="inbox manager"
+            onChange={(event) => setRole(event.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span className="field-label">What it should do</span>
+          <textarea
+            className="text-area"
+            rows={4}
+            value={prompt}
+            maxLength={8000}
+            placeholder="You are FRIDAY. You read my inbox, draft replies, and never send without asking."
+            onChange={(event) => setPrompt(event.target.value)}
+          />
+        </label>
+        <div className="dialog-actions">
+          <span className="spacer" />
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={!ready}
+            onClick={() => {
+              model.createAgent({ name, prompt, role });
+              onClose();
+            }}
+          >
+            Create
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

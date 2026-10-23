@@ -3,7 +3,7 @@
  * conversation export on demand at right.
  */
 import { useState, type ReactNode } from "react";
-import { Copy, Monitor, Share } from "lucide-react";
+import { Copy, Menu, Monitor, Share } from "lucide-react";
 import { format } from "@agni/client";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import {
@@ -19,16 +19,32 @@ export function ThreadHeader() {
   const snapshot = useAppSnapshot();
   const [shareOpen, setShareOpen] = useState(false);
   const [connectionOpen, setConnectionOpen] = useState(false);
+  const agent = model.agent;
+  const agentState = agent ? snapshot.agentStates[agent.id] : undefined;
+  const working = snapshot.conversation.isStreaming || agentState === "working";
 
   return (
     <header className="thread-header">
-      <SidebarAgentBadge agent={model.agent} size={20} />
-      <div className="thread-header-identity">
-        <span className="thread-header-name">{model.agent?.name ?? "Agni"}</span>
-        {snapshot.conversation.isStreaming ? (
-          <span className="thread-header-status">Writing…</span>
-        ) : null}
-      </div>
+      <button
+        type="button"
+        className="icon-btn header-menu mobile-only"
+        aria-label="Open the agent list"
+        onClick={() => model.openSidebar()}
+      >
+        <Menu size={17} />
+      </button>
+      <button
+        type="button"
+        className="agent-pill"
+        aria-label={`Open ${agent?.name ?? "the agent"}'s profile`}
+        onClick={() => model.openAgentProfile()}
+      >
+        <span className="agent-pill-avatar">
+          <SidebarAgentBadge agent={agent} size={22} />
+          {working ? <span className="agent-pill-dot" aria-label="Working" /> : null}
+        </span>
+        <span className="agent-pill-name">{agent?.name ?? "Agni"}</span>
+      </button>
       <span className="thread-header-spacer" />
 
       <button

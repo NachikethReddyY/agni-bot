@@ -4,19 +4,20 @@
  * every token is referenced by a view.
  */
 :root {
-  /* Charcoal chat canvas; keeps the reference's soft, readable dark layers. */
-  --canvas: #1c1c1c;
-  --sidebar: #141414;
+  /* Near-black chat canvas, borrowed from the reference's night mode: the
+     canvas recedes so the conversation is the only lit surface. */
+  --canvas: #0d0d0f;
+  --sidebar: #08080a;
   /* Rows, wells, sidebar selection. */
-  --surface: #232326;
-  --surface-raised: #28282b;
-  --incoming-bubble: #2a2a2d;
-  --outgoing-bubble: #e8e8e3;
+  --surface: #17171a;
+  --surface-raised: #1f1f23;
+  --incoming-bubble: #1b1b1e;
+  --outgoing-bubble: #f1f1ec;
   /* 1px separators and card edges. */
-  --hairline: rgb(255 255 255 / 7%);
-  --ink: #f3f3f3;
-  --ink-secondary: #8a8a8e;
-  --ink-tertiary: #71717a;
+  --hairline: rgb(255 255 255 / 8%);
+  --ink: #f4f4f6;
+  --ink-secondary: #9a9aa1;
+  --ink-tertiary: #6d6d76;
   /* Agni's identity and every live state. The only warm colour in the app. */
   --ember: #ff3146;
   --ember-deep: #c4293c;
@@ -30,6 +31,15 @@
   --row-radius: 10px;
   --bubble-radius: 18px;
   --card-radius: 12px;
+
+  /* Phone-shaped things. The reference app is a phone app first; these are
+     the sizes that keep a thumb happy and stop iOS from zooming inputs. */
+  --touch-target: 44px;
+  --bubble-radius-phone: 20px;
+  --composer-radius: 26px;
+  --phone-gutter: 14px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
     Roboto, Helvetica, Arial, sans-serif;

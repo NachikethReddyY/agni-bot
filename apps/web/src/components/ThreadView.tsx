@@ -59,8 +59,22 @@ export function ThreadView() {
     return () => cancelAnimationFrame(frame);
   }, [messages.length, lastText, lastID, conversation.threadID]);
 
-  const toggleSelection = (id: string) => {
-    setSelected((current) => {
+  // Search picks a message: bring it into view and stop following the tail.
+  useEffect(() => {
+    const target = snapshot.focusMessageID;
+    if (!target) return;
+    pinned.current = false;
+    const frame = requestAnimationFrame(() => {
+      const element = scrollRef.current?.querySelector<HTMLElement>(
+        `[data-message-id="${CSS.escape(target)}"]`,
+      );
+      element?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    model.clearFocusMessage();
+    return () => cancelAnimationFrame(frame);
+  }, [snapshot.focusMessageID, model]);
+
+  const toggleSelection = (id: string) => {    setSelected((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -155,9 +169,12 @@ function MessageBlock({
     <>
       {isNewDay(messages, index) ? (
         <div className="day-divider">
-          {index === 0
-            ? format.stamp(message.createdAt ?? new Date())
-            : format.dayTitle(message.createdAt ?? new Date())}
+          {format.dayTitle(message.createdAt ?? new Date())}
+        </div>
+      ) : null}
+      {startsNewMoment(messages, index) ? (
+        <div className="time-divider">
+          {format.time(message.createdAt ?? new Date())}
         </div>
       ) : null}
       <MessageRowView
@@ -168,6 +185,20 @@ function MessageBlock({
       />
     </>
   );
+}
+
+/**
+ * A stamp of the clock, the way the reference app marks a moment in the
+ * thread: one small centred time above a run of messages, not a timestamp on
+ * every bubble. A new run starts after five quiet minutes.
+ */
+function startsNewMoment(messages: ChatMessage[], index: number): boolean {
+  const message = messages[index];
+  if (!message?.createdAt) return false;
+  if (index === 0) return true;
+  const previous = messages[index - 1]?.createdAt;
+  if (!previous) return true;
+  return message.createdAt.getTime() - previous.getTime() >= 5 * 60 * 1000;
 }
 
 function isNewDay(messages: ChatMessage[], index: number): boolean {
@@ -253,9 +284,17 @@ function FormCard({ form, onAnswer }: { form: FormRow; onAnswer: (option: string
       </div>
       {form.options.length > 0 ? (
         <div className="form-options">
-          {form.options.map((option) => (
-            <button key={option} type="button" className="btn small" onClick={() => onAnswer(option)}>
-              {option}
+          {form.options.map((option, index) => (
+            <button
+              key={option}
+              type="button"
+              className="form-option"
+              onClick={() => onAnswer(option)}
+            >
+              <span className="form-option-key" aria-hidden="true">
+                {String.fromCharCode(65 + index)}
+              </span>
+              <span className="form-option-label">{option}</span>
             </button>
           ))}
         </div>
@@ -316,7 +355,7 @@ function SecretCard({
             if (event.key === "Escape") onCancel();
           }}
         />
-        <button type="button" className="btn small primary" onClick={submit} disabled={!value}>
+        <button type="button" className="btn small ink" onClick={submit} disabled={!value}>
           Authorize
         </button>
         <button type="button" className="btn small" onClick={onCancel}>

@@ -8,9 +8,8 @@
  */
 import type { Database } from "bun:sqlite";
 import type { ServerFrameBody } from "@agni/protocol";
-import type { Persona } from "../agent/personas";
-import { getPersona, personaInfo, mentionRoster, registerPersona, DEFAULT_AGENT_TOOLS } from "../agent/personas";
-import { normalizeVisibility, type Visibility } from "../agent/visibility";
+import { personaInfo, mentionRoster } from "../agent/personas";
+import { createAgentPersona } from "../agent/creation";
 import { nowISO } from "../util/ids";
 import { MAX_AGENT_NAME_CHARS } from "../agent/identity";
 import type { ToolRegistry } from "./registry";
@@ -18,22 +17,6 @@ import type { ToolRegistry } from "./registry";
 export interface CreateAgentToolDeps {
   db: Database;
   emit: (frame: ServerFrameBody) => void;
-}
-
-/** A starting toolset for a new agent when the caller doesn't pick one. */
-const DEFAULT_TOOLS = DEFAULT_AGENT_TOOLS;
-
-const PALETTE = ["#e05252", "#5b9bd5", "#65a765", "#9a7bd1", "#e0a75a", "#5ac8c8", "#d95f9e", "#8a9a5b"];
-
-function slugify(name: string): string {
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-  return (slug || "agent").slice(0, 40);
-}
-
-function colorFor(seed: string): string {
-  let hash = 0;
-  for (const ch of seed) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  return PALETTE[hash % PALETTE.length]!;
 }
 
 export function registerCreateAgentTool(registry: ToolRegistry, deps: CreateAgentToolDeps): void {
@@ -64,57 +47,36 @@ export function registerCreateAgentTool(registry: ToolRegistry, deps: CreateAgen
     timeoutMs: 2_000,
     handler: async (args: Record<string, unknown>) => {
       const db = deps.db;
-      const name = String(args.name ?? "").trim();
-      if (!name || name.length > MAX_AGENT_NAME_CHARS) throw new Error(`name must be 1–${MAX_AGENT_NAME_CHARS} characters`);
-      const prompt = String(args.prompt ?? "").trim();
-      if (!prompt) throw new Error("a new agent needs a system prompt");
-      const role = String(args.role ?? "").trim() || "agent";
-      const id = String(args.id ?? "").trim() || slugify(name);
-      if (!/^[a-z0-9_]+$/.test(id)) throw new Error("id must be lowercase letters, numbers, and underscores");
-      // Say what to do instead: an agent that exists is renamed, not rebuilt.
-      if (getPersona(id)) throw new Error(`agent ${id} already exists — use rename_agent to change it, or pick another id`);
-      const row = db.query("SELECT display_name FROM agents WHERE id = ?").get(id) as { display_name: string | null } | null;
-      if (row) throw new Error(`agent ${id} already exists (${row.display_name ?? id}) — use rename_agent to change it, or pick another id`);
-
-      const requested: string[] = Array.isArray(args.tools)
-        ? args.tools.filter((tool): tool is string => typeof tool === "string")
-        : [];
-      const known = new Set(registry.listByKind("static").map((tool) => tool.name));
-      const tools = requested.filter((tool) => known.has(tool));
-      const dropped = requested.filter((tool) => !known.has(tool));
-      const finalTools = tools.length > 0 ? tools : [...DEFAULT_TOOLS];
-
-      const colorArg = typeof args.color === "string" ? args.color.trim() : "";
-      const color = colorArg ? colorArg : colorFor(id);
-      // DEL-007: a new agent reads user memory but cannot write it unless the
-      // caller explicitly says so.
-      const memoryScope: "read" | "readwrite" = args.memoryScope === "readwrite" ? "readwrite" : "read";
-      // D-01: a new agent is `summary` — the caller learns that it finished
-      // and roughly what it found, not its full working.
-      const visibility: Visibility = normalizeVisibility(
-        typeof args.visibility === "string" ? args.visibility : undefined,
+      const known = registry.listByKind("static").map((tool) => tool.name);
+      const created = createAgentPersona(
+        db,
+        {
+          name: String(args.name ?? ""),
+          id: typeof args.id === "string" ? args.id : undefined,
+          role: typeof args.role === "string" ? args.role : undefined,
+          prompt: String(args.prompt ?? ""),
+          color: typeof args.color === "string" ? args.color : undefined,
+          tools: Array.isArray(args.tools) ? args.tools.map((tool) => String(tool)) : [],
+          memoryScope: args.memoryScope === "readwrite" ? "readwrite" : "read",
+          visibility:
+            typeof args.visibility === "string"
+              ? (args.visibility as "private" | "summary" | "shared")
+              : undefined,
+        },
+        known,
       );
-      const persona: Persona = { id, name, color, role, systemPromptTemplate: prompt, tools: finalTools, memoryScope, visibility };
-
-      const now = nowISO();
-      db.run(
-        `INSERT INTO agents (id, name, color, role, role_detail, default_name, display_name, system_prompt, avatar_color, onboarded, tools, memory_scope, visibility, created_at, updated_at)
-         VALUES (?, ?, ?, 'agent', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
-        [id, name, color, role, name, name, prompt, color, JSON.stringify(finalTools), memoryScope, visibility, now, now],
-      );
-      registerPersona(persona);
       deps.emit({ type: "agents.update", agents: personaInfo(db), mentions: mentionRoster(db) });
 
       return {
-        id,
-        name,
-        role,
-        color,
-        tools: finalTools,
-        memoryScope,
-        visibility,
-        ...(dropped.length > 0 ? { droppedTools: dropped } : {}),
-        promptChars: prompt.length,
+        id: created.id,
+        name: created.name,
+        role: created.role,
+        color: created.color,
+        tools: created.tools,
+        memoryScope: created.memoryScope,
+        visibility: created.visibility,
+        ...(created.droppedTools.length > 0 ? { droppedTools: created.droppedTools } : {}),
+        promptChars: created.promptChars,
       };
     },
   });

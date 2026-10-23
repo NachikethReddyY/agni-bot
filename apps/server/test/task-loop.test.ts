@@ -11,6 +11,7 @@ import { runTaskTurn } from "../src/agent/task-loop";
 import { resolveApprovalWaiter } from "../src/agent/approval-broker";
 import type { ResolvedPersona } from "../src/agent/personas";
 import { createThread, createTurn } from "../src/stores/threads";
+import { ensureDMChannel } from "../src/stores/channels";
 
 const provider: ProviderConfig = {
   id: "test", label: "Test", baseUrl: "https://test.local/v1", apiKey: "test", model: "mock",
@@ -214,9 +215,12 @@ describe("task lane loop", () => {
     });
 
     // It stops early, with the truth, instead of running out of budget.
-    expect(result.text).toContain("I went looking through the app's own source");
+    expect(result.text).toContain("I can't change how the app itself works");
     expect(result.text).not.toContain("task budget");
-    expect(result.text).toContain("mail_search");
+    expect(result.text).toContain("mail");
+    // The message is short: it names what it can do, not the whole tool list.
+    expect(result.text).not.toContain("mail_search");
+    expect(result.text.length).toBeLessThan(320);
     // Fewer than the full step budget: the guard fired first.
     const calls = db.query<{ n: number }, []>("SELECT COUNT(*) as n FROM tool_calls").get()?.n ?? 0;
     expect(calls).toBeLessThan(16);
@@ -246,7 +250,7 @@ describe("task lane loop", () => {
     });
 
     // Looking at the app's own state is not progress, so the guard still fires.
-    expect(result.text).toContain("I went looking through the app's own source");
+    expect(result.text).toContain("I can't change how the app itself works");
     expect(result.text).not.toContain("tool limit");
   });
 
@@ -269,7 +273,70 @@ describe("task lane loop", () => {
     });
 
     expect(result.text).toBe("Here is what the daemon does.");
-    expect(result.text).not.toContain("I went looking through the app's own source");
+    expect(result.text).not.toContain("I can't change how the app itself works");
+  });
+
+  test("between-tool narration is not published as a message", async () => {
+    db = openDatabase(":memory:");
+    const thread = createThread(db, taskPersona.id);
+    let request = 0;
+    const fetchMock = (async () => {
+      request += 1;
+      return request === 1
+        ? streamResponse([
+            { choices: [{ delta: { content: "Checking the list." } }] },
+            { choices: [{ delta: { tool_calls: [{ index: 0, id: "call-1", type: "function", function: { name: "tasks_list", arguments: "{\"status\":\"open\",\"limit\":5}" } }] } }] },
+          ])
+        : streamResponse([{ choices: [{ delta: { content: "You have no open tasks." } }] }]);
+    }) as unknown as typeof fetch;
+    const router = new Router([provider], new HealthTracker(), fetchMock);
+    const result = await runTaskTurn(db, router, { firstTokenTimeoutMs: 1000, turnTimeoutMs: 5000 }, {
+      threadID: thread.id, text: "What tasks do I have?", persona: taskPersona,
+      emit: () => undefined, signal: new AbortController().signal,
+    });
+
+    // The caller still gets the final answer, and the transcript keeps only
+    // the answer: step narration is thinking aloud, not something to show.
+    expect(result.text).toBe("You have no open tasks.");
+    const durable = db.query<{ text: string }, [string]>(
+      "SELECT text FROM messages WHERE thread_id = ? AND role = 'assistant' ORDER BY rowid",
+    ).all(thread.id);
+    expect(durable.map((row) => row.text)).toEqual(["You have no open tasks."]);
+  });
+
+  test("a channel turn buffers step narration and streams only the answer", async () => {
+    db = openDatabase(":memory:");
+    const thread = createThread(db, taskPersona.id);
+    const channel = ensureDMChannel(db, taskPersona.id);
+    let request = 0;
+    const fetchMock = (async () => {
+      request += 1;
+      return request === 1
+        ? streamResponse([
+            { choices: [{ delta: { content: "Checking the list." } }] },
+            { choices: [{ delta: { tool_calls: [{ index: 0, id: "call-1", type: "function", function: { name: "tasks_list", arguments: "{\"status\":\"open\",\"limit\":5}" } }] } }] },
+          ])
+        : streamResponse([{ choices: [{ delta: { content: "You have no open tasks." } }] }]);
+    }) as unknown as typeof fetch;
+    const router = new Router([provider], new HealthTracker(), fetchMock);
+    const emitted: Array<{ type: string; [key: string]: unknown }> = [];
+    const result = await runTaskTurn(db, router, { firstTokenTimeoutMs: 1000, turnTimeoutMs: 5000 }, {
+      threadID: thread.id, text: "What tasks do I have?", persona: taskPersona,
+      channelID: channel.id,
+      emit: (frame) => { emitted.push(frame as { type: string; [key: string]: unknown }); },
+      signal: new AbortController().signal,
+    });
+
+    expect(result.text).toBe("You have no open tasks.");
+    const deltas = emitted.filter((frame) => frame.type === "token").map((frame) => frame.delta);
+    expect(deltas).toEqual(["You have no open tasks."]);
+    const published = emitted.filter((frame) => frame.type === "msg.new").map((frame) => frame.text);
+    expect(published).toEqual(["You have no open tasks."]);
+    // The token fills the bubble the durable message then seals.
+    const tokenAt = emitted.findIndex((frame) => frame.type === "token");
+    const messageAt = emitted.findIndex((frame) => frame.type === "msg.new");
+    expect(tokenAt).toBeGreaterThan(-1);
+    expect(messageAt).toBeGreaterThan(tokenAt);
   });
 
   test("a turn that fails outright leaves a message the user can see", async () => {
