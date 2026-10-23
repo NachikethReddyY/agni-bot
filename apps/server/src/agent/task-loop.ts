@@ -4,6 +4,7 @@ import { linkAttachments, messageAttachments, withAttachmentContent } from "../a
 import type { Database } from "bun:sqlite";
 import type { ServerFrameBody, StopReason } from "@agni/protocol";
 import { ApprovalBroker, waitForApprovalDecision } from "./approval-broker";
+import { FormBroker } from "./form-broker";
 import type { Decision } from "./approval-broker";
 import type { Persona, ResolvedPersona } from "./personas";
 import type { ChatMessage, ToolCall } from "../models/client";
@@ -16,6 +17,7 @@ import { teamRoster } from "./personas";
 import { deriveAnchor } from "../context/compiler";
 import { registerHandoffTool } from "../tools/handoff-tool";
 import { registerDelegateTaskTool } from "../tools/delegate-task-tool";
+import { registerAskTool, registerDraftEmailTool } from "../tools/ask-tool";
 import { registerRequestOwnerInputTool } from "../tools/needs-input-tool";
 import { registerArtifactTool } from "../tools/artifact-tool";
 import { registerSecureExecTool } from "../tools/secure-exec-tool";
@@ -280,10 +282,14 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     : persona.tools;
   // Universal tools: `say` gives every agent a way to post progress as
   // separate messages; `run_privileged` is only meaningful next to `bash`.
+  // `ask` puts a question to the owner — every agent may do that. A draft
+  // only makes sense to an agent that can send the mail.
   const effectiveTools = [...new Set([
     ...memoryTools,
     "say",
+    "ask",
     ...(memoryTools.includes("bash") ? ["run_privileged"] : []),
+    ...(memoryTools.includes("mail_send") ? ["draft_email"] : []),
   ])];
   const dynamicHints = taskToolHints(registry, effectiveTools);
   if (dynamicHints.length > 0) {
@@ -347,6 +353,10 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     emit: (frame) => run.emit(frame as ServerFrameBody),
     waitForDecision: (requestID, signal) => waitForApprovalDecision(db, requestID, signal),
   });
+  const formBroker = new FormBroker({
+    db,
+    emit: (body) => run.emit(body),
+  });
   db.run(
     `INSERT INTO agent_sessions (thread_id, turn_id, state, message_log, summary, step_count, token_count, max_steps, max_tokens, created_at, updated_at)
      VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?)
@@ -367,6 +377,10 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     threadID, channelID: run.channelID, currentAgentID: persona.id,
     conversationID: run.conversationID, carrySummary: run.carrySummary, guardrail,
   });
+  // The agent can put a question to the owner, and can put an email draft up
+  // for approval. Both wait for the owner, so both are registered per turn.
+  registerAskTool(registry, { db, broker: formBroker });
+  registerDraftEmailTool(registry, { db, broker: formBroker });
   // DEL-001: the async sibling of handoff. It returns as soon as the task is
   // queued; the specialist runs in a background session with only the brief.
   registerDelegateTaskTool(registry, {
@@ -508,7 +522,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         break;
       }
 
-      messages.push({ role: "assistant", content: result.text, toolCalls: result.toolCalls, ...(result.reasoning ? { reasoning: result.reasoning } : {}) });
+      messages.push({ role: "assistant", content: result.text, toolCalls: result.toolCalls, ...(result.reasoning ? { reasoning: result.reasoning } : {}), ...(result.responseItems ? { responseItems: result.responseItems } : {}) });
       // The narration that introduced these tools is not a message. The model
       // keeps it, the owner sees the tools' activity and the `say` updates.
       persistSession(db, threadID, turnID, "running", messages, summary, stepCount, tokenCount);

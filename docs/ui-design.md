@@ -54,6 +54,15 @@ We did **not** take the blue accent. Ember is Agni's.
    a surface. Dark mode is the constraint: an accent is lifted until it reads
    on near-black, and a bubble is pushed down until white text on it clears
    4.5:1. The tests hold that line.
+8. **A pin is a pin.** The agents you favourite go into the grid at the top
+   of the roster — one centred, two side by side, always centred — each with
+   a star in the corner of its mark. Hovering highlights that bot and
+   nothing else.
+9. **A question waits; typing does not.** The `ask` tool puts a question
+   with options to the owner. They answer by choosing, or by typing — which
+   dismisses the question and steers the work with their words. The
+   `draft_email` tool puts a composed email up with Send email and Discard;
+   it sends nothing by itself.
 
 ## Where the code lives
 

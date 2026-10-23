@@ -22,6 +22,7 @@ import {
 } from "@agni/protocol";
 import { defaultPersona, getPersona, personaInfo, mentionRoster, defaultResolvedPersona, resolvePersona, canonicalAgentID, updatePersona } from "../agent/personas";
 import { createAgentPersona } from "../agent/creation";
+import { answerFormAndWake } from "../agent/form-broker";
 import { renameAgent } from "../agent/identity";
 import { resolveAgentMention } from "../agent/mentions";
 import { cancelThreadTurn, isThreadActive, runTaskTurn } from "../agent/task-loop";
@@ -32,6 +33,7 @@ import type { Config } from "../config";
 import { log } from "../log";
 import type { Router } from "../models/router";
 import { addProviderCredential, setProviderModel } from "../models/provider-settings";
+import { ChatGPTAuthError, type ChatGPTAuth } from "../models/chatgpt-auth";
 import {
   getJobByPrefix,
   listFinishedJobs,
@@ -71,6 +73,7 @@ import type { FrameLog } from "./frame-log";
 export interface Session {
   id: string;
   authed: boolean;
+  local?: boolean;
   device?: { id: string; name: string };
   agentID: string;
   openThreadID?: string;
@@ -103,6 +106,7 @@ export interface DispatchDeps {
   close: (code: number, reason: string) => void;
   /** Plugin connections (catalog, connect flows, OAuth callbacks). */
   plugins?: PluginService;
+  chatgpt?: ChatGPTAuth;
 }
 
 export async function dispatch(deps: DispatchDeps, session: Session, raw: string): Promise<void> {
@@ -123,6 +127,8 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleMsgCancel(deps, session, frame);
     case "approve.reply":
       return handleApproveReply(deps, session, frame);
+    case "form.answer":
+      return handleFormAnswer(deps, session, frame);
     case "secret.reply":
       return handleSecretReply(deps, session, frame);
     case "secret.cancel":
@@ -165,6 +171,13 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return await handleProviderModelSet(deps, session, frame);
     case "provider.models.list":
       return await handleProviderModelsList(deps, session, frame);
+    case "provider.auth.status":
+    case "provider.auth.start":
+    case "provider.auth.cancel":
+    case "provider.auth.disconnect":
+    case "provider.auth.select":
+    case "provider.auth.acknowledge":
+      return await handleProviderAuth(deps, session, frame);
     case "plugin.list":
       return handlePluginList(deps, session);
     case "plugin.connect":
@@ -1071,6 +1084,21 @@ function handleApproveReply(
  * The secret is consumed here and handed straight to the waiting tool. It is
  * deliberately not logged, persisted, or echoed back in any frame.
  */
+/**
+ * The owner answered a question the agent asked. The answer lands on the form
+ * row and wakes the turn that is waiting on it.
+ */
+function handleFormAnswer(
+  deps: DispatchDeps,
+  session: Session,
+  frame: Extract<ClientFrame, { type: "form.answer" }>,
+): void {
+  if (!requireAuth(deps, session)) return;
+  if (!answerFormAndWake(deps.db, frame.requestID, frame.answer)) {
+    sendError(deps, session, "unknown_request", `no pending form ${frame.requestID}`);
+  }
+}
+
 function handleSecretReply(
   deps: DispatchDeps,
   session: Session,
@@ -1234,6 +1262,14 @@ async function handleProviderModelSet(
   frame: Extract<ClientFrame, { type: "provider.model.set" }>,
 ): Promise<void> {
   if (!requireAuth(deps, session)) return;
+  if (frame.providerID === "chatgpt") {
+    try {
+      if (!deps.chatgpt) throw new ChatGPTAuthError("ChatGPT sign-in is unavailable on this daemon.");
+      await deps.chatgpt.setModel(frame.model);
+      deps.reply({ type: "provider.add.ok", providers: deps.router.status() });
+    } catch (error) { sendError(deps, session, "provider_auth", error instanceof ChatGPTAuthError ? error.message : "Could not update the ChatGPT model."); }
+    return;
+  }
   const result = await setProviderModel(deps.router, frame.providerID, frame.model);
   if (!result.ok) {
     sendError(deps, session, result.code, result.message);
@@ -1257,6 +1293,30 @@ async function handleProviderModelsList(
 }
 
 // --- plugins -----------------------------------------------------------------
+
+async function handleProviderAuth(
+  deps: DispatchDeps,
+  session: Session,
+  frame: Extract<ClientFrame, { type: "provider.auth.status" | "provider.auth.start" | "provider.auth.cancel" | "provider.auth.disconnect" | "provider.auth.select" | "provider.auth.acknowledge" }>,
+): Promise<void> {
+  if (!requireAuth(deps, session)) return;
+  const auth = deps.chatgpt;
+  if (!auth) { sendError(deps, session, "provider_auth", "ChatGPT sign-in is unavailable on this daemon."); return; }
+  try {
+    if (frame.type === "provider.auth.start") {
+      if (!session.local) throw new ChatGPTAuthError("For ChatGPT sign-in, open Agni on the same computer as its server using 127.0.0.1 or localhost.");
+      const login = await auth.start(session.device!.id, frame.accountID);
+      // Addressed to the initiating connection; never in the replay log.
+      deps.reply({ type: "provider.auth.started", providerID: "chatgpt", ...login });
+    } else if (frame.type === "provider.auth.cancel") auth.cancel(session.device!.id, frame.loginID);
+    else if (frame.type === "provider.auth.disconnect") await auth.disconnect(frame.accountID);
+    else if (frame.type === "provider.auth.select") await auth.select(frame.accountID);
+    else if (frame.type === "provider.auth.acknowledge") await auth.acknowledge(frame.accountID);
+    deps.reply({ type: "provider.auth.state", providerID: "chatgpt", connection: auth.state() });
+  } catch (error) {
+    sendError(deps, session, "provider_auth", error instanceof ChatGPTAuthError ? error.message : "ChatGPT connection could not be updated. Please try again.");
+  }
+}
 
 function handlePluginList(deps: DispatchDeps, session: Session): void {
   if (!requireAuth(deps, session)) return;

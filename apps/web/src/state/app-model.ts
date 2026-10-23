@@ -20,6 +20,7 @@ import {
   type ApprovalRow,
   type ChatMessage,
   type ClientFrame,
+  type ChatGPTConnection,
   type ConnectionEvent,
   type ConnectionState,
   type ConversationEffect,
@@ -87,6 +88,10 @@ export interface AppSnapshot {
   providerAddSuccess: string | null;
   providerModels: string[];
   providerModelsError: string | null;
+  chatgpt: ChatGPTConnection | null;
+  chatgptLogin: { loginID: string; authorizeURL: string; expiresAt: string } | null;
+  chatgptBusy: boolean;
+  chatgptError: string | null;
 
   isExporting: boolean;
   exportedLink: ExportLink | null;
@@ -175,6 +180,12 @@ export class AppModel {
   private providerModels: string[] = [];
   private providerModelsError: string | null = null;
   private pendingProviderID: string | null = null;
+  private chatgpt: ChatGPTConnection | null = null;
+  private chatgptLogin: AppSnapshot["chatgptLogin"] = null;
+  private chatgptBusy = false;
+  private chatgptError: string | null = null;
+  private chatgptPopup: Window | null = null;
+  private chatgptStartCancelled = false;
 
   private isExporting = false;
   private exportedLink: ExportLink | null = null;
@@ -261,6 +272,10 @@ export class AppModel {
       providerAddSuccess: this.providerAddSuccess,
       providerModels: this.providerModels,
       providerModelsError: this.providerModelsError,
+      chatgpt: this.chatgpt,
+      chatgptLogin: this.chatgptLogin,
+      chatgptBusy: this.chatgptBusy,
+      chatgptError: this.chatgptError,
       isExporting: this.isExporting,
       exportedLink: this.exportedLink,
       exportError: this.exportError,
@@ -388,6 +403,9 @@ export class AppModel {
   }
 
   forgetDevice(): void {
+    this.cancelChatGPTLogin();
+    this.chatgpt = null;
+    this.chatgptError = null;
     this.disconnect();
     SecretStore.clear();
     this.token = "";
@@ -755,9 +773,18 @@ export class AppModel {
       .catch(() => undefined);
   }
 
-  answerForm(form: FormRow, option: string): void {
-    this.conversation.resolveForm(form.id, option);
-    this.send(option);
+  /**
+   * Answer a question the agent asked. The answer goes back on its own frame
+   * so the turn waiting on it can carry on.
+   */
+  answerForm(form: FormRow, answer: string): void {
+    this.conversation.resolveForm(form.id, answer);
+    this.publish();
+    const connection = this.connection;
+    if (!connection) return;
+    void connection
+      .send({ type: "form.answer", requestID: form.id, answer })
+      .catch(() => undefined);
   }
 
   /**
@@ -923,7 +950,60 @@ export class AppModel {
     this.providerAddError = null;
     this.providerAddSuccess = null;
     this.pendingProviderID = null;
+    this.chatgptError = null;
+    this.refreshChatGPT();
     this.publish();
+  }
+
+  refreshChatGPT(): void {
+    if (!this.connection || !isReady(this.connectionState)) return;
+    void this.connection.send({ type: "provider.auth.status", providerID: "chatgpt" }).catch(() => {});
+  }
+
+  startChatGPTLogin(accountID?: string): void {
+    if (!this.connection || !isReady(this.connectionState)) {
+      this.chatgptError = "Connect to Agni before signing in to ChatGPT.";
+      this.publish(); return;
+    }
+    const host = new URL(websocketURL(this.settings)!).hostname;
+    if (!["127.0.0.1", "localhost", "[::1]"].includes(host)) {
+      this.chatgptError = "Open Agni on the same computer as its server to sign in to ChatGPT.";
+      this.publish(); return;
+    }
+    if (this.chatgptBusy || this.chatgpt?.status === "pending") return;
+    this.chatgptStartCancelled = false;
+    // Open during the user's click so popup blockers do not prevent OAuth.
+    this.chatgptPopup = typeof window !== "undefined" ? window.open("about:blank", "_blank") : null;
+    if (this.chatgptPopup) this.chatgptPopup.opener = null;
+    this.chatgptBusy = true; this.chatgptError = null; this.providerAddSuccess = null;
+    this.publish();
+    void this.connection.send({ type: "provider.auth.start", providerID: "chatgpt", ...(accountID ? { accountID } : {}) }).catch(() => {
+      this.chatgptError = "Could not start ChatGPT sign-in. Try again.";
+      this.chatgptBusy = false; this.chatgptPopup?.close(); this.chatgptPopup = null; this.publish();
+    });
+  }
+
+  cancelChatGPTLogin(): void {
+    this.chatgptStartCancelled = true;
+    if (this.chatgptLogin) void this.connection?.send({ type: "provider.auth.cancel", providerID: "chatgpt", loginID: this.chatgptLogin.loginID }).catch(() => {});
+    this.chatgptLogin = null; this.chatgptBusy = false;
+    this.chatgptPopup?.close(); this.chatgptPopup = null; this.publish();
+  }
+
+  changeChatGPTAccount(accountID: string, disconnect = false): void {
+    if (!this.connection || !isReady(this.connectionState) || this.chatgptBusy) return;
+    this.chatgptBusy = true; this.chatgptError = null; this.publish();
+    void this.connection.send({ type: disconnect ? "provider.auth.disconnect" : "provider.auth.select", providerID: "chatgpt", accountID }).catch(() => {
+      this.chatgptBusy = false; this.chatgptError = "Could not update the ChatGPT account. Try again."; this.publish();
+    });
+  }
+
+  acknowledgeChatGPTPlan(): void {
+    const accountID = this.chatgpt?.activeAccountID;
+    if (!this.connection || !accountID || !isReady(this.connectionState)) return;
+    void this.connection.send({ type: "provider.auth.acknowledge", providerID: "chatgpt", accountID }).catch(() => {
+      this.chatgptError = "Could not save your preference. Please try again."; this.publish();
+    });
   }
 
   // MARK: chrome
@@ -1276,6 +1356,35 @@ export class AppModel {
       return;
     }
 
+    if (frame.type === "provider.auth.started") {
+      if (this.chatgptStartCancelled) {
+        void this.connection?.send({ type: "provider.auth.cancel", providerID: "chatgpt", loginID: frame.loginID }).catch(() => {});
+        return;
+      }
+      try {
+        const url = new URL(frame.authorizeURL);
+        if (url.origin !== "https://auth.openai.com" || url.pathname !== "/api/accounts/authorize" || url.searchParams.has("id_token_hint")) throw new Error("Unexpected sign-in URL");
+        this.chatgptLogin = { loginID: frame.loginID, authorizeURL: url.href, expiresAt: frame.expiresAt };
+        if (this.chatgptPopup && !this.chatgptPopup.closed) this.chatgptPopup.location.replace(url.href);
+      } catch {
+        // A blocked popup still leaves a visible, validated sign-in link.
+        if (!this.chatgptLogin) this.chatgptError = "The ChatGPT sign-in link could not be verified. Try again.";
+      }
+      this.chatgptBusy = false;
+      this.publish(); return;
+    }
+
+    if (frame.type === "provider.auth.state") {
+      const wasConnecting = !!this.chatgptLogin || this.chatgptBusy;
+      this.chatgpt = frame.connection;
+      if (frame.connection.status !== "pending") {
+        this.chatgptBusy = false; this.chatgptLogin = null; this.chatgptPopup = null;
+        if (wasConnecting && frame.connection.status === "connected" && !frame.connection.message) this.providerAddSuccess = "ChatGPT is connected. You're ready to chat.";
+        void this.refreshHealth();
+      }
+      this.publish(); return;
+    }
+
     if (frame.type === "provider.add.ok") {
       this.configuredProviders = frame.providers.map((provider) => {
         const maybeTiers = (provider as { tiers?: string[] }).tiers;
@@ -1326,6 +1435,13 @@ export class AppModel {
     if (frame.type === "hello.ok") return;
 
     if (frame.type === "error") {
+      if (frame.code === "provider_auth") {
+        this.chatgptError = frame.message; this.chatgptBusy = false;
+        this.isAddingProvider = false; this.pendingProviderID = null;
+        this.providerAddError = frame.message;
+        this.chatgptPopup?.close(); this.chatgptPopup = null;
+        this.publish(); return;
+      }
       if (
         this.isAddingProvider &&
         ["unknown_provider", "invalid_key", "provider_exists", "provider_storage"].includes(frame.code)
@@ -1450,6 +1566,7 @@ export class AppModel {
     this.refreshTasks();
     this.refreshMemories();
     this.refreshPlugins();
+    this.refreshChatGPT();
   }
 
   // MARK: notifications

@@ -5,9 +5,9 @@
  * the user has allowed it or the pattern is on the always-allow list.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, join } from "node:path";
+import { privateTempDir } from "../util/private-temp";
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -59,6 +59,30 @@ interface SecretEnv {
   cleanup: () => void;
 }
 
+function bashExecutable(): string {
+  if (process.platform !== "win32") return "bash";
+  // The Windows system32 bash launcher requires WSL. Use the host-native
+  // Git Bash so cwd, temporary files, and askpass share the host filesystem.
+  const git = Bun.which("git");
+  const roots = [
+    git ? join(dirname(git), "..") : undefined,
+    process.env.ProgramW6432 ? join(process.env.ProgramW6432, "Git") : undefined,
+    process.env.ProgramFiles ? join(process.env.ProgramFiles, "Git") : undefined,
+    process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Programs", "Git") : undefined,
+  ].filter((path): path is string => !!path);
+  const bash = roots.flatMap((root) => [join(root, "bin", "bash.exe"), join(root, "usr", "bin", "bash.exe")]).find(existsSync);
+  if (!bash) throw new Error("Shell tools on Windows require Git Bash. Install Git for Windows and restart Agni.");
+  return bash;
+}
+
+function shellPath(path: string): string {
+  return process.platform === "win32" ? path.replaceAll("\\", "/") : path;
+}
+
+function shellQuote(value: string): string {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
 /**
  * Build a short-lived environment that lets sudo/ssh/git read the owner's
  * password without putting it in argv or the environment. The secret lives in
@@ -70,20 +94,20 @@ interface SecretEnv {
  * `ps`.
  */
 function secretEnv(secret: string): SecretEnv {
-  const dir = mkdtempSync(join(tmpdir(), "agni-secret-"));
+  const dir = privateTempDir("agni-secret-");
   const secretPath = join(dir, "secret");
   const askpass = join(dir, "askpass.sh");
   const sudoWrapper = join(dir, "sudo");
   writeFileSync(secretPath, `${secret}\n`, { mode: 0o600 });
-  writeFileSync(askpass, `#!/bin/sh\ncat "${secretPath}"\n`, { mode: 0o700 });
+  writeFileSync(askpass, `#!/bin/sh\ncat ${shellQuote(shellPath(secretPath))}\n`, { mode: 0o700 });
   writeFileSync(sudoWrapper, `#!/bin/sh\nexec /usr/bin/sudo -A "$@"\n`, { mode: 0o700 });
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
-    PATH: `${dir}:${process.env.PATH ?? ""}`,
-    SUDO_ASKPASS: askpass,
-    SSH_ASKPASS: askpass,
+    PATH: `${dir}${delimiter}${process.env.PATH ?? ""}`,
+    SUDO_ASKPASS: shellPath(askpass),
+    SSH_ASKPASS: shellPath(askpass),
     SSH_ASKPASS_REQUIRE: "force",
-    GIT_ASKPASS: askpass,
+    GIT_ASKPASS: shellPath(askpass),
   };
   return {
     env,
@@ -122,6 +146,7 @@ export async function runBash(args: BashArgs): Promise<BashResult> {
   mkdirSync(cwd, { recursive: true });
   const timeoutMs = Math.min(args.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000);
   const startedAt = Date.now();
+  const executable = bashExecutable();
   const secret = args.secret;
   const secretSetup = secret ? secretEnv(secret) : null;
 
@@ -130,10 +155,11 @@ export async function runBash(args: BashArgs): Promise<BashResult> {
     let stderr = "";
     let timedOut = false;
     let settled = false;
-    const child = spawn("bash", ["-c", args.command], {
+    const child = spawn(executable, ["-c", args.command], {
       cwd,
       env: secretSetup?.env ?? { ...process.env },
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     }) as unknown as ChildProcessWithoutNullStreams;
 
     if (secret) {

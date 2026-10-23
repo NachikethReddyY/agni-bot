@@ -4,7 +4,7 @@
  * and system notes centre, because they belong to the thread, not a person.
  */
 import { useEffect, useRef, useState } from "react";
-import { Hand, KeyRound, MessageCircleQuestion } from "lucide-react";
+import { Hand, KeyRound, Mail, MessageCircleQuestion } from "lucide-react";
 import {
   decisionTitle,
   format,
@@ -169,12 +169,7 @@ function MessageBlock({
     <>
       {isNewDay(messages, index) ? (
         <div className="day-divider">
-          {format.dayTitle(message.createdAt ?? new Date())}
-        </div>
-      ) : null}
-      {startsNewMoment(messages, index) ? (
-        <div className="time-divider">
-          {format.time(message.createdAt ?? new Date())}
+          {format.moment(message.createdAt ?? new Date())}
         </div>
       ) : null}
       <MessageRowView
@@ -188,9 +183,11 @@ function MessageBlock({
 }
 
 /**
- * A stamp of the clock, the way the reference app marks a moment in the
- * thread: one small centred time above a run of messages, not a timestamp on
- * every bubble. A new run starts after five quiet minutes.
+ * A stamp of the moment, the way the reference app marks a moment in the
+ * thread: one small centred line above a run of messages, not a timestamp on
+ * every bubble. The line says when it was — the clock today, "Yesterday" with
+ * the clock, the date with the clock for anything older. A new run starts
+ * after five quiet minutes.
  */
 function startsNewMoment(messages: ChatMessage[], index: number): boolean {
   const message = messages[index];
@@ -201,6 +198,11 @@ function startsNewMoment(messages: ChatMessage[], index: number): boolean {
   return message.createdAt.getTime() - previous.getTime() >= 5 * 60 * 1000;
 }
 
+/**
+ * A centred stamp at the top of the thread and at every day boundary, the
+ * way iMessage marks a date. It says when: the clock today, "Yesterday" with
+ * the clock, the date with the clock for anything older.
+ */
 function isNewDay(messages: ChatMessage[], index: number): boolean {
   const message = messages[index];
   if (!message) return false;
@@ -275,7 +277,25 @@ function ApprovalCard({ approval, onAnswer }: { approval: ApprovalRow; onAnswer:
   );
 }
 
+/**
+ * A question the agent asked, drawn the way the reference app draws it: the
+ * question on top, the choices as a list with letters, and — when more than
+ * one may be chosen — a Done button. Typing in the composer instead answers
+ * the question with your own words and steers the work.
+ */
 function FormCard({ form, onAnswer }: { form: FormRow; onAnswer: (option: string) => void }) {
+  const [chosen, setChosen] = useState<string[]>([]);
+
+  if (form.kind === "email" && form.email) {
+    return <EmailDraftCard form={form} onAnswer={onAnswer} />;
+  }
+
+  const toggle = (option: string): void => {
+    setChosen((current) =>
+      current.includes(option) ? current.filter((item) => item !== option) : [...current, option],
+    );
+  };
+
   return (
     <div className="form-card">
       <div className="card-heading">
@@ -283,23 +303,83 @@ function FormCard({ form, onAnswer }: { form: FormRow; onAnswer: (option: string
         {form.question}
       </div>
       {form.options.length > 0 ? (
-        <div className="form-options">
-          {form.options.map((option, index) => (
-            <button
-              key={option}
-              type="button"
-              className="form-option"
-              onClick={() => onAnswer(option)}
-            >
-              <span className="form-option-key" aria-hidden="true">
-                {String.fromCharCode(65 + index)}
-              </span>
-              <span className="form-option-label">{option}</span>
-            </button>
-          ))}
-        </div>
+        <>
+          <div className="form-options">
+            {form.options.map((option, index) => (
+              <button
+                key={option}
+                type="button"
+                className={`form-option${chosen.includes(option) ? " chosen" : ""}`}
+                onClick={() => (form.multiple ? toggle(option) : onAnswer(option))}
+                aria-pressed={form.multiple ? chosen.includes(option) : undefined}
+              >
+                <span className="form-option-key" aria-hidden="true">
+                  {String.fromCharCode(65 + index)}
+                </span>
+                <span className="form-option-label">{option}</span>
+              </button>
+            ))}
+          </div>
+          {form.multiple ? (
+            <div className="card-actions">
+              <button
+                type="button"
+                className="btn small primary"
+                disabled={chosen.length === 0}
+                onClick={() => onAnswer(chosen.join(", "))}
+              >
+                Done
+              </button>
+            </div>
+          ) : null}
+        </>
       ) : null}
       <div className="form-hint">Or answer in your own words below.</div>
+    </div>
+  );
+}
+
+/**
+ * An email the agent composed, put up for the owner to send or discard. It
+ * sends nothing by itself: the decision goes back to the agent, and only a
+ * "send" lets it call `mail_send`.
+ */
+function EmailDraftCard({ form, onAnswer }: { form: FormRow; onAnswer: (option: string) => void }) {
+  const email = form.email;
+  if (!email) return null;
+  return (
+    <div className="form-card email-card">
+      <div className="card-heading">
+        <Mail size={12} color="var(--amber)" />
+        New email
+        <span className="spacer" />
+        <span className="email-chip">Ready to send</span>
+      </div>
+      <div className="email-fields">
+        {email.from ? (
+          <div className="email-field">
+            <span className="email-field-label">From</span>
+            <span className="email-field-value">{email.from}</span>
+          </div>
+        ) : null}
+        <div className="email-field">
+          <span className="email-field-label">To</span>
+          <span className="email-field-value">{email.to}</span>
+        </div>
+        <div className="email-field">
+          <span className="email-field-label">Subject</span>
+          <span className="email-field-value">{email.subject}</span>
+        </div>
+      </div>
+      <div className="email-body">{email.body}</div>
+      <div className="card-actions">
+        <button type="button" className="btn small" onClick={() => onAnswer("Discard")}>
+          Discard
+        </button>
+        <button type="button" className="btn small primary" onClick={() => onAnswer("Send email")}>
+          Send email
+        </button>
+      </div>
     </div>
   );
 }

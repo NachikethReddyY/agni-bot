@@ -55,6 +55,25 @@ export function stamp(date: Date, now: Date = new Date()): string {
   return isSameDay(date, now) ? time(date) : shortDayFormat.format(date);
 }
 
+/** A moment in the thread, said so the owner knows when. */
+export function numericDate(date: Date): string {
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${day}/${month}/${date.getFullYear()}`;
+}
+
+/**
+ * The stamp over a run of messages: the clock today, "Yesterday" with the
+ * clock, and the date with the clock for anything older.
+ */
+export function moment(date: Date, now: Date = new Date()): string {
+  if (isSameDay(date, now)) return time(date);
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (isSameDay(date, yesterday)) return `Yesterday · ${time(date)}`;
+  return `${numericDate(date)} ${time(date)}`;
+}
+
 /** Sidebar freshness: "now", "12m", "3h", then a date. */
 export function freshness(date: Date, now: Date = new Date()): string {
   const seconds = Math.max(0, (now.getTime() - date.getTime()) / 1000);
@@ -125,6 +144,8 @@ export const format = {
   time,
   dayTitle,
   stamp,
+  moment,
+  numericDate,
   freshness,
   latency,
   tokens,

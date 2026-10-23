@@ -6,6 +6,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import { statSync, readFileSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { join } from "node:path";
 import {
   isMacOS,
   removePrivilegedScript,
@@ -17,10 +19,25 @@ describe("the private script", () => {
   test("it lives in a private directory and is not world readable", () => {
     const { dir, scriptPath } = writePrivilegedScript("sudo rm -rf /tmp/thing");
     try {
-      const dirMode = statSync(dir).mode & 0o777;
-      const fileMode = statSync(scriptPath).mode & 0o777;
-      expect(dirMode).toBe(0o700);
-      expect(fileMode).toBe(0o700);
+      if (process.platform === "win32") {
+        const identity = execFileSync("whoami", ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true });
+        const sid = identity.match(/S-1-\d+(?:-\d+)+/)?.[0];
+        expect(sid).toBeDefined();
+        for (const path of [dir, scriptPath]) {
+          const aclFile = join(dir, "acl.txt");
+          execFileSync("icacls", [path, "/save", aclFile, "/q"], { stdio: "pipe", windowsHide: true });
+          const acl = readFileSync(aclFile, "utf16le");
+          const entries = acl.match(/\([^)]*\)/g) ?? [];
+          expect(entries.length).toBeGreaterThan(0);
+          for (const entry of entries) {
+            expect(entry.startsWith("(A;")).toBe(true);
+            expect(entry).toContain(`;FA;;;${sid})`);
+          }
+        }
+      } else {
+        expect(statSync(dir).mode & 0o777).toBe(0o700);
+        expect(statSync(scriptPath).mode & 0o777).toBe(0o700);
+      }
       // The command is in the file, not in a command line.
       expect(readFileSync(scriptPath, "utf8")).toContain("sudo rm -rf /tmp/thing");
     } finally {

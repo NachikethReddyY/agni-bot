@@ -463,6 +463,77 @@ button:disabled {
   padding: 0 8px 12px;
 }
 
+/* The agents you keep, as a grid of marks: one is centred, two sit side by
+   side, and the rest wrap — always centred. */
+.sidebar-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 4px 14px;
+}
+
+.sidebar-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 104px;
+  padding: 10px 6px 12px;
+  border: none;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--ink);
+  text-align: center;
+}
+
+.sidebar-tile:hover {
+  background: rgb(255 255 255 / 5%);
+}
+
+.sidebar-tile.selected {
+  background: var(--surface-raised);
+}
+
+.sidebar-tile-mark {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  margin-bottom: 5px;
+  border-radius: 18px;
+  background: var(--surface);
+}
+
+/* The star in the corner of the mark. */
+.sidebar-tile-star {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--amber);
+  color: #1a1206;
+  box-shadow: 0 0 0 2px var(--sidebar);
+}
+
+.sidebar-tile-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-tile-tag {
+  color: var(--ink-tertiary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .sidebar-row {
   display: flex;
   align-items: center;
@@ -875,20 +946,12 @@ button:disabled {
   text-align: center;
 }
 
+/* The centred date stamp, at the top of the thread and at day boundaries. */
 .day-divider {
   align-self: center;
   padding: 4px 0;
   color: var(--ink-secondary);
   font-size: var(--text-caption);
-  text-align: center;
-}
-
-/* The clock, centred above a run of messages. */
-.time-divider {
-  align-self: center;
-  padding: 1px 0 3px;
-  color: var(--ink-tertiary);
-  font-size: 11px;
   text-align: center;
 }
 
@@ -1047,21 +1110,24 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+/* A message that arrived from another agent: their mark, their name. The
+   shape is the outgoing notice's, word for word. */
+
+/* "Messaged <agent>" — plain centred text, the same shape as the incoming
+   "Message from <agent>", the way the reference draws both. */
 .handoff-notice {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   align-self: center;
   max-width: 100%;
-  padding: 6px 11px;
-  border-radius: 99px;
-  background: var(--surface-raised);
+  padding: 2px 0 4px;
 }
 
 .handoff-flow {
   overflow: hidden;
   color: var(--ink-secondary);
-  font-size: var(--text-caption);
+  font-size: var(--text-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1082,7 +1148,7 @@ button:disabled {
   background: none;
   color: var(--ink);
   font: inherit;
-  font-size: var(--text-caption);
+  font-size: var(--text-meta);
   font-weight: 600;
   cursor: pointer;
   text-decoration: underline;
@@ -1400,6 +1466,89 @@ button:disabled {
 .form-option:hover .form-option-key {
   background: var(--ember);
   color: #fff;
+}
+
+/* A chosen option, the way the reference app marks it. */
+.form-option.chosen {
+  background: rgb(255 255 255 / 5%);
+}
+
+.form-option.chosen .form-option-key {
+  background: var(--agent-accent, var(--ember));
+  color: #fff;
+}
+
+/* The email draft, put up for the owner to send or discard. */
+.email-card {
+  gap: 12px;
+}
+
+.email-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  background: var(--surface-raised);
+  color: var(--ink-secondary);
+  font-size: var(--text-caption);
+}
+
+.email-chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+}
+
+.email-fields {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--canvas);
+}
+
+.email-field {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.email-field:last-child {
+  border-bottom: none;
+}
+
+.email-field-label {
+  width: 54px;
+  flex: 0 0 auto;
+  color: var(--ink-tertiary);
+  font-size: var(--text-caption);
+}
+
+.email-field-value {
+  min-width: 0;
+  color: var(--ink);
+  font-size: var(--text-meta);
+  overflow-wrap: anywhere;
+}
+
+.email-body {
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: var(--text-meta);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 .form-option-label {
@@ -3344,3 +3493,7 @@ button:disabled {
     transform: translate(-50%, -50%);
   }
 }
+.chatgpt-connection { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.chatgpt-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.chatgpt-connection .settings-row { flex-wrap: wrap; gap: 10px; overflow-wrap: anywhere; }
+.chatgpt-welcome { z-index: 110; }

@@ -46,6 +46,7 @@ never reason about thread ids.
 | `agent.rename` | `{agentId, name}` | Renames an agent and completes primary-agent onboarding. |
 | `agent.profile` | `{agentId, role?, visibility?}` | Edits an agent's profile from the app: `role` is the tag the roster shows ("chief of staff"), `visibility` is what other agents may see of its work (`private \| summary \| shared`). At least one field is required. The answer is an `agent.updated` carrying the new `role` and `visibility`; the same change the `update_agent` chat tool makes, so the two cannot drift apart. |
 | `agent.create` | `{name, prompt, role?, id?, color?}` | Creates an agent from the app's roster — the "+" button. `prompt` is its system prompt, `role` its tag. The same creation the `create_agent` chat tool performs, so a bot made here and a bot made in chat are the same kind of thing; the roster comes back in an `agents.update`. |
+| `form.answer` | `{requestID, answer}` | The owner answered a question the agent asked — the option they chose, or their own words if they typed instead of choosing. The answer lands on the `forms` row and the turn waiting on it carries on with it. |
 | `msg.cancel` | `{turnID}` | Interrupts the turn: providers abort, partial output is kept. |
 | `approve.reply` | `{requestID, decision}` | `decision`: `once \| always \| reject`. |
 | `secret.reply` | `{requestID, value}` | The owner's one-time password for a `secret.request`. Consumed server-side; never persisted, replayed, logged, or sent to the model. |
@@ -67,6 +68,12 @@ never reason about thread ids.
 | `bind.direct` | `{agentID}` | Pins this client to an agent: the server resolves that agent's conversation, its active session block and its DM channel, and answers with them. |
 | `provider.add` | `{providerID, apiKey, model?, baseUrl?, label?}` | Adds a supported API provider over the authenticated socket. `providerID: "custom"` adds an endpoint of the owner's own: `baseUrl` is an OpenAI-compatible base (`https://host/v1`), `label` names it in the list. The daemon stores the key in its mode-600 `.env` and the endpoint in `data/providers.json`; neither is ever returned. |
 | `provider.model.set` | `{providerID, model}` | Changes a configured provider's model ID on the daemon and updates the live router. |
+| `provider.auth.status` | `{providerID: "chatgpt"}` | Reads public ChatGPT connection/account metadata. Requires device authentication. |
+| `provider.auth.start` | `{providerID: "chatgpt", accountID?}` | Starts official OAuth on the daemon host with a loopback callback, fresh PKCE/state/nonce. A saved account ID reuses its registration. Requires a local authenticated connection. |
+| `provider.auth.cancel` | `{providerID: "chatgpt", loginID}` | Cancels the initiating device's pending login. |
+| `provider.auth.select` | `{providerID: "chatgpt", accountID}` | Selects a saved connected account after loading its eligible model catalog. |
+| `provider.auth.acknowledge` | `{providerID: "chatgpt", accountID}` | Persists dismissal of the first-sign-in ChatGPT plan notice for the selected registration. |
+| `provider.auth.disconnect` | `{providerID: "chatgpt", accountID}` | Aborts active ChatGPT requests, clears local tokens, and attempts remote revocation. Keeps registration metadata for later sign-in. |
 | `plugin.list` | `{}` | The plugin catalog bound to accounts (see below); answer: `plugin.list.ok`. |
 | `plugin.connect` | `{pluginID, account}` | Begin connecting `pluginID` to `account` (`agent` = Agni's own, `owner` = the user's). OAuth kinds answer `plugin.connect.ok` with an authorize URL to open in the system browser; MCP kinds are not connectable until their server pass lands. |
 | `plugin.configure` | `{pluginID, account, user?, pass?, key?, url?, clientID?, clientSecret?}` | Gives a plugin its credentials and connects it in one step. `app-password` kinds take `user` + `pass`; `api-key` kinds take `key` and/or `url`; `oauth` kinds take the Google `clientID` + `clientSecret`. The daemon writes them to its mode-600 `plugins.json` and answers `plugin.connect.ok` (with an authorize URL for OAuth). |
@@ -107,7 +114,7 @@ accountLabel?, error?, connectedAt?}`.
 | `approval.request` | `{requestID, action, preview, buttons}` | `buttons`: subset of `once \| always \| reject`. |
 | `secret.request` | `{requestID, purpose, command, kind, expiresAt, threadID?, conversationID?}` | A command needs the owner's password. The frame carries no secret; the owner types it into a secure field. Replayable on reconnect; expires after two minutes. |
 | `secret.cancel` | `{requestID, reason}` | The prompt was resolved, expired, cancelled, or its turn stopped. Replayable. |
-| `form.request` | `{requestID, question, options?}` | Ad-hoc question to the user. |
+| `form.request` | `{requestID, question, options?, multiple?, kind?, email?}` | A question the agent put to the owner. `kind` is `choice` (a list of options) or `email` (a draft to approve: `email` carries `from`, `to`, `subject`, `body`). `multiple` means more than one option may be chosen. The owner answers on the `form.answer` frame — or types instead of choosing, which dismisses the question and steers the work with their message. |
 | `notify` | `{title, body, sound?, threadID?}` | Push-worthy event; Mac opens the referenced thread when clicked. |
 | `agents.update` | `{agents: [{id, name, color?, model?, role?, tools?, onboarded?, visibility?}]}` | Roster snapshot. `onboarded` is set once the agent has been named, which settles the "what should I call you?" prompt. `role` is what the agent is for, in the owner's words ("inbox manager"). `visibility` is what other agents may see of that agent's work: `private` (a receipt only), `summary` (one line) or `shared` (full text). |
 | `thread.list.ok` | `{threads: [{id, agentID, title?, updatedAt}]}` | Answer to `thread.list`; addressed to the requester. |
@@ -123,6 +130,8 @@ accountLabel?, error?, connectedAt?}`.
 | `task.answer.ok` | `{task: {...}}` | The answer was accepted; the task is running again. |
 | `bind.direct.ok` | `{agentID, conversationID, sessionID, channelID}` | The client is bound to that agent's conversation; `sessionID` is the active block, `""` before the first one. Addressed, not replayed. |
 | `provider.add.ok` | `{providers: [...]}` | Provider metadata after adding a key; contains no credentials. |
+| `provider.auth.started` | `{providerID: "chatgpt", loginID, authorizeURL, expiresAt}` | Requester-only, never replayed. Opens OpenAI's authorization page. Contains no access, refresh, or ID token. |
+| `provider.auth.state` | `{providerID: "chatgpt", connection}` | Public state: `status`, saved `accounts [{id,label,connected}]`, `activeAccountID`, selected `model`, eligible `models [{id,label}]`, optional safe `message` and first-sign-in `showWelcome`. Never includes credentials. |
 | `presence` | `{state}` | `online \| offline`. |
 | `status.update` | `{channelId, agentId?, text, transient}` | Activity text; transient updates clear on the next message. |
 | `msg.new` | `{id, channelId, fromType, fromId, senderName, senderColor?, text, internal, uiHint?, toAgentId?, taskId?, questionId?, createdAt}` | Durable channel message; `uiHint` can be `onboarding_name_prompt`, `handoff_notice`, `progress`, `needs_input`, or `normal`. `toAgentId` names the agent a handoff notice is about, so the client can render the name as a link to that agent's chat. `taskId` + `questionId` mark a question from a delegated task: the client renders an answer field that sends `task.answer`. |
@@ -148,7 +157,7 @@ live streaming.
 `bad_frame`, `unauthorized`, `version_mismatch`, `unknown_thread`, `unknown_conversation`,
 `unknown_agent`, `unknown_request`, `unknown_job`, `unknown_task`,
 `bad_task_action`, `capture_failed`, `job_running`, `no_provider`, `provider_failed`,
-`unknown_provider`, `invalid_key`, `provider_exists`, `provider_storage`,
+`unknown_provider`, `invalid_key`, `provider_exists`, `provider_storage`, `provider_auth`,
 `unknown_plugin`, `unknown_connection`, `plugin_not_configured`, `plugin_unavailable`,
 `plugin_connect_failed`, `resync_gap`, `internal`.
 

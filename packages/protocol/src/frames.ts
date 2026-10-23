@@ -218,7 +218,25 @@ export type PluginInfo = z.infer<typeof PluginInfoSchema>;
 // client → server
 // ---------------------------------------------------------------------------
 
+/** Public account metadata only. OAuth credentials never cross the socket. */
+export const ChatGPTConnectionSchema = z.object({
+  status: z.enum(["disconnected", "pending", "connected", "reauth_required", "error"]),
+  accounts: z.array(z.object({ id: z.string(), label: z.string(), connected: z.boolean() })),
+  activeAccountID: z.string().nullable(),
+  model: z.string(),
+  models: z.array(z.object({ id: z.string(), label: z.string() })),
+  message: z.string().optional(),
+  showWelcome: z.boolean().optional(),
+});
+export type ChatGPTConnection = z.infer<typeof ChatGPTConnectionSchema>;
+
 export const ClientFrameSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("provider.auth.status"), providerID: z.literal("chatgpt") }),
+  z.object({ type: z.literal("provider.auth.start"), providerID: z.literal("chatgpt"), accountID: z.string().max(64).optional() }),
+  z.object({ type: z.literal("provider.auth.cancel"), providerID: z.literal("chatgpt"), loginID: z.string().max(64) }),
+  z.object({ type: z.literal("provider.auth.disconnect"), providerID: z.literal("chatgpt"), accountID: z.string().max(64) }),
+  z.object({ type: z.literal("provider.auth.select"), providerID: z.literal("chatgpt"), accountID: z.string().max(64) }),
+  z.object({ type: z.literal("provider.auth.acknowledge"), providerID: z.literal("chatgpt"), accountID: z.string().max(64) }),
   z.object({
     type: z.literal("hello"),
     v: z.number().int(),
@@ -430,6 +448,15 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
     id: z.string().max(64).optional(),
     color: z.string().max(16).optional(),
   }),
+  /**
+   * The owner answered a question the agent asked. The answer is the option
+   * they chose, or their own words if they typed instead of choosing.
+   */
+  z.object({
+    type: z.literal("form.answer"),
+    requestID: z.string().min(1),
+    answer: z.string().min(1).max(4_000),
+  }),
 ]);
 export type ClientFrame = z.infer<typeof ClientFrameSchema>;
 export type ClientFrameType = ClientFrame["type"];
@@ -506,6 +533,19 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     requestID: z.string(),
     question: z.string(),
     options: z.array(z.string()).optional(),
+    /** More than one option may be chosen; the answer is then a list. */
+    multiple: z.boolean().optional(),
+    /** Which card the client draws: a list of choices, or an email draft. */
+    kind: z.enum(["choice", "email"]).optional(),
+    /** The draft, when `kind` is "email". */
+    email: z
+      .object({
+        from: z.string().optional(),
+        to: z.string(),
+        subject: z.string(),
+        body: z.string(),
+      })
+      .optional(),
   }),
   z.object({ type: z.literal("notify"), seq, title: z.string(), body: z.string(), sound: z.boolean().optional(), threadID: z.string().optional() }),
   z.object({
@@ -587,6 +627,9 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     lastSuccessAt: z.number().optional(),
   })) }),
   z.object({ type: z.literal("provider.models.ok"), seq, providerID: z.string(), models: z.array(z.string()) }),
+  /** Login URLs are requester-only and never replayed; they contain no tokens. */
+  z.object({ type: z.literal("provider.auth.started"), seq, providerID: z.literal("chatgpt"), loginID: z.string(), authorizeURL: z.string().url(), expiresAt: z.string() }),
+  z.object({ type: z.literal("provider.auth.state"), seq, providerID: z.literal("chatgpt"), connection: ChatGPTConnectionSchema }),
   /** Answer to `plugin.list`; addressed to the requester, not replayed. */
   z.object({ type: z.literal("plugin.list.ok"), seq, plugins: z.array(PluginInfoSchema) }),
   z.object({

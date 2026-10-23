@@ -312,6 +312,68 @@ describe("websocket end-to-end", () => {
     expect(error.code).toBe("bad_frame");
   });
 
+  test("the agent can put a question to the owner, and the answer comes back", async () => {
+    let call = 0;
+    const fetchMock = (async () => {
+      call += 1;
+      return call === 1
+        ? sseToolCall("ask", { question: "Which one?", options: ["Revenue", "Headcount"] })
+        : sseResponse("Chosen.");
+    }) as unknown as typeof fetch;
+    await startTestServer(fetchMock);
+
+    // Onboard the agent first: until it has a name, a message to the main
+    // channel is taken as its name instead of being published.
+    client!.send({ type: "agent.rename", agentId: "ea", name: "Vision" });
+    await client!.next("agent.updated");
+    client!.send({ type: "msg.send", channelId: "main", text: "ask me something" });
+    await client!.next("msg.new", { match: (frame) => frame.fromType === "user" });
+
+    const form = await client!.next("form.request", { timeoutMs: 10_000 });
+    expect(form.question).toBe("Which one?");
+    expect(form.options).toEqual(["Revenue", "Headcount"]);
+    expect(form.kind).toBe("choice");
+
+    client!.send({ type: "form.answer", requestID: form.requestID, answer: "Headcount" });
+    await client!.next("turn.end", { timeoutMs: 10_000 });
+
+    // The answer reached the model: the tool result carries it.
+    const calls = db!.query<{ tool_name: string; result: string }, []>(
+      "SELECT tool_name, result FROM tool_calls WHERE tool_name = 'ask'",
+    ).all();
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.result).toContain("Headcount");
+  });
+
+  test("an email draft waits for the owner's decision", async () => {
+    let call = 0;
+    const fetchMock = (async () => {
+      call += 1;
+      return call === 1
+        ? sseToolCall("draft_email", { to: "sarah@acme.com", subject: "Moving the review", body: "Hi Sarah," })
+        : sseResponse("Sent.");
+    }) as unknown as typeof fetch;
+    await startTestServer(fetchMock);
+
+    client!.send({ type: "agent.rename", agentId: "ea", name: "Vision" });
+    await client!.next("agent.updated");
+    client!.send({ type: "msg.send", channelId: "main", text: "draft that email" });
+    await client!.next("msg.new", { match: (frame) => frame.fromType === "user" });
+
+    const form = await client!.next("form.request", { timeoutMs: 10_000 });
+    expect(form.kind).toBe("email");
+    expect(form.email?.to).toBe("sarah@acme.com");
+    expect(form.email?.subject).toBe("Moving the review");
+
+    client!.send({ type: "form.answer", requestID: form.requestID, answer: "Discard" });
+    await client!.next("turn.end", { timeoutMs: 10_000 });
+
+    const calls = db!.query<{ tool_name: string; result: string }, []>(
+      "SELECT tool_name, result FROM tool_calls WHERE tool_name = 'draft_email'",
+    ).all();
+    expect(calls[0]?.result).toContain("discard");
+  });
+
   test("opens a direct channel for a specialist", async () => {
     await startTestServer();
     client!.send({ type: "msg.send", channelId: "dm:researcher", toAgentId: "researcher", text: "hello researcher" });

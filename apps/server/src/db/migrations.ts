@@ -792,4 +792,28 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_message_attachments_file ON message_attachments(attachment_id);
     `,
   },
+  {
+    id: 30,
+    name: "owner_forms",
+    sql: `
+      -- A question the agent put to the owner: a set of options to choose
+      -- from, or a draft to approve. The row is the durable record; the
+      -- answer comes back on the 'form.answer' frame.
+      CREATE TABLE forms (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+        turn_id TEXT,
+        kind TEXT NOT NULL,               -- choice | email
+        question TEXT NOT NULL,
+        options TEXT,                     -- JSON array, choice only
+        multiple INTEGER NOT NULL DEFAULT 0,
+        email TEXT,                       -- JSON {from,to,subject,body}
+        status TEXT NOT NULL,             -- pending | answered
+        answer TEXT,
+        created_at TEXT NOT NULL,
+        answered_at TEXT
+      );
+      CREATE INDEX idx_forms_thread ON forms(thread_id, created_at);
+    `,
+  },
 ];

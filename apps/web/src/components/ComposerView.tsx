@@ -113,6 +113,11 @@ export function ComposerView() {
     sendingRef.current = true;
     setSending(true); setError(undefined);
     try {
+      // A question the agent asked is answered by what you write: the card is
+      // dismissed and your words become the answer, so the message steers the
+      // work rather than waiting behind a choice.
+      const openForm = snapshot.conversation.openForms[0];
+      if (openForm && trimmed.length > 0) model.answerForm(openForm, trimmed);
       if (attachments.length) {
         const uploaded: AttachmentInfo[] = [];
         for (const [index, item] of attachments.entries()) {

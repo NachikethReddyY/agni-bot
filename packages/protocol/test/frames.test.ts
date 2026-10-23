@@ -9,6 +9,12 @@ import {
 } from "../src/index";
 
 describe("client frames", () => {
+  test("accepts ChatGPT account actions without an API key", () => {
+    expect(parseClientFrame({ type: "provider.auth.start", providerID: "chatgpt" }).ok).toBe(true);
+    expect(parseClientFrame({ type: "provider.auth.select", providerID: "chatgpt", accountID: "unit-account" }).ok).toBe(true);
+    expect(parseClientFrame({ type: "provider.auth.start", providerID: "unknown" }).ok).toBe(false);
+    expect(parseClientFrame({ type: "provider.auth.disconnect", providerID: "chatgpt" }).ok).toBe(false);
+  });
   test("accepts a full msg.send", () => {
     const result = parseClientFrame({
       type: "msg.send",

@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import { Spinner } from "./bits";
+import { ChatGPTConnectionView } from "./ChatGPTConnectionView";
 
 interface ProviderOption {
   id: string;
@@ -10,6 +11,7 @@ interface ProviderOption {
 }
 
 const OPTIONS: ProviderOption[] = [
+  { id: "chatgpt", title: "ChatGPT", note: "Sign in with your existing ChatGPT account" },
   { id: "groq", title: "Groq", note: "Fast · instant lane" },
   { id: "cerebras", title: "Cerebras", note: "Fast · instant lane" },
   { id: "nim", title: "NVIDIA NIM", note: "Free credits · all lanes" },
@@ -32,7 +34,7 @@ const CUSTOM_ID = "custom";
 export function AddProviderView({ onDismiss }: { onDismiss: () => void }) {
   const model = useAppModel();
   const snapshot = useAppSnapshot();
-  const [providerID, setProviderID] = useState("groq");
+  const [providerID, setProviderID] = useState("chatgpt");
   const [apiKey, setApiKey] = useState("");
   const [modelID, setModelID] = useState(SUGGESTED_MODELS.groq ?? "");
   const [baseUrl, setBaseUrl] = useState("");
@@ -76,13 +78,13 @@ export function AddProviderView({ onDismiss }: { onDismiss: () => void }) {
     <div
       className="overlay"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onDismiss();
+        if (event.target === event.currentTarget) { model.cancelChatGPTLogin(); onDismiss(); }
       }}
     >
       <div className="dialog wide" role="dialog" aria-label="Add a provider">
         <div>
           <h2>Add a provider</h2>
-          <p style={{ marginTop: 4 }}>Choose an API provider and add its key.</p>
+          <p style={{ marginTop: 4 }}>Connect your ChatGPT account or add an API provider.</p>
         </div>
 
         {available.length === 0 ? (
@@ -97,6 +99,7 @@ export function AddProviderView({ onDismiss }: { onDismiss: () => void }) {
                 aria-label="Provider"
                 onChange={(event) => {
                   const id = event.target.value;
+                  if (providerID === "chatgpt" && id !== providerID) model.cancelChatGPTLogin();
                   setProviderID(id);
                   setModelID(SUGGESTED_MODELS[id] ?? "");
                 }}
@@ -110,6 +113,7 @@ export function AddProviderView({ onDismiss }: { onDismiss: () => void }) {
             </label>
             {option ? <span className="settings-note">{option.note}</span> : null}
 
+            {providerID === "chatgpt" ? <ChatGPTConnectionView /> : <>
             {isCustom ? (
               <>
                 <label className="field">
@@ -179,17 +183,18 @@ export function AddProviderView({ onDismiss }: { onDismiss: () => void }) {
               The key is sent to your connected daemon and saved in the daemon host's mode-600
               .env file. The app does not keep a copy.
             </span>
+            </>}
           </>
         )}
 
-        {snapshot.providerAddError ? <p className="warning-text">{snapshot.providerAddError}</p> : null}
+        {providerID !== "chatgpt" && snapshot.providerAddError ? <p className="warning-text">{snapshot.providerAddError}</p> : null}
 
         <div className="dialog-actions">
-          <button type="button" className="btn" onClick={onDismiss}>
+          <button type="button" className="btn" onClick={() => { model.cancelChatGPTLogin(); onDismiss(); }}>
             Cancel
           </button>
           <span className="spacer" />
-          <button
+          {providerID !== "chatgpt" ? <button
             type="button"
             className="btn primary"
             disabled={!canSave}
@@ -201,7 +206,7 @@ export function AddProviderView({ onDismiss }: { onDismiss: () => void }) {
           >
             {snapshot.isAddingProvider ? <Spinner /> : null}
             Save provider
-          </button>
+          </button> : null}
         </div>
       </div>
     </div>

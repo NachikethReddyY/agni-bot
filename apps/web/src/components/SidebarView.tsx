@@ -22,12 +22,12 @@ export function SidebarView() {
   const snapshot = useAppSnapshot();
   const [creating, setCreating] = useState(false);
 
-  // Pinned agents come first; the rest keep the roster's order.
+  // Pinned agents go into the grid at the top; the rest keep the roster's
+  // order in the list below.
   const pinned = new Set(snapshot.preferences.favorites);
-  const agents = [
-    ...model.filteredAgents.filter((agent) => pinned.has(agent.id)),
-    ...model.filteredAgents.filter((agent) => !pinned.has(agent.id)),
-  ];
+  const roster = model.filteredAgents;
+  const favourites = roster.filter((agent) => pinned.has(agent.id));
+  const others = roster.filter((agent) => !pinned.has(agent.id));
   const connected = snapshot.plugins.filter((plugin) => plugin.status === "connected");
   const total = snapshot.plugins.length;
   const owner = profileName(snapshot.settings.deviceName);
@@ -44,7 +44,7 @@ export function SidebarView() {
     return newest?.preview;
   };
 
-  const row = (agent: (typeof agents)[number]) => {
+  const row = (agent: (typeof roster)[number]) => {
     const selected = snapshot.conversation.agentID === agent.id;
     // A private agent is worth saying out loud: other agents see a
     // receipt for its work, not the work itself.
@@ -142,12 +142,39 @@ export function SidebarView() {
       </div>
 
       <div className="sidebar-sections">
-        {agents.length === 0 ? (
+        {favourites.length > 0 ? (
+          <div className="sidebar-grid">
+            {favourites.map((agent) => {
+              const selected = snapshot.conversation.agentID === agent.id;
+              return (
+                <button
+                  type="button"
+                  key={agent.id}
+                  className={`sidebar-tile${selected ? " selected" : ""}`}
+                  onClick={() => model.selectAgent(agent)}
+                  aria-label={`Open ${agent.name} chat`}
+                  aria-current={selected ? "true" : undefined}
+                >
+                  <span className="sidebar-tile-mark">
+                    <SidebarAgentBadge agent={agent} size={44} />
+                    <span className="sidebar-tile-star" aria-label="Favourite">
+                      <Star size={10} />
+                    </span>
+                  </span>
+                  <span className="sidebar-tile-name">{agent.name}</span>
+                  {agent.role ? <span className="sidebar-tile-tag">{agent.role}</span> : null}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+
+        {others.length === 0 ? (
           <div className="sidebar-empty">
             {snapshot.searchText.trim().length === 0 ? "No agents available" : "No matching agents"}
           </div>
         ) : (
-          agents.map(row)
+          others.map(row)
         )}
       </div>
 

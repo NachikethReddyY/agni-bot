@@ -135,4 +135,42 @@ describe("the thread", () => {
     const notice = link.closest(".handoff-notice");
     expect(notice?.querySelector(".badge")).not.toBeNull();
   });
+
+  it("heads a brief from another agent with who sent it", () => {
+    const model = new AppModel({ healthPollMs: 0 });
+    (model as unknown as { handleFrame: (value: unknown) => void }).handleFrame({
+      type: "agents.update",
+      seq: 1,
+      agents: [
+        { id: "ea", name: "Vision", color: "#f0b95a" },
+        { id: "friday", name: "F.R.I.D.A.Y.", color: "#4a9eff" },
+      ],
+    });
+    render(
+      <AppModelProvider model={model}>
+        <MessageRowView
+          message={message({
+            id: "m6",
+            role: "system",
+            text: "Vision messaged you: draft the reply to the invoice",
+          })}
+          agent={agent}
+          isSelected={false}
+          onToggleSelect={() => undefined}
+        />
+      </AppModelProvider>,
+    );
+
+    expect(screen.getByText("Message from")).toBeInTheDocument();
+    expect(screen.getByText("Vision")).toBeInTheDocument();
+    // The brief itself reads as a message, not as a log line.
+    expect(screen.getByText("draft the reply to the invoice")).toBeInTheDocument();
+    expect(screen.queryByText(/Vision messaged you/)).not.toBeInTheDocument();
+  });
+
+  it("leaves an ordinary system note alone", () => {
+    renderRow(message({ id: "m7", role: "system", text: "Session closed." }));
+    expect(screen.getByText("Session closed.")).toBeInTheDocument();
+    expect(screen.queryByText(/Message from/)).not.toBeInTheDocument();
+  });
 });

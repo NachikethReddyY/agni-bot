@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { mkdir, chmod, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { imageSize } from "image-size";
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type AttachmentInfo } from "@agni/protocol";
 import { newID, nowISO } from "../util/ids";
@@ -71,7 +72,7 @@ export async function saveAttachment(db: Database, dbPath: string, deviceID: str
   } else if (ext === "pdf") {
     if (new TextDecoder().decode(bytes.slice(0, 5)) !== "%PDF-") throw new Error("This is not a PDF file.");
     kind = "pdf"; mimeType = "application/pdf";
-    const child = Bun.spawn([process.execPath, new URL("./pdf-worker.ts", import.meta.url).pathname], {
+    const child = Bun.spawn([process.execPath, fileURLToPath(new URL("./pdf-worker.ts", import.meta.url))], {
       stdin: bytes, stdout: "pipe", stderr: "ignore",
     });
     const timer = setTimeout(() => child.kill(), 15_000);

@@ -34,6 +34,10 @@ Foreground alternative while hacking: `bun run dev` (watch mode). Both modes are
 the same process; the daemon just detaches it, writes `data/agni.pid`, appends
 to `data/agni.log`, and waits for `/health` before reporting success.
 
+On Windows, shell tools require Git for Windows (Git Bash). Agni uses that
+host-native shell rather than the Windows WSL launcher. Temporary credentials
+and privileged scripts use an owner-only Windows ACL; Unix hosts use file modes.
+
 ### Web app
 
 `apps/web` is the React port of the SwiftUI client. It runs on pnpm + Turborepo
@@ -61,6 +65,33 @@ pnpm --filter @agni/client smoke   # headless client core against a live daemon
 pnpm --filter @agni/web smoke:ui   # Playwright smoke (needs AGNI_URL/AGNI_TOKEN
                                    # and a running Vite dev server)
 ```
+
+### Connect a ChatGPT plan
+
+In the web app, open **Settings → Models & providers → Add provider**, choose
+**ChatGPT**, and click **Continue with ChatGPT**. Complete OpenAI's sign-in and
+allow Agni to use your ChatGPT plan; Agni selects an eligible model automatically.
+No API key is needed. Your browser and Agni server must run on the same computer
+for this first version's loopback callback. Account/workspace eligibility and
+ChatGPT usage limits still apply.
+
+While connected, ChatGPT is the selected model source. An error or usage limit
+stops the request rather than silently switching to API-key billing. Settings
+lets you choose an account-specific model, reconnect, switch saved accounts, or
+disconnect. Disconnecting returns routing to your other configured providers.
+Your ChatGPT conversations and memories are not imported.
+
+The daemon owns OAuth, token renewal, and Responses streaming. Registration and
+tokens live in `data/chatgpt/accounts.json` beside the configured database, with
+owner-only Unix permissions or a restricted Windows ACL. Browser storage, frame
+replay, and model prompts never receive those credentials. Remote sign-out is
+attempted before the disconnect completes; a warning explains when revocation
+could not be confirmed.
+
+This uses the official [Sign in with ChatGPT open-source flow](https://developers.openai.com/siwc/token-sharing-open-source).
+It targets local/open-source installations; commercial or hosted distribution
+has separate OpenAI access requirements. `provider.auth.*` frames are additive
+to protocol v2.
 
 ### Background work (the daemon doing things on its own)
 
