@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { ChatGPTConnection } from "@agni/protocol";
 import { ProviderError } from "./client";
 import type { ProviderConfig } from "./providers";
+import { chatGPTPage } from "./chatgpt-page";
 
 const AUTH = "https://auth.openai.com";
 const RESOURCE = "https://api.openai.com/v1";
@@ -367,8 +368,7 @@ export class ChatGPTAuth {
   private closeAttempt(): void { if (this.pending) { clearTimeout(this.pending.timer); this.pending.server.stop(); this.pending = undefined; } }
   private changed(): void { this.options.onChange?.(); }
   private page(message: string, status = 200): Response {
-    const text = message.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-    return new Response(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Agni · ChatGPT</title></head><body><h1>Agni</h1><p>${text}</p></body></html>`, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff" } });
+    return chatGPTPage(message, status);
   }
   private save(): Promise<void> {
     if (!this.options.filePath) return Promise.resolve();
