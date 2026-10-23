@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatGPTAuth } from "../src/models/chatgpt-auth";
+import { chatGPTPage } from "../src/models/chatgpt-page";
 import { responsesBody, streamChatGPT } from "../src/models/chatgpt-responses";
 import type { ChatRequest } from "../src/models/client";
 import { Router } from "../src/models/router";
@@ -77,6 +78,19 @@ function harness(options: { path?: string; claims?: Record<string, unknown>; sco
 }
 
 describe("ChatGPT OAuth", () => {
+  test("callback pages escape messages and allow only the bundled stylesheet", async () => {
+    const response = chatGPTPage('<script>alert("untrusted")</script>', 400);
+    const html = await response.text();
+    expect(response.status).toBe(400);
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).not.toContain("<script>");
+    const style = html.match(/<style>([\s\S]*?)<\/style>/)![1]!;
+    const hash = createHash("sha256").update(style).digest("base64");
+    expect(response.headers.get("content-security-policy")).toContain(`style-src 'sha256-${hash}'`);
+    expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  });
   test("registers Agni with a stable host, fresh PKCE and no secret in the browser URL", async () => {
     const h = harness();
     const first = await h.begin();
