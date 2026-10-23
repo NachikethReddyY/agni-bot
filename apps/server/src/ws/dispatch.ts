@@ -69,6 +69,7 @@ import { fetchPage } from "../tools/fetch-url";
 import type { PluginService } from "../plugins/service";
 import { pluginMailResolver } from "../plugins/credentials";
 import type { FrameLog } from "./frame-log";
+import { activateAppearanceProfile, deleteAppearanceProfile, listAppearanceProfiles, saveAppearanceProfile } from "../stores/appearance";
 
 export interface Session {
   id: string;
@@ -180,6 +181,23 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return await handleProviderAuth(deps, session, frame);
     case "plugin.list":
       return handlePluginList(deps, session);
+    case "appearance.list":
+      return void deps.reply({ type: "appearance.list.ok", ...listAppearanceProfiles(deps.db) });
+    case "appearance.save":
+      if (frame.profile.background.kind === "image" && !deps.db.query("SELECT 1 FROM background_assets WHERE id = ?").get(frame.profile.background.assetID)) {
+        return sendError(deps, session, "unknown_background", "That background image no longer exists. Upload it again.");
+      }
+      saveAppearanceProfile(deps.db, frame.profile, frame.activate ?? true);
+      deps.emit({ type: "appearance.updated", ...listAppearanceProfiles(deps.db) });
+      return;
+    case "appearance.activate":
+      activateAppearanceProfile(deps.db, frame.id);
+      deps.emit({ type: "appearance.updated", ...listAppearanceProfiles(deps.db) });
+      return;
+    case "appearance.delete":
+      deleteAppearanceProfile(deps.db, frame.id);
+      deps.emit({ type: "appearance.updated", ...listAppearanceProfiles(deps.db) });
+      return;
     case "plugin.connect":
       return await handlePluginConnect(deps, session, frame);
     case "plugin.configure":

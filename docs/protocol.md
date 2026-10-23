@@ -75,6 +75,10 @@ never reason about thread ids.
 | `provider.auth.acknowledge` | `{providerID: "chatgpt", accountID}` | Persists dismissal of the first-sign-in ChatGPT plan notice for the selected registration. |
 | `provider.auth.disconnect` | `{providerID: "chatgpt", accountID}` | Aborts active ChatGPT requests, clears local tokens, and attempts remote revocation. Keeps registration metadata for later sign-in. |
 | `plugin.list` | `{}` | The plugin catalog bound to accounts (see below); answer: `plugin.list.ok`. |
+| `appearance.list` | `{}` | Read the owner's named appearance profiles and active profile. |
+| `appearance.save` | `{profile, activate?}` | Validate and upsert a versioned appearance profile; activates it unless `activate` is false. |
+| `appearance.activate` | `{id}` | Select an existing profile for every connected client. |
+| `appearance.delete` | `{id}` | Delete a named profile. |
 | `plugin.connect` | `{pluginID, account}` | Begin connecting `pluginID` to `account` (`agent` = Agni's own, `owner` = the user's). OAuth kinds answer `plugin.connect.ok` with an authorize URL to open in the system browser; MCP kinds are not connectable until their server pass lands. |
 | `plugin.configure` | `{pluginID, account, user?, pass?, key?, url?, clientID?, clientSecret?}` | Gives a plugin its credentials and connects it in one step. `app-password` kinds take `user` + `pass`; `api-key` kinds take `key` and/or `url`; `oauth` kinds take the Google `clientID` + `clientSecret`. The daemon writes them to its mode-600 `plugins.json` and answers `plugin.connect.ok` (with an authorize URL for OAuth). |
 | `plugin.disconnect` | `{connectionID}` | Revokes the connection (server-side tokens deleted, Google revoke called); answers and fans out the refreshed snapshot. |
@@ -92,6 +96,8 @@ browser complete back at the daemon's loopback redirect
 | Frame | Payload | Notes |
 | --- | --- | --- |
 | `plugin.list.ok` | `{plugins: [PluginInfo]}` | Answer to `plugin.list` / `plugin.disconnect`; addressed to the requester, not replayed. |
+| `appearance.list.ok` | `{profiles, activeID}` | Requester-only answer containing the current appearance library. |
+| `appearance.updated` | `{profiles, activeID}` | Replayable appearance-library change broadcast to paired clients. |
 | `plugin.connect.ok` | `{pluginID, account, authorizeURL}` | Open `authorizeURL` in the system browser; `null` when nothing is needed. |
 | `plugin.state` | `{plugins: [PluginInfo]}` | Replayable snapshot emitted whenever a connection changes (browser callback landed, expired, errored, disconnected). |
 
@@ -159,7 +165,7 @@ live streaming.
 `bad_task_action`, `capture_failed`, `job_running`, `no_provider`, `provider_failed`,
 `unknown_provider`, `invalid_key`, `provider_exists`, `provider_storage`, `provider_auth`,
 `unknown_plugin`, `unknown_connection`, `plugin_not_configured`, `plugin_unavailable`,
-`plugin_connect_failed`, `resync_gap`, `internal`.
+`plugin_connect_failed`, `unknown_background`, `resync_gap`, `internal`.
 
 ## Versioning
 
@@ -211,3 +217,19 @@ Image-capable configured model IDs are explicitly listed in `AGNI_VISION_MODELS`
 Provider failover for images only uses that allowlist. File contents are treated
 as untrusted user data. Binary image content is expanded at the provider boundary,
 not stored as base64 in session logs.
+
+### Appearance profiles (additive v2 extension)
+
+Appearance profiles are versioned semantic settings rather than CSS. Version 1
+contains a name, light/dark/system mode, a built-in surface preset, an accent,
+background settings, text scale, density, corner style, motion preference, and
+agent-colour strength. The daemon stores named profiles and broadcasts the
+active selection so web and Mac clients stay aligned. Clients may cache the
+last active profile to avoid painting the default theme while reconnecting.
+
+Background bytes use authenticated HTTP and are never conversation
+attachments. `POST /backgrounds` accepts one PNG, JPEG, or WebP image up to
+10 MB and returns `{id}`. `GET /backgrounds/:id` requires a paired-device
+Bearer token. `DELETE /backgrounds/:id` refuses to remove an image referenced
+by a saved profile. Paths are generated server-side, bytes are content-sniffed,
+and the assets are never sent to a model. Theme JSON exports omit image bytes.

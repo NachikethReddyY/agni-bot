@@ -11,7 +11,7 @@ struct RootView: View {
 
   var body: some View {
     ZStack {
-      Palette.canvas.ignoresSafeArea()
+      appearanceBackground.ignoresSafeArea()
       switch model.screen {
       case .pairing:
         PairingView(model: model)
@@ -43,9 +43,21 @@ struct RootView: View {
         ThreadView(model: model)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(Palette.canvas)
+      .background(model.appearance.background.kind == "none" ? Palette.canvas : Palette.canvas.opacity(0.28))
     }
-    .background(Palette.canvas)
+    .background(model.appearance.background.kind == "none" ? Palette.canvas : Color.clear)
+  }
+
+  @ViewBuilder private var appearanceBackground: some View {
+    let background = model.appearance.background
+    if background.kind == "image", let image = model.backgroundImage {
+      Image(nsImage: image).resizable().scaledToFill().blur(radius: background.blur ?? 0)
+        .overlay(Color.black.opacity(background.dim ?? 0.68)).clipped()
+    } else if background.kind == "gradient" {
+      LinearGradient(colors: [Color(serverHex: background.from ?? "#111827"), Color(serverHex: background.to ?? "#3b1520")], startPoint: .topLeading, endPoint: .bottomTrailing)
+    } else if background.kind == "solid" {
+      Color(serverHex: background.color ?? "#111827")
+    } else { Palette.canvas }
   }
 
   private func toastOverlay(_ toast: NoticeRow) -> some View {

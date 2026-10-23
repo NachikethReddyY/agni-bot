@@ -9,6 +9,11 @@ import {
 } from "../src/index";
 
 describe("client frames", () => {
+  test("validates versioned appearance profiles", () => {
+    const profile = { version: 1, id: "theme_test", name: "Test", mode: "system", preset: "agni", accent: "ember", background: { kind: "none" }, textScale: "default", density: "comfortable", corners: "standard", motion: "system", agentTint: "full", updatedAt: "2026-10-23T00:00:00.000Z" };
+    expect(parseClientFrame({ type: "appearance.save", profile }).ok).toBe(true);
+    expect(parseClientFrame({ type: "appearance.save", profile: { ...profile, customAccent: "red", accent: "custom" } }).ok).toBe(false);
+  });
   test("accepts ChatGPT account actions without an API key", () => {
     expect(parseClientFrame({ type: "provider.auth.start", providerID: "chatgpt" }).ok).toBe(true);
     expect(parseClientFrame({ type: "provider.auth.select", providerID: "chatgpt", accountID: "unit-account" }).ok).toBe(true);

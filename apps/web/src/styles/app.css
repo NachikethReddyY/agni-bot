@@ -65,11 +65,39 @@ button:disabled {
 }
 
 .app {
+  position: relative;
   display: flex;
   height: 100dvh;
   overflow: hidden;
   background: var(--canvas);
   color: var(--ink);
+}
+
+.app::before {
+  position: fixed;
+  inset: -28px;
+  z-index: 0;
+  background-color: var(--canvas);
+  background-image: var(--app-background-image, none);
+  background-position: var(--app-background-position, 50% 50%);
+  background-repeat: no-repeat;
+  background-size: var(--app-background-size, cover);
+  content: "";
+  filter: blur(var(--app-background-blur, 0));
+  pointer-events: none;
+}
+
+.app > * { position: relative; z-index: 1; }
+.app[data-has-background="true"] .chat-main,
+.app[data-has-background="true"] .thread { background-color: transparent; }
+.app[data-density="compact"] .transcript-inner { gap: 9px; }
+.app[data-motion="reduced"] *,
+.app[data-motion="reduced"] *::before,
+.app[data-motion="reduced"] *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+@media (prefers-reduced-motion: reduce) {
+  .app[data-motion="system"] *, .app[data-motion="system"] *::before, .app[data-motion="system"] *::after {
+    animation-duration: 1ms !important; transition-duration: 1ms !important;
+  }
 }
 
 /* Shared pieces --------------------------------------------------------- */
@@ -120,7 +148,7 @@ button:disabled {
 .btn.primary {
   border-color: transparent;
   background: var(--ember);
-  color: #fff;
+  color: var(--accent-ink, #fff);
   font-weight: 600;
 }
 
@@ -667,7 +695,7 @@ button:disabled {
   border: none;
   border-radius: 50%;
   background: var(--ember);
-  color: #ffffff;
+  color: var(--accent-ink, #ffffff);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -1465,7 +1493,7 @@ button:disabled {
 
 .form-option:hover .form-option-key {
   background: var(--ember);
-  color: #fff;
+  color: var(--accent-ink, #fff);
 }
 
 /* A chosen option, the way the reference app marks it. */
@@ -1475,7 +1503,7 @@ button:disabled {
 
 .form-option.chosen .form-option-key {
   background: var(--agent-accent, var(--ember));
-  color: #fff;
+  color: var(--agent-accent-ink, #fff);
 }
 
 /* The email draft, put up for the owner to send or discard. */
@@ -2263,6 +2291,59 @@ button:disabled {
 
 .settings-group-head .spacer {
   flex: 1;
+}
+
+/* Appearance ------------------------------------------------------------ */
+.appearance-settings { padding-bottom: 28px; }
+.appearance-toolbar, .appearance-actions, .appearance-inline, .background-controls {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.appearance-toolbar label { display: flex; align-items: center; gap: 7px; color: var(--ink-secondary); font-size: var(--text-meta); }
+.appearance-toolbar select, .background-controls select {
+  min-height: 32px; padding: 0 28px 0 9px; border: 1px solid var(--hairline); border-radius: 8px;
+  background-color: var(--surface); color: var(--ink);
+}
+.appearance-toolbar input[type="text"] { min-height: 32px; width: 150px; padding: 0 9px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface); color: var(--ink); }
+.appearance-preview {
+  display: grid; grid-template-columns: 90px 1fr; min-height: 220px; overflow: hidden;
+  border: 1px solid var(--hairline); border-radius: var(--card-radius); background: var(--canvas); color: var(--ink);
+  box-shadow: var(--shadow-card);
+}
+.appearance-preview-sidebar { display: flex; flex-direction: column; gap: 12px; padding: 18px 12px; background: var(--sidebar); }
+.appearance-preview-sidebar i { height: 8px; border-radius: 99px; background: var(--surface-raised); }
+.preview-flame { color: var(--ember); }
+.appearance-preview-chat { display: flex; flex-direction: column; gap: 10px; padding: 20px; background-color: var(--canvas); background-image: radial-gradient(circle at 50% 0, var(--agent-tint), transparent 55%), var(--app-background-image, none); background-position: center; background-size: cover; }
+.preview-message { width: fit-content; max-width: 82%; padding: 9px 12px; border-radius: var(--bubble-radius); font-size: var(--text-meta); }
+.preview-message.assistant { background: var(--incoming-bubble); }
+.preview-message.owner { align-self: flex-end; background: var(--agent-bubble); color: var(--agent-bubble-ink); }
+.appearance-preview code { width: fit-content; padding: 8px; border-radius: 7px; background: var(--surface-raised); color: var(--ink-secondary); }
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 9px; }
+.theme-card { position: relative; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 7px; border: 1px solid var(--hairline); border-radius: 10px; background: transparent; color: var(--ink); }
+.theme-card.selected { border-color: var(--ember); box-shadow: 0 0 0 1px var(--ember); }
+.theme-card svg { margin-left: auto; color: var(--ember); }
+.theme-card-colors { width: 30px; height: 30px; flex: none; border: 1px solid var(--hairline); border-radius: 7px; }
+.segmented { display: inline-flex; flex-wrap: wrap; gap: 3px; padding: 3px; border-radius: 9px; background: var(--surface-raised); }
+.segmented button { min-height: 28px; padding: 4px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-secondary); }
+.segmented button.selected { background: var(--ink); color: var(--canvas); }
+.accent-grid { display: flex; gap: 11px; flex-wrap: wrap; }
+.accent-grid > button, .custom-swatch { width: 34px; height: 34px; padding: 4px; border: 2px solid transparent; border-radius: 50%; background: var(--swatch); box-shadow: inset 0 0 0 1px rgb(127 127 127 / 22%); cursor: pointer; }
+.accent-grid > .selected, .custom-swatch.selected { border-color: var(--ink); box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ember); }
+.custom-swatch { display: grid; place-items: center; background: conic-gradient(red, yellow, lime, aqua, blue, magenta, red); }
+.custom-swatch input { width: 0; height: 0; opacity: 0; }
+.appearance-inline label, .background-controls label { display: flex; align-items: center; gap: 7px; color: var(--ink-secondary); font-size: var(--text-meta); }
+.appearance-inline input[type="color"] { width: 38px; height: 28px; padding: 2px; border: 1px solid var(--hairline); border-radius: 7px; background: transparent; }
+.appearance-error { color: #ff8b8b; font-size: var(--text-meta); }
+.advanced-toggle { display: flex; justify-content: space-between; width: 100%; padding: 11px 2px; border: 0; border-bottom: 1px solid var(--hairline); background: transparent; color: var(--ink); font-size: var(--text-title); text-align: left; }
+.appearance-advanced { gap: 0; }
+.appearance-choice { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 10px 0; border-bottom: 1px solid var(--hairline); }
+.appearance-choice:last-child { border-bottom: 0; }
+.appearance-choice strong { font-size: var(--text-body); font-weight: 500; }
+.appearance-actions > span { flex: 1; }
+.btn.danger { color: #ff8b8b; }
+@media (max-width: 650px) {
+  .appearance-preview { grid-template-columns: 62px 1fr; min-height: 190px; }
+  .appearance-choice { align-items: flex-start; flex-direction: column; }
+  .appearance-actions > span { display: none; }
 }
 
 /* Preferences ------------------------------------------------------------ */

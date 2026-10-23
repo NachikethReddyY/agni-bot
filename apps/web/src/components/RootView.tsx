@@ -2,10 +2,10 @@
  * The root: pairing or the two-column chat window, plus the overlays that can
  * appear over either. Keyboard commands mirror the Agni menu in the Mac app.
  */
-import { useEffect, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { AlertTriangle, BellRing, X } from "lucide-react";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
-import { themeFor, themeVariables } from "../theme";
+import { appearanceVariables } from "../appearance";
 import { AgentSwitcherView } from "./AgentSwitcherView";
 import { AgentProfileView } from "./AgentProfileView";
 import { PairingView } from "./PairingView";
@@ -19,6 +19,28 @@ import { ChatGPTPlanNotice } from "./ChatGPTConnectionView";
 export function RootView() {
   const model = useAppModel();
   const snapshot = useAppSnapshot();
+  const [prefersDark, setPrefersDark] = useState(() => typeof matchMedia === "undefined" || matchMedia("(prefers-color-scheme: dark)").matches);
+  const [backgroundURL, setBackgroundURL] = useState<string | null>(null);
+  const backgroundAssetID = snapshot.appearance.background.kind === "image" ? snapshot.appearance.background.assetID : null;
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const update = () => setPrefersDark(query.matches);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (!backgroundAssetID) { setBackgroundURL(null); return; }
+    const controller = new AbortController();
+    let url: string | null = null;
+    void model.backgroundBlob(backgroundAssetID, controller.signal).then((blob) => {
+      url = URL.createObjectURL(blob);
+      setBackgroundURL(url);
+    }).catch(() => setBackgroundURL(null));
+    return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
+  }, [backgroundAssetID, model]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -59,7 +81,13 @@ export function RootView() {
   }, [model, snapshot.isAgentSwitcherPresented, snapshot.isSettingsPresented, snapshot.isAgentProfilePresented]);
 
   return (
-    <div className="app" style={themeVariables(themeFor(model.agent?.color)) as CSSProperties}>
+    <div
+      className="app"
+      data-density={snapshot.appearance.density}
+      data-motion={snapshot.appearance.motion}
+      data-has-background={snapshot.appearance.background.kind !== "none"}
+      style={appearanceVariables(snapshot.appearance, prefersDark, model.agent?.color, backgroundURL) as CSSProperties}
+    >
       {snapshot.screen === "pairing" ? <PairingView /> : <ChatView />}
       {snapshot.isAgentSwitcherPresented ? <AgentSwitcherView /> : null}
       {snapshot.isSettingsPresented ? <SettingsView /> : null}

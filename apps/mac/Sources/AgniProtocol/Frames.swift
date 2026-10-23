@@ -229,6 +229,54 @@ public struct PluginInfo: Sendable, Equatable, Decodable, Identifiable {
   }
 }
 
+public struct AppearanceBackground: Sendable, Equatable, Codable {
+  public var kind: String
+  public var color: String?
+  public var from: String?
+  public var to: String?
+  public var angle: Int?
+  public var assetID: String?
+  public var fit: String?
+  public var positionX: Double?
+  public var positionY: Double?
+  public var dim: Double?
+  public var blur: Double?
+
+  public init(kind: String, color: String? = nil, from: String? = nil, to: String? = nil, angle: Int? = nil,
+              assetID: String? = nil, fit: String? = nil, positionX: Double? = nil, positionY: Double? = nil,
+              dim: Double? = nil, blur: Double? = nil) {
+    self.kind = kind; self.color = color; self.from = from; self.to = to; self.angle = angle
+    self.assetID = assetID; self.fit = fit; self.positionX = positionX; self.positionY = positionY
+    self.dim = dim; self.blur = blur
+  }
+}
+
+public struct AppearanceProfile: Sendable, Equatable, Codable, Identifiable {
+  public var version: Int
+  public var id: String
+  public var name: String
+  public var mode: String
+  public var preset: String
+  public var accent: String
+  public var customAccent: String?
+  public var background: AppearanceBackground
+  public var textScale: String
+  public var density: String
+  public var corners: String
+  public var motion: String
+  public var agentTint: String
+  public var updatedAt: String
+
+  public init(version: Int = 1, id: String, name: String, mode: String, preset: String, accent: String,
+              customAccent: String? = nil, background: AppearanceBackground, textScale: String,
+              density: String, corners: String, motion: String, agentTint: String, updatedAt: String) {
+    self.version = version; self.id = id; self.name = name; self.mode = mode; self.preset = preset
+    self.accent = accent; self.customAccent = customAccent; self.background = background
+    self.textScale = textScale; self.density = density; self.corners = corners; self.motion = motion
+    self.agentTint = agentTint; self.updatedAt = updatedAt
+  }
+}
+
 public struct ProviderInfo: Sendable, Equatable, Decodable, Identifiable {
   public var id: String
   public var label: String
@@ -284,6 +332,10 @@ public enum ClientFrame: Sendable, Equatable {
   case providerModelSet(providerID: String, model: String)
   case providerModelsList(providerID: String)
   case pluginList
+  case appearanceList
+  case appearanceSave(profile: AppearanceProfile, activate: Bool)
+  case appearanceActivate(id: String)
+  case appearanceDelete(id: String)
   case pluginConnect(pluginID: String, account: String)
   case pluginDisconnect(connectionID: String)
   case agentRename(agentId: String, name: String)
@@ -314,6 +366,10 @@ public enum ClientFrame: Sendable, Equatable {
     case .providerModelSet: "provider.model.set"
     case .providerModelsList: "provider.models.list"
   case .pluginList: "plugin.list"
+  case .appearanceList: "appearance.list"
+  case .appearanceSave: "appearance.save"
+  case .appearanceActivate: "appearance.activate"
+  case .appearanceDelete: "appearance.delete"
   case .pluginConnect: "plugin.connect"
   case .pluginDisconnect: "plugin.disconnect"
   case .agentRename: "agent.rename"
@@ -394,6 +450,13 @@ public enum ClientFrame: Sendable, Equatable {
       object["providerID"] = providerID
     case .pluginList:
       break
+    case .appearanceList:
+      break
+    case .appearanceSave(let profile, let activate):
+      object["profile"] = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(profile))
+      object["activate"] = activate
+    case .appearanceActivate(let id), .appearanceDelete(let id):
+      object["id"] = id
     case .pluginConnect(let pluginID, let account):
       object["pluginID"] = pluginID
       object["account"] = account
@@ -494,6 +557,15 @@ public enum ClientFrame: Sendable, Equatable {
       self = .providerModelsList(providerID: try Require.string(object, "providerID"))
     case "plugin.list":
       self = .pluginList
+    case "appearance.list":
+      self = .appearanceList
+    case "appearance.save":
+      guard let profile = object["profile"] as? [String: Any] else { throw ProtocolError.encoding("missing profile") }
+      self = .appearanceSave(profile: try Decode.frame(AppearanceProfile.self, profile), activate: object["activate"] as? Bool ?? true)
+    case "appearance.activate":
+      self = .appearanceActivate(id: try Require.string(object, "id"))
+    case "appearance.delete":
+      self = .appearanceDelete(id: try Require.string(object, "id"))
     case "plugin.connect":
       self = .pluginConnect(
         pluginID: try Require.string(object, "pluginID"),
@@ -545,6 +617,8 @@ public enum ServerFrame: Sendable, Equatable {
   case pluginListOK(PluginListOK)
   case pluginConnectOK(PluginConnectOK)
   case pluginState(PluginState)
+  case appearanceListOK(AppearanceListOK)
+  case appearanceUpdated(AppearanceListOK)
   case presence(Presence)
   /// What an agent is doing: idle, working, waiting, blocked.
   case agentPresence(AgentPresence)
@@ -583,6 +657,8 @@ public enum ServerFrame: Sendable, Equatable {
   case .pluginListOK(let f): f.seq
   case .pluginConnectOK(let f): f.seq
   case .pluginState(let f): f.seq
+  case .appearanceListOK(let f): f.seq
+  case .appearanceUpdated(let f): f.seq
     case .presence(let f): f.seq
     case .agentPresence(let f): f.seq
     case .statusUpdate(let f): f.seq
@@ -621,6 +697,8 @@ public enum ServerFrame: Sendable, Equatable {
   case .pluginListOK: "plugin.list.ok"
   case .pluginConnectOK: "plugin.connect.ok"
   case .pluginState: "plugin.state"
+  case .appearanceListOK: "appearance.list.ok"
+  case .appearanceUpdated: "appearance.updated"
     case .presence: "presence"
     case .agentPresence: "agent.presence"
     case .statusUpdate: "status.update"
@@ -810,6 +888,12 @@ public enum ServerFrame: Sendable, Equatable {
     public var plugins: [PluginInfo]
   }
 
+  public struct AppearanceListOK: Sendable, Equatable, Decodable {
+    public var seq: Int
+    public var profiles: [AppearanceProfile]
+    public var activeID: String?
+  }
+
   public struct Presence: Sendable, Equatable, Decodable {
     public var seq: Int
     public var state: String
@@ -903,6 +987,8 @@ public enum ServerFrame: Sendable, Equatable {
     case "plugin.list.ok": self = .pluginListOK(try Decode.frame(PluginListOK.self, object))
     case "plugin.connect.ok": self = .pluginConnectOK(try Decode.frame(PluginConnectOK.self, object))
     case "plugin.state": self = .pluginState(try Decode.frame(PluginState.self, object))
+    case "appearance.list.ok": self = .appearanceListOK(try Decode.frame(AppearanceListOK.self, object))
+    case "appearance.updated": self = .appearanceUpdated(try Decode.frame(AppearanceListOK.self, object))
     case "presence": self = .presence(try Decode.frame(Presence.self, object))
     case "agent.presence": self = .agentPresence(try Decode.frame(AgentPresence.self, object))
     case "status.update": self = .statusUpdate(try Decode.frame(StatusUpdate.self, object))

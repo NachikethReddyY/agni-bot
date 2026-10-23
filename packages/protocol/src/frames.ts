@@ -82,6 +82,46 @@ export const AttachmentInfoSchema = z.object({
 });
 export type AttachmentInfo = z.infer<typeof AttachmentInfoSchema>;
 
+// --- appearance -------------------------------------------------------------
+
+/** A synced, named appearance profile. Clients resolve presets into native
+ * colours, while the semantic choices remain portable across platforms. */
+export const AppearanceProfileSchema = z.object({
+  version: z.literal(1),
+  id: z.string().regex(/^theme_[a-zA-Z0-9_-]+$/),
+  name: z.string().trim().min(1).max(64),
+  mode: z.enum(["system", "dark", "light"]),
+  preset: z.enum(["agni", "midnight", "graphite", "paper", "ocean", "forest", "warm"]),
+  accent: z.enum(["ember", "amber", "ocean", "forest", "violet", "rose", "mono", "custom"]),
+  customAccent: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  background: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("none") }),
+    z.object({ kind: z.literal("solid"), color: z.string().regex(/^#[0-9a-fA-F]{6}$/) }),
+    z.object({
+      kind: z.literal("gradient"),
+      from: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+      to: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+      angle: z.number().int().min(0).max(360),
+    }),
+    z.object({
+      kind: z.literal("image"),
+      assetID: z.string().regex(/^bg_[a-zA-Z0-9_-]+$/),
+      fit: z.enum(["cover", "contain"]),
+      positionX: z.number().min(0).max(100),
+      positionY: z.number().min(0).max(100),
+      dim: z.number().min(0).max(0.95),
+      blur: z.number().min(0).max(24),
+    }),
+  ]),
+  textScale: z.enum(["small", "default", "large"]),
+  density: z.enum(["compact", "comfortable"]),
+  corners: z.enum(["square", "standard", "soft"]),
+  motion: z.enum(["system", "full", "reduced"]),
+  agentTint: z.enum(["full", "subtle", "off"]),
+  updatedAt: z.string().datetime(),
+});
+export type AppearanceProfile = z.infer<typeof AppearanceProfileSchema>;
+
 export const MessageInfoSchema = z.object({
   attachments: z.array(AttachmentInfoSchema).max(MAX_ATTACHMENTS).optional(),
   id: z.string().min(1),
@@ -379,6 +419,10 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
   }),
   /** Read the catalog bound to accounts; the settings Plugins pane renders it. */
   z.object({ type: z.literal("plugin.list") }),
+  z.object({ type: z.literal("appearance.list") }),
+  z.object({ type: z.literal("appearance.save"), profile: AppearanceProfileSchema, activate: z.boolean().optional() }),
+  z.object({ type: z.literal("appearance.activate"), id: z.string().regex(/^theme_[a-zA-Z0-9_-]+$/) }),
+  z.object({ type: z.literal("appearance.delete"), id: z.string().regex(/^theme_[a-zA-Z0-9_-]+$/) }),
   /**
    * Begin connecting a plugin to an account. OAuth kinds answer with
    * `plugin.connect.ok` carrying an authorize URL to open in the browser;
@@ -632,6 +676,8 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("provider.auth.state"), seq, providerID: z.literal("chatgpt"), connection: ChatGPTConnectionSchema }),
   /** Answer to `plugin.list`; addressed to the requester, not replayed. */
   z.object({ type: z.literal("plugin.list.ok"), seq, plugins: z.array(PluginInfoSchema) }),
+  z.object({ type: z.literal("appearance.list.ok"), seq, profiles: z.array(AppearanceProfileSchema), activeID: z.string().nullable() }),
+  z.object({ type: z.literal("appearance.updated"), seq, profiles: z.array(AppearanceProfileSchema), activeID: z.string().nullable() }),
   z.object({
     type: z.literal("plugin.connect.ok"),
     seq,

@@ -88,6 +88,8 @@ const KNOWN_SERVER_TYPES = new Set<string>([
   "plugin.list.ok",
   "plugin.connect.ok",
   "plugin.state",
+  "appearance.list.ok",
+  "appearance.updated",
   "presence",
   "agent.presence",
   "status.update",

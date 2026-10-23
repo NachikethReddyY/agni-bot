@@ -54,6 +54,9 @@ final class AppModel {
   private(set) var tasks: [TaskInfo] = []
   /// What the agent can remember, filtered the way retrieval filters it.
   private(set) var memories: [MemoryItem] = []
+  private(set) var appearance = AppearanceRuntime.profile
+  private(set) var appearanceProfiles: [AppearanceProfile] = [AppearanceRuntime.profile]
+  private(set) var backgroundImage: NSImage?
   private(set) var isAddingProvider = false
   private(set) var providerAddError: String?
   private(set) var providerAddSuccess: String?
@@ -508,6 +511,7 @@ final class AppModel {
         refreshThreadList()
         refreshJobs()
         refreshTasks()
+        refreshAppearance()
         startHealthPolling()
         if !wasReady { openConversation(agentID: conversation.agentID) }
       case .refused:
@@ -661,6 +665,12 @@ final class AppModel {
         NSWorkspace.shared.open(url)
       }
 
+    case .appearanceListOK(let result), .appearanceUpdated(let result):
+      appearanceProfiles = result.profiles
+      appearance = result.profiles.first { $0.id == result.activeID } ?? result.profiles.first ?? AppearanceRuntime.profile
+      AppearanceRuntime.profile = appearance
+      loadBackground()
+
     case .helloOK:
       break
 
@@ -753,6 +763,76 @@ final class AppModel {
     refreshJobs()
     refreshTasks()
     refreshPlugins()
+    refreshAppearance()
+  }
+
+  func refreshAppearance() {
+    guard let connection, connectionState.isReady else { return }
+    Task { try? await connection.send(.appearanceList) }
+  }
+
+  func saveAppearance(_ profile: AppearanceProfile) {
+    var next = profile
+    next.name = next.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !next.name.isEmpty else { return }
+    next.updatedAt = ISO8601DateFormatter().string(from: Date())
+    appearance = next
+    AppearanceRuntime.profile = next
+    if let index = appearanceProfiles.firstIndex(where: { $0.id == next.id }) { appearanceProfiles[index] = next }
+    else { appearanceProfiles.insert(next, at: 0) }
+    guard let connection, connectionState.isReady else { return }
+    Task { try? await connection.send(.appearanceSave(profile: next, activate: true)) }
+  }
+
+  func activateAppearance(_ id: String) {
+    guard let selected = appearanceProfiles.first(where: { $0.id == id }) else { return }
+    appearance = selected
+    AppearanceRuntime.profile = selected
+    loadBackground()
+    guard let connection, connectionState.isReady else { return }
+    Task { try? await connection.send(.appearanceActivate(id: id)) }
+  }
+
+  func deleteAppearance(_ id: String) {
+    guard appearanceProfiles.count > 1 else { return }
+    appearanceProfiles.removeAll { $0.id == id }
+    if appearance.id == id, let first = appearanceProfiles.first { activateAppearance(first.id) }
+    guard let connection, connectionState.isReady else { return }
+    Task { try? await connection.send(.appearanceDelete(id: id)) }
+  }
+
+  func uploadBackground(_ fileURL: URL) async throws -> String {
+    guard let base = settings.healthURL else { throw TransportError.failed("Connect to the server first.") }
+    guard let image = NSImage(contentsOf: fileURL), let tiff = image.tiffRepresentation,
+          let bitmap = NSBitmapImageRep(data: tiff), let data = bitmap.representation(using: .png, properties: [:])
+    else { throw TransportError.failed("Choose a PNG, JPEG, or WebP image.") }
+    guard data.count <= 10 * 1024 * 1024 else { throw TransportError.failed("Image exceeds 10 MB.") }
+    let boundary = "Agni-\(UUID().uuidString)"
+    var body = Data()
+    body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"background\"\r\nContent-Type: image/png\r\n\r\n".utf8))
+    body.append(data); body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+    var request = URLRequest(url: URL(string: "/backgrounds", relativeTo: base)!.absoluteURL)
+    request.httpMethod = "POST"; request.httpBody = body
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+    let (responseData, response) = try await URLSession.shared.data(for: request)
+    guard let http = response as? HTTPURLResponse, http.statusCode == 201,
+          let object = try JSONSerialization.jsonObject(with: responseData) as? [String: Any], let id = object["id"] as? String
+    else { throw TransportError.failed("The background could not be uploaded.") }
+    return id
+  }
+
+  private func loadBackground() {
+    backgroundImage = nil
+    guard appearance.background.kind == "image", let id = appearance.background.assetID,
+          let base = settings.healthURL else { return }
+    var request = URLRequest(url: URL(string: "/backgrounds/\(id)", relativeTo: base)!.absoluteURL)
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    Task {
+      guard let (data, response) = try? await URLSession.shared.data(for: request),
+            (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+      backgroundImage = NSImage(data: data)
+    }
   }
 
   // MARK: notifications

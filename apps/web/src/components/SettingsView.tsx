@@ -10,6 +10,7 @@ import {
   Laptop,
   Link as LinkIcon,
   Pencil,
+  Palette,
   Plus,
   Puzzle,
   Settings,
@@ -21,10 +22,17 @@ import { PresenceDot, Spinner, Switch } from "./bits";
 import { AddProviderView } from "./AddProviderView";
 import { ConfigurePluginView } from "./ConfigurePluginView";
 import { ChatGPTConnectionView } from "./ChatGPTConnectionView";
+import { AppearanceView } from "./AppearanceView";
 
-type Section = "general" | "plugins" | "models" | "device";
+type Section = "general" | "appearance" | "plugins" | "models" | "device";
 
 const SECTIONS: { id: Section; title: string; icon: typeof Settings; subtitle: string }[] = [
+  {
+    id: "appearance",
+    title: "Appearance",
+    icon: Palette,
+    subtitle: "Themes, colour, backgrounds and interface comfort.",
+  },
   {
     id: "general",
     title: "General",
@@ -102,6 +110,7 @@ export function SettingsView() {
           </div>
 
           {section === "general" ? <GeneralSection /> : null}
+          {section === "appearance" ? <AppearanceView /> : null}
           {section === "plugins" ? <PluginsSection onConnect={setConnectingPlugin} /> : null}
           {section === "models" ? (
             <ModelsSection

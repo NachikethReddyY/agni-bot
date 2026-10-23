@@ -1,4 +1,5 @@
 import { attachmentRequest } from "../attachments/http";
+import { backgroundRequest } from "../appearance/http";
 /**
  * HTTP + WebSocket entry. Binds to AGNI_HOST only (loopback in dev, the
  * Tailscale interface on bb-1) — nothing listens on the public internet.
@@ -100,6 +101,9 @@ export function startServer(config: Config, db: Database, router: Router, starte
       const url = new URL(request.url);
       if (url.pathname === "/attachments" || url.pathname.startsWith("/attachments/")) {
         return attachmentRequest(request, db, config.dbPath, router);
+      }
+      if (url.pathname === "/backgrounds" || url.pathname.startsWith("/backgrounds/")) {
+        return backgroundRequest(request, db, config.dbPath);
       }
       if (url.pathname === "/health") {
         if (request.method === "OPTIONS") {

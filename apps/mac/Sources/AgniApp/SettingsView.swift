@@ -3,15 +3,19 @@ import SwiftUI
 import AgniKit
 import AgniProtocol
 import AppKit
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
   var model: AppModel
   var showingAddProvider = State(wrappedValue: false)
   var editingProvider = State<ProviderStatus?>(wrappedValue: nil)
   var section = State(wrappedValue: Section.plugins)
+  var appearanceDraft = State(wrappedValue: AppearanceRuntime.profile)
+  var appearanceError = State<String?>(wrappedValue: nil)
 
   enum Section: String, CaseIterable, Identifiable {
     case general = "General"
+    case appearance = "Appearance"
     case plugins = "Plugins"
     case models = "Models & providers"
     case device = "This Mac"
@@ -19,6 +23,7 @@ struct SettingsView: View {
     var systemImage: String {
       switch self {
       case .general: return "gearshape"
+      case .appearance: return "paintpalette"
       case .plugins: return "puzzlepiece.extension"
       case .models: return "cpu"
       case .device: return "laptopcomputer"
@@ -104,6 +109,7 @@ struct SettingsView: View {
   private var subtitle: String {
     switch section.wrappedValue {
     case .general: return "Account, appearance and system preferences."
+    case .appearance: return "Themes, colour, backgrounds and interface comfort."
     case .plugins: return "Connections Agni can use on your behalf. Tokens stay on the daemon."
     case .models: return "Connect API providers. Keys are stored on the server and never on this Mac."
     case .device: return "This Mac and how it pairs with the daemon."
@@ -114,6 +120,7 @@ struct SettingsView: View {
   private var content: some View {
     switch section.wrappedValue {
     case .general: generalSection
+    case .appearance: appearanceSection
     case .plugins: pluginsSection
     case .models: modelsSection
     case .device: deviceSection
@@ -140,6 +147,107 @@ struct SettingsView: View {
       .background(Palette.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
       connectionSection
+    }
+  }
+
+  // MARK: - Appearance
+
+  private var appearanceSection: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      HStack {
+        Text("Profile").font(Typography.meta).foregroundStyle(Palette.inkSecondary)
+        Picker("Profile", selection: Binding(
+          get: { model.appearance.id },
+          set: { id in model.activateAppearance(id); appearanceDraft.wrappedValue = model.appearance }
+        )) {
+          ForEach(model.appearanceProfiles) { profile in Text(profile.name).tag(profile.id) }
+        }.labelsHidden().frame(maxWidth: 220)
+        TextField("Theme name", text: profileBinding(\.name)).frame(maxWidth: 170)
+        Spacer()
+        Button("Save as new") {
+          var copy = appearanceDraft.wrappedValue
+          copy.id = "theme_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+          copy.name += " copy"
+          appearanceDraft.wrappedValue = copy
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 12) {
+        Text("Theme").font(Typography.title)
+        Picker("Theme", selection: profileBinding(\.preset)) {
+          ForEach(["agni", "midnight", "graphite", "paper", "ocean", "forest", "warm"], id: \.self) { Text($0.capitalized).tag($0) }
+        }.pickerStyle(.segmented)
+        Picker("Mode", selection: profileBinding(\.mode)) {
+          Text("System").tag("system"); Text("Dark").tag("dark"); Text("Light").tag("light")
+        }.pickerStyle(.segmented)
+      }.appearanceCard()
+
+      VStack(alignment: .leading, spacing: 12) {
+        Text("Accent palette").font(Typography.title)
+        Picker("Accent", selection: profileBinding(\.accent)) {
+          ForEach(["ember", "amber", "ocean", "forest", "violet", "rose", "mono"], id: \.self) { Text($0.capitalized).tag($0) }
+        }.pickerStyle(.segmented)
+      }.appearanceCard()
+
+      VStack(alignment: .leading, spacing: 12) {
+        Text("Background").font(Typography.title)
+        HStack {
+          Button("None") { appearanceDraft.wrappedValue.background = AppearanceBackground(kind: "none") }
+          Button("Solid") { appearanceDraft.wrappedValue.background = AppearanceBackground(kind: "solid", color: "#111827") }
+          Button("Gradient") { appearanceDraft.wrappedValue.background = AppearanceBackground(kind: "gradient", from: "#111827", to: "#3b1520", angle: 135) }
+          Button("Choose image…") { chooseBackground() }
+        }
+        if appearanceDraft.wrappedValue.background.kind == "image" {
+          HStack {
+            Text("Dim").font(Typography.meta)
+            Slider(value: backgroundBinding(\.dim, fallback: 0.68), in: 0...0.95)
+            Text("Blur").font(Typography.meta)
+            Slider(value: backgroundBinding(\.blur, fallback: 0), in: 0...24)
+          }
+        }
+        if let error = appearanceError.wrappedValue { Text(error).font(Typography.caption).foregroundStyle(.orange) }
+      }.appearanceCard()
+
+      DisclosureGroup("Advanced") {
+        VStack(alignment: .leading, spacing: 12) {
+          appearancePicker("Text size", keyPath: \.textScale, values: ["small", "default", "large"])
+          appearancePicker("Density", keyPath: \.density, values: ["compact", "comfortable"])
+          appearancePicker("Corners", keyPath: \.corners, values: ["square", "standard", "soft"])
+          appearancePicker("Motion", keyPath: \.motion, values: ["system", "full", "reduced"])
+          appearancePicker("Agent color", keyPath: \.agentTint, values: ["full", "subtle", "off"])
+        }.padding(.top, 10)
+      }.appearanceCard()
+
+      HStack {
+        if model.appearanceProfiles.count > 1 { Button("Delete profile", role: .destructive) { model.deleteAppearance(model.appearance.id) } }
+        Spacer()
+        Button("Cancel") { appearanceDraft.wrappedValue = model.appearance }
+        Button("Apply") { model.saveAppearance(appearanceDraft.wrappedValue) }.buttonStyle(.borderedProminent).tint(Palette.ember)
+      }
+    }
+  }
+
+  private func profileBinding(_ keyPath: WritableKeyPath<AppearanceProfile, String>) -> Binding<String> {
+    Binding(get: { appearanceDraft.wrappedValue[keyPath: keyPath] }, set: { appearanceDraft.wrappedValue[keyPath: keyPath] = $0 })
+  }
+
+  private func backgroundBinding(_ keyPath: WritableKeyPath<AppearanceBackground, Double?>, fallback: Double) -> Binding<Double> {
+    Binding(get: { appearanceDraft.wrappedValue.background[keyPath: keyPath] ?? fallback }, set: { appearanceDraft.wrappedValue.background[keyPath: keyPath] = $0 })
+  }
+
+  private func appearancePicker(_ label: String, keyPath: WritableKeyPath<AppearanceProfile, String>, values: [String]) -> some View {
+    HStack { Text(label).font(Typography.body); Spacer(); Picker(label, selection: profileBinding(keyPath)) { ForEach(values, id: \.self) { Text($0.capitalized).tag($0) } }.labelsHidden().frame(width: 240) }
+  }
+
+  private func chooseBackground() {
+    let panel = NSOpenPanel(); panel.allowedContentTypes = [.png, .jpeg, .webP]; panel.allowsMultipleSelection = false
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    Task {
+      do {
+        let id = try await model.uploadBackground(url)
+        appearanceDraft.wrappedValue.background = AppearanceBackground(kind: "image", assetID: id, fit: "cover", positionX: 50, positionY: 50, dim: 0.68, blur: 0)
+        appearanceError.wrappedValue = nil
+      } catch { appearanceError.wrappedValue = error.localizedDescription }
     }
   }
 
@@ -369,6 +477,15 @@ struct SettingsView: View {
 
   private var connectionTitle: String {
     model.connectionState.isReady ? "Agni is connected" : "Agni is disconnected"
+  }
+}
+
+private extension View {
+  func appearanceCard() -> some View {
+    padding(16)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: Metrics.cardRadius).stroke(Palette.hairline, lineWidth: 1))
   }
 }
 

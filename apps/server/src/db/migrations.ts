@@ -816,4 +816,28 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_forms_thread ON forms(thread_id, created_at);
     `,
   },
+  {
+    id: 31,
+    name: "appearance_profiles",
+    sql: `
+      CREATE TABLE appearance_profiles (
+        id TEXT PRIMARY KEY,
+        profile_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE appearance_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        active_profile_id TEXT REFERENCES appearance_profiles(id) ON DELETE SET NULL
+      );
+      INSERT INTO appearance_state (singleton, active_profile_id) VALUES (1, NULL);
+      CREATE TABLE background_assets (
+        id TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL REFERENCES devices(id),
+        mime_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        path TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `,
+  },
 ];

@@ -382,6 +382,8 @@ export class Conversation {
       case "plugin.list.ok":
       case "plugin.connect.ok":
       case "plugin.state":
+      case "appearance.list.ok":
+      case "appearance.updated":
         return [];
 
       case "presence":

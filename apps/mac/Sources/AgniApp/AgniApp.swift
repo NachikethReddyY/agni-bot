@@ -18,7 +18,7 @@ struct AgniApp: App {
       RootView(model: model)
         .frame(minWidth: 940, minHeight: 560)
         .background(Palette.canvas)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(model.appearance.mode == "system" ? nil : (model.appearance.mode == "light" ? .light : .dark))
         .ignoresSafeArea(.container, edges: .top)
         .windowConfigurator()
         .task { model.start() }

@@ -1,4 +1,5 @@
 import { AttachmentInfoSchema, type AttachmentInfo } from "@agni/client";
+import { AppearanceProfileSchema, type AppearanceProfile } from "@agni/protocol";
 /**
  * The app model: pairing, the connection, the open transcript, the roster, the
  * daemon's health, and every user intent the views need. Views call methods
@@ -46,6 +47,7 @@ import {
   savePreferences,
   type Preferences,
 } from "./preferences";
+import { cacheAppearance, defaultAppearance, loadCachedAppearance } from "../appearance";
 
 export type AppScreen = "pairing" | "chat";
 
@@ -106,6 +108,8 @@ export interface AppSnapshot {
   isAgentProfilePresented: boolean;
   /** Browser-local preferences: the switches in Settings. */
   preferences: Preferences;
+  appearance: AppearanceProfile;
+  appearanceProfiles: AppearanceProfile[];
   /** A message the transcript should scroll to (from search). */
   focusMessageID: string | null;
   searchText: string;
@@ -197,6 +201,8 @@ export class AppModel {
   private isSidebarPresented = false;
   private isAgentProfilePresented = false;
   private preferences: Preferences = loadPreferences();
+  private appearance: AppearanceProfile = loadCachedAppearance();
+  private appearanceProfiles: AppearanceProfile[] = [this.appearance];
   private focusMessageID: string | null = null;
   private searchText = "";
   private focusComposerToken = 0;
@@ -285,6 +291,8 @@ export class AppModel {
       isSidebarPresented: this.isSidebarPresented,
       isAgentProfilePresented: this.isAgentProfilePresented,
       preferences: this.preferences,
+      appearance: this.appearance,
+      appearanceProfiles: this.appearanceProfiles,
       focusMessageID: this.focusMessageID,
       searchText: this.searchText,
       focusComposerToken: this.focusComposerToken,
@@ -716,6 +724,21 @@ export class AppModel {
 
   async attachmentBlob(id: string, signal?: AbortSignal): Promise<Blob> {
     return (await this.attachmentRequest(`/attachments/${encodeURIComponent(id)}`, { signal })).blob();
+  }
+
+  async uploadBackground(file: File): Promise<{ id: string }> {
+    const body = new FormData();
+    body.append("file", file);
+    const response = await this.attachmentRequest("/backgrounds", { method: "POST", body });
+    return await response.json() as { id: string };
+  }
+
+  async backgroundBlob(id: string, signal?: AbortSignal): Promise<Blob> {
+    return (await this.attachmentRequest(`/backgrounds/${encodeURIComponent(id)}`, { signal })).blob();
+  }
+
+  async removeBackground(id: string): Promise<void> {
+    await this.attachmentRequest(`/backgrounds/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
   async sendAttachments(text: string, attachments: AttachmentInfo[], expectedAgentID?: string): Promise<void> {
@@ -1167,6 +1190,7 @@ export class AppModel {
             this.refreshJobs();
             this.refreshTasks();
             this.refreshPlugins();
+            this.refreshAppearance();
             this.startHealthPolling();
             if (!wasReady) this.openConversation(this.conversation.agentID);
             break;
@@ -1424,6 +1448,16 @@ export class AppModel {
       return;
     }
 
+    if (frame.type === "appearance.list.ok" || frame.type === "appearance.updated") {
+      this.appearanceProfiles = frame.profiles;
+      this.appearance = frame.profiles.find((profile) => profile.id === frame.activeID)
+        ?? frame.profiles[0]
+        ?? defaultAppearance();
+      cacheAppearance(this.appearance);
+      this.publish();
+      return;
+    }
+
     if (frame.type === "plugin.connect.ok") {
       if (frame.authorizeURL && typeof window !== "undefined") {
         window.open(frame.authorizeURL, "_blank", "noopener,noreferrer");
@@ -1567,6 +1601,42 @@ export class AppModel {
     this.refreshMemories();
     this.refreshPlugins();
     this.refreshChatGPT();
+    this.refreshAppearance();
+  }
+
+  refreshAppearance(): void {
+    if (!this.connection || !isReady(this.connectionState)) return;
+    void this.connection.send({ type: "appearance.list" }).catch(() => undefined);
+  }
+
+  saveAppearance(profile: AppearanceProfile, activate = true): void {
+    const next = AppearanceProfileSchema.parse({ ...profile, name: profile.name.trim(), updatedAt: new Date().toISOString() });
+    this.appearance = next;
+    this.appearanceProfiles = [next, ...this.appearanceProfiles.filter((item) => item.id !== next.id)];
+    cacheAppearance(next);
+    this.publish();
+    if (!this.connection || !isReady(this.connectionState)) return;
+    void this.connection.send({ type: "appearance.save", profile: next, activate }).catch(() => undefined);
+  }
+
+  activateAppearance(id: string): void {
+    const profile = this.appearanceProfiles.find((item) => item.id === id);
+    if (!profile) return;
+    this.appearance = profile;
+    cacheAppearance(profile);
+    this.publish();
+    if (!this.connection || !isReady(this.connectionState)) return;
+    void this.connection.send({ type: "appearance.activate", id }).catch(() => undefined);
+  }
+
+  deleteAppearance(id: string): void {
+    if (this.appearanceProfiles.length <= 1) return;
+    this.appearanceProfiles = this.appearanceProfiles.filter((item) => item.id !== id);
+    if (this.appearance.id === id) this.appearance = this.appearanceProfiles[0] ?? defaultAppearance();
+    cacheAppearance(this.appearance);
+    this.publish();
+    if (!this.connection || !isReady(this.connectionState)) return;
+    void this.connection.send({ type: "appearance.delete", id }).catch(() => undefined);
   }
 
   // MARK: notifications

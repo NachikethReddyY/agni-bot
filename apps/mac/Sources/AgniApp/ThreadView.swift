@@ -44,7 +44,7 @@ struct ThreadView: View {
       }
       ComposerView(model: model, composerFocused: composerFocused, draft: draft.projectedValue)
     }
-    .background(Palette.canvas)
+    .background(AppearanceRuntime.profile.background.kind == "none" ? Palette.canvas : Color.clear)
     .onChange(of: model.focusComposerToken) { _, _ in composerFocused.wrappedValue = true }
   }
 

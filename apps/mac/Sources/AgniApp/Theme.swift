@@ -20,22 +20,40 @@ import AgniProtocol
  */
 
 enum Palette {
-  /// Charcoal chat canvas; keeps the reference's soft, readable dark layers.
-  static let canvas = Color(hex: 0x1C1C1C)
-  static let sidebar = Color(hex: 0x141414)
-  /// Rows, wells, sidebar selection.
-  static let surface = Color(hex: 0x232326)
-  static let surfaceRaised = Color(hex: 0x28282B)
-  static let incomingBubble = Color(hex: 0x2A2A2D)
-  static let outgoingBubble = Color(hex: 0xE8E8E3)
-  /// 1px separators and card edges.
-  static let hairline = Color(hex: 0xFFFFFF).opacity(0.07)
-  static let ink = Color(hex: 0xF3F3F3)
-  static let inkSecondary = Color(hex: 0x8A8A8E)
-  static let inkTertiary = Color(hex: 0x71717A)
-  /// Agni's identity and every live state. The only warm colour in the app.
-  static let ember = Color(hex: 0xFF3146)
-  static let emberDeep = Color(hex: 0xC4293C)
+  private static var values: [UInt32] {
+    let dark: [String: [UInt32]] = [
+      "agni": [0x0D0D0F, 0x08080A, 0x17171A, 0x1F1F23, 0x1B1B1E, 0xF4F4F6, 0x9A9AA1, 0x6D6D76],
+      "midnight": [0x080B14, 0x050811, 0x111827, 0x1C2538, 0x151D2D, 0xF3F7FF, 0x9BA9C1, 0x64748B],
+      "graphite": [0x111315, 0x0B0D0E, 0x1C2022, 0x272C2F, 0x202527, 0xF3F4F4, 0xA3AAAD, 0x70787C],
+      "paper": [0x171512, 0x100F0D, 0x24211D, 0x302C27, 0x29251F, 0xFFFAF1, 0xB8AC9B, 0x807568],
+      "ocean": [0x07181D, 0x041115, 0x10262C, 0x17343C, 0x112A31, 0xECFEFF, 0x9BC5CC, 0x638E96],
+      "forest": [0x0B1712, 0x07100C, 0x15251C, 0x203229, 0x192A21, 0xF0FDF4, 0xA1C2AA, 0x6F9278],
+      "warm": [0x19120F, 0x100C0A, 0x281C17, 0x35251E, 0x2C201A, 0xFFF7ED, 0xC8AA98, 0x8F7465],
+    ]
+    let light: [String: [UInt32]] = [
+      "agni": [0xF7F7F8, 0xEFEFF1, 0xFFFFFF, 0xE9E9ED, 0xF0F0F2, 0x18181B, 0x5B5B63, 0x85858D],
+      "midnight": [0xEEF2FF, 0xE2E8F8, 0xFFFFFF, 0xDCE4F4, 0xE7EDF8, 0x111827, 0x52617A, 0x7B8AA1],
+      "graphite": [0xF1F3F3, 0xE5E8E8, 0xFFFFFF, 0xDFE4E5, 0xE8ECEC, 0x1D2325, 0x596367, 0x80898D],
+      "paper": [0xF5F2EA, 0xEBE6DB, 0xFFFDF8, 0xE5DED0, 0xEEE8DC, 0x27231E, 0x655E54, 0x90877A],
+      "ocean": [0xECF8FA, 0xDCEFF2, 0xFFFFFF, 0xD5EAEE, 0xE2F2F4, 0x102A31, 0x53747B, 0x7C9DA3],
+      "forest": [0xEFF8F2, 0xDFEFE4, 0xFFFFFF, 0xD9EADD, 0xE5F2E8, 0x17271F, 0x587363, 0x809A88],
+      "warm": [0xFAF3EF, 0xF1E5DE, 0xFFFDFB, 0xEDDDD4, 0xF5E9E2, 0x2D201B, 0x755E52, 0x9B8376],
+    ]
+    let profile = AppearanceRuntime.profile
+    return (profile.mode == "light" ? light : dark)[profile.preset] ?? dark["agni"]!
+  }
+  static var canvas: Color { Color(hex: values[0]) }
+  static var sidebar: Color { Color(hex: values[1]) }
+  static var surface: Color { Color(hex: values[2]) }
+  static var surfaceRaised: Color { Color(hex: values[3]) }
+  static var incomingBubble: Color { Color(hex: values[4]) }
+  static var outgoingBubble: Color { Color(hex: 0xE8E8E3) }
+  static var hairline: Color { ink.opacity(0.10) }
+  static var ink: Color { Color(hex: values[5]) }
+  static var inkSecondary: Color { Color(hex: values[6]) }
+  static var inkTertiary: Color { Color(hex: values[7]) }
+  static var ember: Color { Color(serverHex: AppearanceRuntime.accentHex) }
+  static var emberDeep: Color { ember.opacity(0.75) }
   /// The persona colour the server assigns, used for scheduled work.
   static let amber = Color(hex: 0xF0B95A)
 }
@@ -48,20 +66,34 @@ enum Metrics {
   /// Chat column caps the measure so prose stays under ~80 characters.
   static let measure: CGFloat = 680
   static let gutter: CGFloat = 20
-  static let rowRadius: CGFloat = 10
-  static let bubbleRadius: CGFloat = 18
-  static let cardRadius: CGFloat = 12
+  static var rowRadius: CGFloat { AppearanceRuntime.profile.corners == "square" ? 4 : AppearanceRuntime.profile.corners == "soft" ? 18 : 10 }
+  static var bubbleRadius: CGFloat { AppearanceRuntime.profile.corners == "square" ? 7 : AppearanceRuntime.profile.corners == "soft" ? 24 : 18 }
+  static var cardRadius: CGFloat { AppearanceRuntime.profile.corners == "square" ? 4 : AppearanceRuntime.profile.corners == "soft" ? 18 : 12 }
 }
 
 enum Typography {
-  static let display = Font.system(size: 22, weight: .semibold)
-  static let title = Font.system(size: 15, weight: .semibold)
-  static let body = Font.system(size: 14)
-  static let rowTitle = Font.system(size: 14, weight: .medium)
-  static let meta = Font.system(size: 12)
-  static let caption = Font.system(size: 11)
-  static let machine = Font.system(size: 11, design: .monospaced)
-  static let code = Font.system(size: 13, design: .monospaced)
+  private static var scale: CGFloat { AppearanceRuntime.profile.textScale == "small" ? 0.93 : AppearanceRuntime.profile.textScale == "large" ? 1.12 : 1 }
+  static var display: Font { .system(size: 22 * scale, weight: .semibold) }
+  static var title: Font { .system(size: 15 * scale, weight: .semibold) }
+  static var body: Font { .system(size: 14 * scale) }
+  static var rowTitle: Font { .system(size: 14 * scale, weight: .medium) }
+  static var meta: Font { .system(size: 12 * scale) }
+  static var caption: Font { .system(size: 11 * scale) }
+  static var machine: Font { .system(size: 11 * scale, design: .monospaced) }
+  static var code: Font { .system(size: 13 * scale, design: .monospaced) }
+}
+
+enum AppearanceRuntime {
+  nonisolated(unsafe) static var profile = AppearanceProfile(
+    id: "theme_default", name: "My Agni", mode: "system", preset: "agni", accent: "ember",
+    background: AppearanceBackground(kind: "none"), textScale: "default", density: "comfortable",
+    corners: "standard", motion: "system", agentTint: "full", updatedAt: "1970-01-01T00:00:00.000Z"
+  )
+  static var accentHex: String {
+    if profile.accent == "custom" { return profile.customAccent ?? "#ff3146" }
+    return ["ember": "#ff3146", "amber": "#f0b95a", "ocean": "#38bdf8", "forest": "#4ade80",
+            "violet": "#a78bfa", "rose": "#fb7185", "mono": "#d4d4d8"][profile.accent] ?? "#ff3146"
+  }
 }
 
 extension Color {
