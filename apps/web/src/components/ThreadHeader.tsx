@@ -1,23 +1,20 @@
 /**
- * Seamless chat header: the current agent at left, connection details and the
- * conversation export on demand at right.
+ * Seamless chat header: the current agent at left and connection details at
+ * right. Task navigation lives in the sidebar.
  */
 import { useState, type ReactNode } from "react";
-import { Copy, Menu, Monitor, Share } from "lucide-react";
+import { Menu, Monitor } from "lucide-react";
 import { format } from "@agni/client";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import {
   PresenceDot,
   SidebarAgentBadge,
-  Spinner,
   connectionTitle,
-  copyText,
 } from "./bits";
 
 export function ThreadHeader() {
   const model = useAppModel();
   const snapshot = useAppSnapshot();
-  const [shareOpen, setShareOpen] = useState(false);
   const [connectionOpen, setConnectionOpen] = useState(false);
   const agent = model.agent;
   const agentState = agent ? snapshot.agentStates[agent.id] : undefined;
@@ -50,82 +47,14 @@ export function ThreadHeader() {
       <button
         type="button"
         className="icon-btn"
-        title="Share this conversation as a document"
-        aria-label="Export this conversation"
-        onClick={() => {
-          model.exportConversation();
-          setConnectionOpen(false);
-          setShareOpen(true);
-        }}
-      >
-        <Share size={14} />
-      </button>
-
-      <button
-        type="button"
-        className="icon-btn"
         title="Server connection"
         aria-label="Server connection details"
         onClick={() => {
-          setShareOpen(false);
           setConnectionOpen((open) => !open);
         }}
       >
         <Monitor size={14} />
       </button>
-
-      {shareOpen ? (
-        <HeaderPopover onClose={() => setShareOpen(false)}>
-          <h3>Share this conversation</h3>
-          <div className="popover-body">
-            {snapshot.isExporting ? (
-              <div className="popover-row">
-                <Spinner />
-                <span className="muted">Rendering the document…</span>
-              </div>
-            ) : snapshot.exportError ? (
-              <p className="warning-text">{snapshot.exportError}</p>
-            ) : snapshot.exportedLink ? (
-              <>
-                <p>
-                  A single HTML file with everything in this conversation — what was said,
-                  what was run, and what was asked for approval.
-                </p>
-                <code className="machine" style={{ overflowWrap: "anywhere", userSelect: "text" }}>
-                  {snapshot.exportedLink.url}
-                </code>
-                <span className="tertiary" style={{ fontSize: 11 }}>
-                  {snapshot.exportedLink.records} records
-                </span>
-                <div className="popover-actions">
-                  <button
-                    type="button"
-                    className="btn primary small"
-                    onClick={() => {
-                      if (snapshot.exportedLink) void copyText(snapshot.exportedLink.url);
-                    }}
-                  >
-                    <Copy size={11} /> Copy link
-                  </button>
-                  <button
-                    type="button"
-                    className="btn small"
-                    onClick={() => {
-                      if (snapshot.exportedLink) {
-                        window.open(snapshot.exportedLink.url, "_blank", "noopener,noreferrer");
-                      }
-                    }}
-                  >
-                    Open
-                  </button>
-                </div>
-              </>
-            ) : (
-              <p>Render the open conversation to a document the daemon can hand out.</p>
-            )}
-          </div>
-        </HeaderPopover>
-      ) : null}
 
       {connectionOpen ? (
         <HeaderPopover onClose={() => setConnectionOpen(false)}>

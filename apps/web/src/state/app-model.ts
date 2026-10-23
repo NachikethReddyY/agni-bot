@@ -39,6 +39,8 @@ import {
   type SecretStoreKind,
   type ServerSettings,
   type TaskInfo,
+  type TaskListInfo,
+  type TaskActivityInfo,
   type ThreadInfo,
 } from "@agni/client";
 import { browserNotifications, type NotificationBridge } from "./notifications";
@@ -84,6 +86,9 @@ export interface AppSnapshot {
   plugins: PluginInfo[];
   jobs: JobInfo[];
   tasks: TaskInfo[];
+  taskLists: TaskListInfo[];
+  taskActivity: { taskID: string; entries: TaskActivityInfo[] } | null;
+  taskView: { kind: "today" | "inbox" | "upcoming" | "calendar" | "completed" | "list"; listID?: string };
 
   isAddingProvider: boolean;
   providerAddError: string | null;
@@ -100,6 +105,8 @@ export interface AppSnapshot {
   exportError: string | null;
 
   isInspectorPresented: boolean;
+  /** The left pane is showing the task/reminder list instead of the roster. */
+  isTasksPresented: boolean;
   isSettingsPresented: boolean;
   isAgentSwitcherPresented: boolean;
   /** The composer's "To:" list: pick who the chat is with, or make a new agent. */
@@ -209,6 +216,10 @@ export class AppModel {
   private plugins: PluginInfo[] = [];
   private jobs: JobInfo[] = [];
   private tasks: TaskInfo[] = [];
+  private taskLists: TaskListInfo[] = [];
+  private taskActivity: AppSnapshot["taskActivity"] = null;
+  private taskView: AppSnapshot["taskView"] = { kind: "today" };
+  private pendingAgentRoute: string | null = null;
 
   private isAddingProvider = false;
   private providerAddError: string | null = null;
@@ -228,6 +239,7 @@ export class AppModel {
   private exportError: string | null = null;
 
   private isInspectorPresented = false;
+  private isTasksPresented = false;
   private isSettingsPresented = false;
   private isAgentSwitcherPresented = false;
   private isNewChatPresented = false;
@@ -264,6 +276,8 @@ export class AppModel {
     this.makeTransport = env.makeTransport;
     this.healthPollMs = env.healthPollMs ?? 20_000;
     this.settings = this.settingsStore.load();
+    this.applyLocationRoute(false);
+    if (typeof window !== "undefined") window.addEventListener("popstate", this.onLocationChange);
     const stored = SecretStore.load();
     if (stored) {
       this.token = stored.token;
@@ -306,6 +320,9 @@ export class AppModel {
       plugins: this.plugins,
       jobs: this.jobs,
       tasks: this.tasks,
+      taskLists: this.taskLists,
+      taskActivity: this.taskActivity,
+      taskView: this.taskView,
       isAddingProvider: this.isAddingProvider,
       providerAddError: this.providerAddError,
       providerAddSuccess: this.providerAddSuccess,
@@ -319,6 +336,7 @@ export class AppModel {
       exportedLink: this.exportedLink,
       exportError: this.exportError,
       isInspectorPresented: this.isInspectorPresented,
+      isTasksPresented: this.isTasksPresented,
       isSettingsPresented: this.isSettingsPresented,
       isAgentSwitcherPresented: this.isAgentSwitcherPresented,
       isNewChatPresented: this.isNewChatPresented,
@@ -350,8 +368,43 @@ export class AppModel {
     this.started = true;
     this.notifier.request();
     this.screen = this.canConnect ? "chat" : "pairing";
+    if (this.canConnect && typeof window !== "undefined" && window.location.pathname === "/") this.navigatePath(agentPath(this.agent));
     this.publish();
     if (this.canConnect) this.connect();
+  }
+
+  private onLocationChange = (): void => { this.applyLocationRoute(true); };
+
+  private applyLocationRoute(refresh: boolean): void {
+    if (typeof window === "undefined") return;
+    const parts = decodeURIComponent(window.location.pathname).split("/").filter(Boolean);
+    if (parts[0] === "tasks") {
+      this.isTasksPresented = true;
+      const kind = parts[1];
+      this.taskView = kind === "inbox" ? { kind: "inbox" } : kind === "upcoming" ? { kind: "upcoming" } : kind === "calendar" ? { kind: "calendar" } : kind === "completed" ? { kind: "completed" } : kind === "collection" && parts[2] ? { kind: "list", listID: parts[2] } : { kind: "today" };
+      this.pendingAgentRoute = null;
+      if (refresh) this.refreshTasks();
+    } else {
+      this.isTasksPresented = false;
+      this.taskView = { kind: "today" };
+      this.pendingAgentRoute = parts[0] === "agent" ? parts[1] ?? null : null;
+      if (this.pendingAgentRoute) this.syncAgentRoute();
+    }
+    this.publish();
+  }
+
+  private syncAgentRoute(): void {
+    if (!this.pendingAgentRoute) return;
+    const key = this.pendingAgentRoute.toLowerCase();
+    const agent = [...this.mentionAgents, ...this.agents].find((item) => item.id.toLowerCase() === key || item.name.toLowerCase().replace(/[^a-z0-9]+/g, "-") === key);
+    if (!agent) return;
+    this.pendingAgentRoute = null;
+    this.selectAgent(agent, false);
+  }
+
+  private navigatePath(path: string): void {
+    if (typeof window === "undefined" || window.location.pathname === path) return;
+    window.history.pushState({}, "", path);
   }
 
   get canConnect(): boolean {
@@ -548,6 +601,33 @@ export class AppModel {
     void connection.send({ type: "task.list", status: "all", limit: 200 }).catch(() => undefined);
   }
 
+  selectTaskView(view: AppSnapshot["taskView"]): void {
+    this.taskView = view;
+    this.isTasksPresented = true;
+    this.navigatePath(view.kind === "list" ? `/tasks/collection/${encodeURIComponent(view.listID ?? "lst_inbox")}` : view.kind === "today" ? "/tasks" : `/tasks/${view.kind}`);
+    if (view.kind === "today" || view.kind === "inbox" || view.kind === "list") this.refreshTasks();
+    this.publish();
+  }
+
+  createTask(input: { title: string; description?: string; dueAt?: Date; reminderAt?: Date; deadlineAt?: Date; labels?: string[]; repeatRule?: "none" | "daily" | "weekly" | "monthly"; priority?: "low" | "normal" | "high" | "urgent"; listID?: string; parentTaskID?: string; attachmentIDs?: string[] }): void {
+    const connection = this.connection;
+    const title = input.title.trim();
+    if (!connection || !title) return;
+    void connection.send({ type: "task.create", title, ...(input.description ? { description: input.description } : {}), ...(input.dueAt ? { dueAt: input.dueAt.toISOString() } : {}), ...(input.reminderAt ? { reminderAt: input.reminderAt.toISOString() } : {}), ...(input.deadlineAt ? { deadlineAt: input.deadlineAt.toISOString() } : {}), ...(input.labels ? { labels: input.labels } : {}), ...(input.repeatRule ? { repeatRule: input.repeatRule } : {}), ...(input.priority ? { priority: input.priority } : {}), ...(input.listID ? { listID: input.listID } : {}), ...(input.parentTaskID ? { parentTaskID: input.parentTaskID } : {}), ...(input.attachmentIDs ? { attachmentIDs: input.attachmentIDs } : {}) }).catch(() => undefined);
+  }
+
+  createTaskList(name: string): void {
+    const connection = this.connection;
+    if (!connection || !name.trim()) return;
+    void connection.send({ type: "task.list.create", name: name.trim() }).catch(() => undefined);
+  }
+
+  requestTaskActivity(taskID: string): void {
+    const connection = this.connection;
+    if (!connection) return;
+    void connection.send({ type: "task.activity", taskID }).catch(() => undefined);
+  }
+
   refreshPlugins(): void {
     const connection = this.connection;
     if (!connection || !isReady(this.connectionState)) return;
@@ -634,6 +714,19 @@ export class AppModel {
         ...(until ? { until: until.toISOString() } : {}),
       })
       .catch(() => undefined);
+  }
+
+  editTask(task: TaskInfo, fields: { title?: string; description?: string | null; dueAt?: Date | null; reminderAt?: Date | null; deadlineAt?: Date | null; labels?: string[]; workflowStatus?: "not_started" | "in_progress" | "ai_review"; progressNote?: string | null; repeatRule?: "none" | "daily" | "weekly" | "monthly"; priority?: "low" | "normal" | "high" | "urgent"; listID?: string }): void {
+    const connection = this.connection;
+    if (!connection) return;
+    const { dueAt, reminderAt, deadlineAt, ...rest } = fields;
+    void connection.send({ type: "task.update", taskID: task.id, action: "edit", ...rest, ...(dueAt !== undefined ? { dueAt: dueAt?.toISOString() ?? null } : {}), ...(reminderAt !== undefined ? { reminderAt: reminderAt?.toISOString() ?? null } : {}), ...(deadlineAt !== undefined ? { deadlineAt: deadlineAt?.toISOString() ?? null } : {}) }).catch(() => undefined);
+  }
+
+  handoffTask(task: TaskInfo, agent: AgentInfo): void {
+    this.editTask(task, { workflowStatus: "in_progress", progressNote: `Handed off to ${agent.name}` });
+    this.selectAgent(agent);
+    this.send(`Please work on this task for me. Task ID: ${task.id}\nTitle: ${task.title}${task.description ? `\nDetails: ${task.description}` : ""}${task.dueAt ? `\nDue: ${task.dueAt}` : ""}${task.deadlineAt ? `\nDeadline: ${task.deadlineAt}` : ""}${task.labels?.length ? `\nLabels: ${task.labels.join(", ")}` : ""}\nUpdate the task's progressNote as you work so I can see what you are doing, add relevant labels if needed, and move its workflow status to AI review when your work is ready. Tell me what you did and what still needs my review.`);
   }
 
   /**
@@ -752,6 +845,15 @@ export class AppModel {
     return AttachmentInfoSchema.parse(payload.attachment);
   }
 
+  async uploadTaskAttachment(file: File): Promise<AttachmentInfo> {
+    const body = new FormData();
+    body.append("file", file);
+    body.append("purpose", "task");
+    const response = await this.attachmentRequest("/attachments", { method: "POST", body });
+    const payload = await response.json() as { attachment: unknown };
+    return AttachmentInfoSchema.parse(payload.attachment);
+  }
+
   async removeDraftAttachment(id: string): Promise<void> {
     await this.attachmentRequest(`/attachments/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
@@ -864,10 +966,12 @@ export class AppModel {
     void connection.send({ type: "secret.cancel", requestID: secret.id }).catch(() => undefined);
   }
 
-  selectAgent(agent: AgentInfo): void {
+  selectAgent(agent: AgentInfo, updateRoute = true): void {
     // Picking an agent from anywhere — the roster, the switcher, the new-chat
     // field — means the conversation is the surface again.
     this.closeSidebar();
+    this.isTasksPresented = false;
+    if (updateRoute) this.navigatePath(agentPath(agent));
     this.isNewChatPresented = false;
     if (agent.id === this.conversation.agentID && this.conversation.conversationID !== null) {
       this.reloadConversation();
@@ -1085,6 +1189,26 @@ export class AppModel {
 
   toggleInspector(): void {
     this.isInspectorPresented = !this.isInspectorPresented;
+    this.publish();
+  }
+
+  /** Show the task/reminder list in place of the roster. */
+  toggleTasks(): void {
+    this.isTasksPresented = !this.isTasksPresented;
+    if (this.isTasksPresented) {
+      this.isSidebarPresented = false;
+      this.refreshTasks();
+      this.navigatePath("/tasks");
+    } else {
+      this.navigatePath(agentPath(this.agent));
+    }
+    this.publish();
+  }
+
+  closeTasks(): void {
+    if (!this.isTasksPresented) return;
+    this.isTasksPresented = false;
+    this.navigatePath(agentPath(this.agent));
     this.publish();
   }
 
@@ -1430,6 +1554,26 @@ export class AppModel {
 
     if (frame.type === "task.list.ok") {
       this.tasks = frame.tasks;
+      this.taskLists = frame.lists ?? this.taskLists;
+      this.publish();
+      return;
+    }
+
+    if (frame.type === "task.create.ok") {
+      this.tasks = [frame.task, ...this.tasks.filter((task) => task.id !== frame.task.id)];
+      this.publish();
+      this.refreshTasks();
+      return;
+    }
+
+    if (frame.type === "task.list.create.ok") {
+      this.taskLists = frame.lists;
+      this.publish();
+      return;
+    }
+
+    if (frame.type === "task.activity.ok") {
+      this.taskActivity = { taskID: frame.taskID, entries: frame.activity };
       this.publish();
       return;
     }
@@ -1445,6 +1589,7 @@ export class AppModel {
       if (index === -1) this.tasks = [...this.tasks, frame.task];
       else this.tasks = this.tasks.map((task) => (task.id === frame.task.id ? frame.task : task));
       this.publish();
+      this.refreshTasks();
       return;
     }
 
@@ -1589,6 +1734,7 @@ export class AppModel {
     const effects = this.conversation.apply(frame);
     if (frame.type === "turn.end" || frame.type === "turn.start") this.refreshThreadList();
     this.run(effects);
+    this.syncAgentRoute();
     this.publish();
   }
 
@@ -1727,3 +1873,8 @@ export class AppModel {
 }
 
 export type { ChatMessage };
+
+function agentPath(agent: AgentInfo | null): string {
+  const slug = agent?.name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "agni";
+  return `/agent/${encodeURIComponent(slug)}`;
+}

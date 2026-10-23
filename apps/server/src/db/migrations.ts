@@ -840,4 +840,65 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    id: 32,
+    name: "task_workspace",
+    sql: `
+      CREATE TABLE task_lists (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO task_lists (id, name, position, created_at, updated_at)
+        VALUES ('lst_inbox', 'Inbox', 0, datetime('now'), datetime('now'));
+
+      ALTER TABLE tasks ADD COLUMN list_id TEXT NOT NULL DEFAULT 'lst_inbox';
+      ALTER TABLE tasks ADD COLUMN description TEXT;
+      ALTER TABLE tasks ADD COLUMN parent_task_id TEXT;
+      ALTER TABLE tasks ADD COLUMN reminder_at TEXT;
+      ALTER TABLE tasks ADD COLUMN attachment_ids TEXT NOT NULL DEFAULT '[]';
+      CREATE INDEX idx_tasks_list ON tasks(list_id, status, due_at);
+      CREATE INDEX idx_tasks_parent ON tasks(parent_task_id, status);
+
+      CREATE TABLE task_activity (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        actor TEXT NOT NULL,
+        action TEXT NOT NULL,
+        detail TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_task_activity_task ON task_activity(task_id, created_at DESC);
+    `,
+  },
+  {
+    id: 33,
+    name: "task_reminder_jobs",
+    sql: `ALTER TABLE tasks ADD COLUMN reminder_job_id TEXT;`,
+  },
+  {
+    id: 34,
+    name: "task_repeats",
+    sql: `ALTER TABLE tasks ADD COLUMN repeat_rule TEXT NOT NULL DEFAULT 'none';`,
+  },
+  {
+    id: 35,
+    name: "task_deadlines_and_labels",
+    sql: `
+      ALTER TABLE tasks ADD COLUMN deadline_at TEXT;
+      ALTER TABLE tasks ADD COLUMN labels TEXT NOT NULL DEFAULT '[]';
+    `,
+  },
+  {
+    id: 36,
+    name: "task_workflow_status",
+    sql: `ALTER TABLE tasks ADD COLUMN workflow_status TEXT NOT NULL DEFAULT 'not_started';`,
+  },
+  {
+    id: 37,
+    name: "task_progress_notes",
+    sql: `ALTER TABLE tasks ADD COLUMN progress_note TEXT NOT NULL DEFAULT '';`,
+  },
 ];

@@ -115,6 +115,22 @@ describe("migrations", () => {
     expect(readMeta(db, "seq")).toBe("43");
     db.close();
   });
+
+  test("task migrations upgrade a database with main migration 31 already applied", () => {
+    const db = new Database(":memory:");
+    db.exec("CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);");
+    for (const migration of MIGRATIONS.filter((entry) => entry.id <= 31)) {
+      db.transaction(() => db.exec(migration.sql))();
+      db.run("INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)", [migration.id, migration.name, "test"]);
+    }
+
+    expect(db.query<{ name: string }, []>("SELECT name FROM schema_migrations WHERE id = 31").get()?.name).toBe("appearance_profiles");
+    expect(db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'appearance_profiles'").get()).toBeTruthy();
+    expect(migrate(db)).toEqual(MIGRATIONS.filter((entry) => entry.id > 31).map((entry) => entry.id));
+    expect(db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'task_lists'").get()).toBeTruthy();
+    expect(db.query<{ name: string }, []>("SELECT name FROM schema_migrations WHERE id = 32").get()?.name).toBe("task_workspace");
+    db.close();
+  });
 });
 
 describe("device tokens", () => {

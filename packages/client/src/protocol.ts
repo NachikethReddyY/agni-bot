@@ -38,6 +38,8 @@ export {
   type JobInfo,
   type MemoryItem,
   type TaskInfo,
+  type TaskListInfo,
+  type TaskActivityInfo,
   type PluginInfo,
   type ChatGPTConnection,
   type PluginCapability,

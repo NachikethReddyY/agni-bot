@@ -5,7 +5,8 @@
  * Each agent has one enduring conversation surface; sessions are seams in it,
  * not list entries (blueprint v3 §5).
  */
-import { Plus, Search, Star, X } from "lucide-react";
+import { CalendarDays, CheckCircle2, CheckSquare, Clock3, Inbox, Plus, Search, Star, X } from "lucide-react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import { AppTile, SidebarAgentBadge, connectionShortStatus, initials } from "./bits";
 
@@ -19,6 +20,8 @@ function stateLabel(state: string): string {
 export function SidebarView() {
   const model = useAppModel();
   const snapshot = useAppSnapshot();
+  const [newCollectionOpen, setNewCollectionOpen] = useState(false);
+  const [collectionName, setCollectionName] = useState("");
 
   // Pinned agents go into the grid at the top; the rest keep the roster's
   // order in the list below.
@@ -115,13 +118,23 @@ export function SidebarView() {
         <span className="sidebar-bar-spacer" />
         <button
           type="button"
+          className={`icon-btn${snapshot.isTasksPresented ? " active" : ""}`}
+          aria-pressed={snapshot.isTasksPresented}
+          title={snapshot.isTasksPresented ? "Show agents" : "Show tasks and reminders"}
+          aria-label={snapshot.isTasksPresented ? "Show agents" : "Show tasks and reminders"}
+          onClick={() => model.toggleTasks()}
+        >
+          <CheckSquare size={15} />
+        </button>
+        <button
+          type="button"
           className="icon-btn"
           aria-label="Search agents and messages"
           onClick={() => model.openAgentSwitcher()}
         >
           <Search size={15} />
         </button>
-        <button
+        {!snapshot.isTasksPresented ? <button
           type="button"
           className="icon-btn"
           aria-label="Start a new chat"
@@ -129,7 +142,7 @@ export function SidebarView() {
           onClick={() => model.openNewChat()}
         >
           <Plus size={15} />
-        </button>
+        </button> : null}
         <button
           type="button"
           className="icon-btn sidebar-close"
@@ -140,7 +153,24 @@ export function SidebarView() {
         </button>
       </div>
 
-      <div className="sidebar-sections">
+      {snapshot.isTasksPresented ? (
+        <div className="sidebar-sections task-nav">
+          <div className="task-nav-primary">
+            <TaskNavButton icon={<CalendarDays size={16} />} label="Today" count={snapshot.tasks.filter((task) => { const at = task.dueAt ?? task.reminderAt; return task.status !== "done" && !!at && new Date(at).setHours(0,0,0,0) <= new Date().setHours(0,0,0,0); }).length} selected={snapshot.taskView.kind === "today"} onClick={() => { model.selectTaskView({ kind: "today" }); model.closeSidebar(); }} />
+            <TaskNavButton icon={<Inbox size={16} />} label="Inbox" count={snapshot.tasks.filter((task) => task.listID === "lst_inbox" && task.status !== "done").length} selected={snapshot.taskView.kind === "inbox"} onClick={() => { model.selectTaskView({ kind: "inbox" }); model.closeSidebar(); }} />
+            <TaskNavButton icon={<Clock3 size={16} />} label="Upcoming" count={snapshot.tasks.filter((task) => task.status !== "done" && !!(task.dueAt ?? task.reminderAt) && new Date(task.dueAt ?? task.reminderAt!).setHours(0,0,0,0) > new Date().setHours(0,0,0,0)).length} selected={snapshot.taskView.kind === "upcoming"} onClick={() => { model.selectTaskView({ kind: "upcoming" }); model.closeSidebar(); }} />
+            <TaskNavButton icon={<CalendarDays size={16} />} label="Calendar" selected={snapshot.taskView.kind === "calendar"} onClick={() => { model.selectTaskView({ kind: "calendar" }); model.closeSidebar(); }} />
+            <TaskNavButton icon={<CheckCircle2 size={16} />} label="Completed" count={snapshot.tasks.filter((task) => task.status === "done").length} selected={snapshot.taskView.kind === "completed"} onClick={() => { model.selectTaskView({ kind: "completed" }); model.closeSidebar(); }} />
+          </div>
+          <div className="task-nav-list-heading">
+            <span>Collections</span>
+            <button type="button" className="icon-btn" aria-label="Create a collection" title="Create a collection" onClick={() => setNewCollectionOpen(true)}><Plus size={15} /></button>
+          </div>
+          {snapshot.taskLists.filter((list) => list.id !== "lst_inbox").map((list) => (
+            <TaskNavButton key={list.id} icon={<span className="task-list-mark" />} label={list.name} count={list.taskCount} selected={snapshot.taskView.kind === "list" && snapshot.taskView.listID === list.id} onClick={() => { model.selectTaskView({ kind: "list", listID: list.id }); model.closeSidebar(); }} />
+          ))}
+        </div>
+      ) : <div className="sidebar-sections">
         {favourites.length > 0 ? (
           <div className="sidebar-grid">
             {favourites.map((agent) => {
@@ -175,7 +205,7 @@ export function SidebarView() {
         ) : (
           others.map(row)
         )}
-      </div>
+      </div>}
 
       <div className="sidebar-footer">
         <div className="sidebar-owner-row">
@@ -214,7 +244,16 @@ export function SidebarView() {
           ) : null}
         </button>
       </div>
+      {newCollectionOpen ? <div className="collection-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setNewCollectionOpen(false); }}><form className="collection-dialog" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!collectionName.trim()) return; model.createTaskList(collectionName); setCollectionName(""); setNewCollectionOpen(false); }}><h2>New collection</h2><p>Group related tasks together.</p><input autoFocus className="text-input" maxLength={80} placeholder="Collection name" value={collectionName} onChange={(event) => setCollectionName(event.target.value)} /><div className="collection-dialog-actions"><button type="button" className="btn" onClick={() => setNewCollectionOpen(false)}>Cancel</button><button type="submit" className="btn primary" disabled={!collectionName.trim()}>Create collection</button></div></form></div> : null}
     </aside>
+  );
+}
+
+function TaskNavButton({ icon, label, count, selected, onClick }: { icon: ReactNode; label: string; count?: number; selected: boolean; onClick: () => void }) {
+  return (
+    <button type="button" className={`task-nav-row${selected ? " selected" : ""}`} aria-current={selected ? "page" : undefined} onClick={onClick}>
+      <span className="task-nav-icon">{icon}</span><span className="task-nav-label">{label}</span>{count !== undefined ? <span className="task-nav-count">{count}</span> : null}
+    </button>
   );
 }
 

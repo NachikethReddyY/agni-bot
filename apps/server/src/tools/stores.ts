@@ -12,7 +12,7 @@ import {
   type AgentMemoryRow,
 } from "../stores/agent-memories";
 import { searchLinks, saveLink, updateLink, deleteLink } from "../stores/links";
-import { listTasks, createTask, setTaskStatus, snoozeTask, getTask } from "../stores/tasks";
+import { listTasks, createTask, editTask, setTaskStatus, snoozeTask, getTask } from "../stores/tasks";
 import { fetchPage } from "./fetch-url";
 
 export interface MemorySearchArgs {
@@ -138,7 +138,12 @@ export function tasksList(db: Database, args: TasksListArgs): TasksListResult {
 export interface TaskCreateArgs {
   title: string;
   dueAt?: string;
-  priority?: "low" | "normal" | "high";
+  reminderAt?: string;
+  deadlineAt?: string;
+  labels?: string[];
+  repeatRule?: "none" | "daily" | "weekly" | "monthly";
+  priority?: "low" | "normal" | "high" | "urgent";
+  actor?: string;
 }
 
 export interface TaskCreateResult {
@@ -149,25 +154,38 @@ export interface TaskCreateResult {
 }
 
 export function taskCreate(db: Database, args: TaskCreateArgs): TaskCreateResult {
-  const row = createTask(db, { title: args.title, dueAt: args.dueAt, priority: args.priority });
+  const row = createTask(db, { title: args.title, dueAt: args.dueAt, reminderAt: args.reminderAt, deadlineAt: args.deadlineAt, labels: args.labels, repeatRule: args.repeatRule, priority: args.priority, actor: args.actor });
   return { id: row.id, title: row.title, dueAt: row.due_at, priority: row.priority };
 }
 
 export interface TaskUpdateArgs {
   id: string;
-  action: "done" | "reopen" | "snooze";
+  action: "done" | "reopen" | "snooze" | "edit";
   until?: string;
+  title?: string;
+  dueAt?: string | null;
+  reminderAt?: string | null;
+  deadlineAt?: string | null;
+  labels?: string[];
+  workflowStatus?: "not_started" | "in_progress" | "ai_review";
+  progressNote?: string | null;
+  repeatRule?: "none" | "daily" | "weekly" | "monthly";
+  priority?: "low" | "normal" | "high" | "urgent";
+  description?: string | null;
+  actor?: string;
 }
 
 export function taskUpdate(db: Database, args: TaskUpdateArgs): TaskCreateResult | null {
   const old = getTask(db, args.id);
   if (!old) return null;
   let updated;
-  if (args.action === "done") updated = setTaskStatus(db, old.id, "done");
-  else if (args.action === "reopen") updated = setTaskStatus(db, old.id, "open");
+  if (args.action === "done") updated = setTaskStatus(db, old.id, "done", args.actor);
+  else if (args.action === "reopen") updated = setTaskStatus(db, old.id, "open", args.actor);
   else if (args.action === "snooze") {
     if (!args.until) throw new Error("snooze requires an ISO timestamp in the future");
-    updated = snoozeTask(db, old.id, args.until);
+    updated = snoozeTask(db, old.id, args.until, args.actor);
+  } else if (args.action === "edit") {
+    updated = editTask(db,old.id,{title:args.title,description:args.description,dueAt:args.dueAt,reminderAt:args.reminderAt,deadlineAt:args.deadlineAt,labels:args.labels,workflowStatus:args.workflowStatus,progressNote:args.progressNote,repeatRule:args.repeatRule,priority:args.priority},args.actor);
   } else throw new Error("unknown task action");
   return updated ? { id: updated.id, title: updated.title, dueAt: updated.due_at, priority: updated.priority } : null;
 }

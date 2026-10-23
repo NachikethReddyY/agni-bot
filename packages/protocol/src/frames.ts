@@ -172,6 +172,7 @@ export const JobInfoSchema = z.object({
 export type JobInfo = z.infer<typeof JobInfoSchema>;
 
 export const TaskStatusSchema = z.enum(["open", "done", "snoozed"]);
+export const TaskWorkflowStatusSchema = z.enum(["not_started", "in_progress", "ai_review"]);
 export const DelegateStateSchema = z.enum(["none", "queued", "running", "needs_input", "done", "failed"]);
 /** One remembered thing, as the memory view shows it. */
 export const MemoryItemSchema = z.object({
@@ -190,7 +191,9 @@ export type MemoryItem = z.infer<typeof MemoryItemSchema>;
 
 export const TaskInfoSchema = z.object({
   id: z.string().min(1), title: z.string(), dueAt: z.string().nullable(),
-  priority: z.enum(["low", "normal", "high"]), status: TaskStatusSchema,
+  priority: z.enum(["low", "normal", "high", "urgent"]), status: TaskStatusSchema,
+  workflowStatus: TaskWorkflowStatusSchema.optional(),
+  progressNote: z.string().max(1000).optional(),
   snoozedUntil: z.string().nullable(), createdAt: z.string(), updatedAt: z.string(),
   // Delegation fields (DEL-001/DEL-005). Optional so older clients still parse.
   ownerAgentId: z.string().nullable().optional(),
@@ -203,8 +206,26 @@ export const TaskInfoSchema = z.object({
    * agent is private to the caller). The owner always sees the full result.
    */
   resultRedacted: z.boolean().optional(),
+  listID: z.string().optional(),
+  parentTaskID: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
+  reminderAt: z.string().nullable().optional(),
+  deadlineAt: z.string().nullable().optional(),
+  labels: z.array(z.string()).optional(),
+  repeatRule: z.enum(["none", "daily", "weekly", "monthly"]).optional(),
+  attachmentIDs: z.array(z.string()).optional(),
+  attachments: z.array(AttachmentInfoSchema).optional(),
 });
 export type TaskInfo = z.infer<typeof TaskInfoSchema>;
+
+export const TaskListInfoSchema = z.object({
+  id: z.string(), name: z.string(), position: z.number().int(), taskCount: z.number().int().nonnegative(),
+});
+export type TaskListInfo = z.infer<typeof TaskListInfoSchema>;
+export const TaskActivityInfoSchema = z.object({
+  id: z.string(), actor: z.string(), action: z.string(), detail: z.string().nullable(), createdAt: z.string(),
+});
+export type TaskActivityInfo = z.infer<typeof TaskActivityInfoSchema>;
 
 // --- plugins -----------------------------------------------------------------
 
@@ -373,13 +394,16 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
   /** Delete a task unless it is currently running. */
   z.object({ type: z.literal("job.delete"), jobID: z.string().min(1) }),
   z.object({ type: z.literal("task.list"), status: z.enum(["open", "done", "snoozed", "all"]).optional(), limit: z.number().int().positive().max(200).optional() }),
+  z.object({ type: z.literal("task.create"), title: z.string().min(1).max(500), description: z.string().max(10000).optional(), dueAt: z.string().datetime().optional(), reminderAt: z.string().datetime().optional(), deadlineAt: z.string().datetime().optional(), labels: z.array(z.string().max(64)).max(20).optional(), repeatRule: z.enum(["none", "daily", "weekly", "monthly"]).optional(), priority: z.enum(["low", "normal", "high", "urgent"]).optional(), listID: z.string().optional(), parentTaskID: z.string().optional(), attachmentIDs: z.array(z.string()).max(5).optional() }),
+  z.object({ type: z.literal("task.list.create"), name: z.string().trim().min(1).max(80) }),
+  z.object({ type: z.literal("task.activity"), taskID: z.string().min(1) }),
   /**
    * What the agent can remember. The list is filtered by the same
    * caller-filter the retrieval uses, so the view shows exactly what
    * retrieval could use — and nothing more.
    */
   z.object({ type: z.literal("memory.list"), scope: z.enum(["global_user", "agent"]).optional(), limit: z.number().int().positive().max(200).optional() }),
-  z.object({ type: z.literal("task.update"), taskID: z.string().min(1), action: z.enum(["done", "reopen", "snooze", "cancel"]), until: z.string().datetime().optional() }),
+  z.object({ type: z.literal("task.update"), taskID: z.string().min(1), action: z.enum(["done", "reopen", "snooze", "cancel", "edit"]), until: z.string().datetime().optional(), title: z.string().min(1).max(500).optional(), description: z.string().max(10000).nullable().optional(), dueAt: z.string().datetime().nullable().optional(), reminderAt: z.string().datetime().nullable().optional(), deadlineAt: z.string().datetime().nullable().optional(), labels: z.array(z.string().max(64)).max(20).optional(), workflowStatus: TaskWorkflowStatusSchema.optional(), progressNote: z.string().max(1000).nullable().optional(), repeatRule: z.enum(["none", "daily", "weekly", "monthly"]).optional(), priority: z.enum(["low", "normal", "high", "urgent"]).optional(), listID: z.string().optional() }),
   /**
    * Answer a question a delegated task asked. Its own frame, not a `msg.send`:
    * a task only accepts an answer while it is in `needs_input`, the answer
@@ -645,7 +669,10 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     createdAt: z.string(),
   }),
   z.object({ type: z.literal("job.list.ok"), seq, jobs: z.array(JobInfoSchema) }),
-  z.object({ type: z.literal("task.list.ok"), seq, tasks: z.array(TaskInfoSchema) }),
+  z.object({ type: z.literal("task.list.ok"), seq, tasks: z.array(TaskInfoSchema), lists: z.array(TaskListInfoSchema).optional() }),
+  z.object({ type: z.literal("task.create.ok"), seq, task: TaskInfoSchema }),
+  z.object({ type: z.literal("task.list.create.ok"), seq, lists: z.array(TaskListInfoSchema) }),
+  z.object({ type: z.literal("task.activity.ok"), seq, taskID: z.string(), activity: z.array(TaskActivityInfoSchema) }),
   z.object({ type: z.literal("memory.list.ok"), seq, memories: z.array(MemoryItemSchema) }),
   z.object({ type: z.literal("task.update.ok"), seq, task: TaskInfoSchema }),
   /** A delegated task changed state; clients refresh their task list. */

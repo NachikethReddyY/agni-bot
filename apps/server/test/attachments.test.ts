@@ -83,6 +83,12 @@ test("PDF text extraction works; blank and malformed PDFs explain the failure", 
   expect((await upload(new File(["%PDF-broken"], "broken.pdf"))).status).toBe(400);
 }, 30_000);
 
+test("task attachments are stored under the configured database data directory", async () => {
+  const { db, dbPath, device } = await setup();
+  const attachment = await saveAttachment(db, dbPath, device.id, new File(["task document"], "notes.txt"), "task");
+  expect(getAttachment(db, attachment.id)?.path).toBe(join(directory, "attachments", "documents", attachment.id));
+});
+
 test("image preflight rejects text-only models; image routing skips them", async () => {
   const { upload, request } = await setup(false);
   const { attachment } = await (await upload(png())).json() as { attachment: AttachmentInfo };

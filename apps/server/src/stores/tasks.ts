@@ -3,7 +3,7 @@ import type { TaskInfo } from "@agni/protocol";
 import { newID, nowISO } from "../util/ids";
 
 export type TaskStatus = "open" | "done" | "snoozed";
-export type TaskPriority = "low" | "normal" | "high";
+export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export type DelegateState = "none" | "queued" | "running" | "needs_input" | "done" | "failed";
 export type TaskOrigin = "user_direct" | "ea_delegated";
 export interface TaskRow {
@@ -15,7 +15,14 @@ export interface TaskRow {
   parent_agent_id: string|null;
   pending_question: string|null; pending_question_id: string|null; result_delivered_at: string|null;
   artifact_id: string|null;
+  list_id: string; description: string|null; parent_task_id: string|null; reminder_at: string|null; deadline_at: string|null; labels: string; attachment_ids: string; reminder_job_id: string|null;
+  repeat_rule: "none" | "daily" | "weekly" | "monthly";
+  workflow_status: "not_started" | "in_progress" | "ai_review";
+  progress_note: string;
 }
+
+export interface TaskListRow { id: string; name: string; position: number; created_at: string; updated_at: string }
+export interface TaskActivityRow { id: string; task_id: string; actor: string; action: string; detail: string|null; created_at: string }
 
 export interface DelegationBrief {
   goal: string;
@@ -26,13 +33,17 @@ export interface DelegationBrief {
   factIDs?: string[];
 }
 
-export function createTask(db: Database, input: { title: string; dueAt?: string|null; priority?: TaskPriority; ownerDeviceID?: string }): TaskRow {
+export function createTask(db: Database, input: { title: string; description?: string|null; dueAt?: string|null; reminderAt?: string|null; deadlineAt?: string|null; labels?: string[]; repeatRule?: TaskRow["repeat_rule"]; priority?: TaskPriority; ownerDeviceID?: string; actor?: string; listID?: string; parentTaskID?: string|null; attachmentIDs?: string[] }): TaskRow {
   const title=input.title.trim();
   if (!title || title.length>500) throw new Error("task title must be 1–500 characters");
   const priority=input.priority??"normal"; validatePriority(priority);
   const dueAt=validateDate(input.dueAt);
-  const row: TaskRow={id:newID("tsk"),title,due_at:dueAt,priority,status:"open",created_at:nowISO(),updated_at:nowISO(),snoozed_until:null,owner_device_id:input.ownerDeviceID??null,owner_agent_id:null,origin:"user_direct",delegate_state:"none",brief:null,result:null,job_id:null,parent_turn_id:null,child_thread_id:null,parent_thread_id:null,parent_channel_id:null,parent_agent_id:null,pending_question:null,pending_question_id:null,result_delivered_at:null,artifact_id:null};
-  db.run("INSERT INTO tasks(id,title,due_at,priority,status,created_at,updated_at,snoozed_until,owner_device_id,owner_agent_id,origin,delegate_state,brief,result,job_id,parent_turn_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[row.id,row.title,row.due_at,row.priority,row.status,row.created_at,row.updated_at,row.snoozed_until,row.owner_device_id,row.owner_agent_id,row.origin,row.delegate_state,row.brief,row.result,row.job_id,row.parent_turn_id]);
+  const listID=input.listID??"lst_inbox";
+  if (!getTaskList(db,listID)) throw new Error("task list does not exist");
+  if (input.parentTaskID && !getTask(db,input.parentTaskID)) throw new Error("parent task does not exist");
+  const row: TaskRow={id:newID("tsk"),title,due_at:dueAt,priority,status:"open",created_at:nowISO(),updated_at:nowISO(),snoozed_until:null,owner_device_id:input.ownerDeviceID??null,owner_agent_id:null,origin:"user_direct",delegate_state:"none",brief:null,result:null,job_id:null,parent_turn_id:null,child_thread_id:null,parent_thread_id:null,parent_channel_id:null,parent_agent_id:null,pending_question:null,pending_question_id:null,result_delivered_at:null,artifact_id:null,list_id:listID,description:input.description?.trim()||null,parent_task_id:input.parentTaskID??null,reminder_at:validateDate(input.reminderAt),deadline_at:validateDate(input.deadlineAt),labels:JSON.stringify(normalizeLabels(input.labels)),attachment_ids:JSON.stringify(input.attachmentIDs??[]),reminder_job_id:null,repeat_rule:input.repeatRule??"none",workflow_status:"not_started",progress_note:""};
+  db.run("INSERT INTO tasks(id,title,due_at,priority,status,created_at,updated_at,snoozed_until,owner_device_id,owner_agent_id,origin,delegate_state,brief,result,job_id,parent_turn_id,list_id,description,parent_task_id,reminder_at,deadline_at,labels,attachment_ids,repeat_rule) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[row.id,row.title,row.due_at,row.priority,row.status,row.created_at,row.updated_at,row.snoozed_until,row.owner_device_id,row.owner_agent_id,row.origin,row.delegate_state,row.brief,row.result,row.job_id,row.parent_turn_id,row.list_id,row.description,row.parent_task_id,row.reminder_at,row.deadline_at,row.labels,row.attachment_ids,row.repeat_rule]);
+  recordTaskActivity(db,row.id,input.actor??"owner","created",null);
   return row;
 }
 
@@ -58,11 +69,13 @@ export function createDelegationTask(db: Database, input: {
     child_thread_id: null, parent_thread_id: input.parentThreadID ?? null, parent_channel_id: input.parentChannelID ?? null,
     parent_agent_id: input.parentAgentID ?? null,
     pending_question: null, pending_question_id: null, result_delivered_at: null, artifact_id: null,
+    list_id: "lst_inbox", description: null, parent_task_id: null, reminder_at: null, deadline_at: null, labels: "[]", attachment_ids: "[]", reminder_job_id: null, repeat_rule: "none", workflow_status:"not_started", progress_note:"",
   };
   db.run(
     "INSERT INTO tasks(id,title,due_at,priority,status,created_at,updated_at,snoozed_until,owner_device_id,owner_agent_id,origin,delegate_state,brief,result,job_id,parent_turn_id,child_thread_id,parent_thread_id,parent_channel_id,parent_agent_id,pending_question,pending_question_id,result_delivered_at,artifact_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     [row.id, row.title, row.due_at, row.priority, row.status, row.created_at, row.updated_at, row.snoozed_until, row.owner_device_id, row.owner_agent_id, row.origin, row.delegate_state, row.brief, row.result, row.job_id, row.parent_turn_id, row.child_thread_id, row.parent_thread_id, row.parent_channel_id, row.parent_agent_id, row.pending_question, row.pending_question_id, row.result_delivered_at, row.artifact_id],
   );
+  recordTaskActivity(db,row.id,input.ownerAgentID,"created",goal);
   return row;
 }
 
@@ -197,17 +210,19 @@ export function listTasks(db: Database, options: {status?: TaskStatus|"all"; lim
       : db.query<TaskRow,[TaskStatus,number]>("SELECT * FROM tasks WHERE status=? ORDER BY CASE WHEN due_at IS NULL THEN 1 ELSE 0 END,due_at,created_at LIMIT ?").all(status,limit);
 }
 
-export function setTaskStatus(db: Database,id:string,status:TaskStatus):TaskRow|null {
+export function setTaskStatus(db: Database,id:string,status:TaskStatus,actor="owner"):TaskRow|null {
   validateStatus(status);
   const old=getTask(db,id); if(!old)return null;
   db.run("UPDATE tasks SET status=?,snoozed_until=NULL,updated_at=? WHERE id=?",[status,nowISO(),id]);
+  recordTaskActivity(db,id,actor,status === "done" ? "completed" : "reopened",null);
   return getTask(db,id);
 }
 
-export function snoozeTask(db: Database,id:string,until:string):TaskRow|null {
+export function snoozeTask(db: Database,id:string,until:string,actor="owner"):TaskRow|null {
   const date=validateDate(until); if(!date || Date.parse(date)<=Date.now()) throw new Error("snooze time must be in the future");
   const old=getTask(db,id); if(!old)return null;
   db.run("UPDATE tasks SET status='snoozed',snoozed_until=?,updated_at=? WHERE id=?",[date,nowISO(),id]);
+  recordTaskActivity(db,id,actor,"snoozed",date);
   return getTask(db,id);
 }
 
@@ -228,6 +243,8 @@ export function taskInfo(task: TaskRow): TaskInfo {
     title: task.title,
     dueAt: task.due_at,
     priority: task.priority,
+    workflowStatus: task.workflow_status,
+    progressNote: task.progress_note,
     status: task.status,
     snoozedUntil: task.snoozed_until,
     createdAt: task.created_at,
@@ -238,7 +255,78 @@ export function taskInfo(task: TaskRow): TaskInfo {
     jobId: task.job_id,
     result: task.result,
     resultRedacted: false,
+    listID: task.list_id,
+    parentTaskID: task.parent_task_id,
+    description: task.description,
+    reminderAt: task.reminder_at,
+    deadlineAt: task.deadline_at,
+    labels: parseLabels(task.labels),
+    repeatRule: task.repeat_rule,
+    attachmentIDs: parseAttachmentIDs(task.attachment_ids),
   };
+}
+
+export function listTaskLists(db: Database): Array<TaskListRow & { task_count: number }> {
+  return db.query<TaskListRow & { task_count: number }, []>(`SELECT l.*, COUNT(t.id) AS task_count FROM task_lists l
+    LEFT JOIN tasks t ON t.list_id = l.id AND t.status != 'done'
+    GROUP BY l.id ORDER BY l.position, l.created_at`).all();
+}
+
+export function getTaskList(db: Database, id: string): TaskListRow | null {
+  return db.query<TaskListRow, [string]>("SELECT * FROM task_lists WHERE id = ?").get(id) ?? null;
+}
+
+export function createTaskList(db: Database, nameInput: string): TaskListRow {
+  const name = nameInput.trim();
+  if (!name || name.length > 80) throw new Error("list name must be 1–80 characters");
+  if (db.query("SELECT 1 FROM task_lists WHERE lower(name) = lower(?)").get(name)) throw new Error("a list with that name already exists");
+  const now = nowISO();
+  const row = { id: newID("lst"), name, position: listTaskLists(db).length, created_at: now, updated_at: now };
+  db.run("INSERT INTO task_lists(id,name,position,created_at,updated_at) VALUES(?,?,?,?,?)", [row.id,row.name,row.position,now,now]);
+  return row;
+}
+
+export function editTask(db: Database, id: string, input: { title?: string; description?: string|null; dueAt?: string|null; reminderAt?: string|null; deadlineAt?: string|null; labels?: string[]; workflowStatus?: TaskRow["workflow_status"]; progressNote?: string|null; repeatRule?: TaskRow["repeat_rule"]; priority?: TaskPriority; listID?: string }, actor="owner"): TaskRow | null {
+  const old = getTask(db,id); if (!old) return null;
+  const title = input.title === undefined ? old.title : input.title.trim();
+  if (!title || title.length > 500) throw new Error("task title must be 1–500 characters");
+  if (input.priority) validatePriority(input.priority);
+  if (input.listID && !getTaskList(db,input.listID)) throw new Error("task list does not exist");
+  const workflowStatus=input.workflowStatus??old.workflow_status;
+  if(!["not_started","in_progress","ai_review"].includes(workflowStatus)) throw new Error("invalid task workflow status");
+  const progressNote=input.progressNote === undefined ? old.progress_note : (input.progressNote ?? "").trim().slice(0,1000);
+  db.run(`UPDATE tasks SET title=?, description=?, due_at=?, reminder_at=?, deadline_at=?, labels=?, workflow_status=?, progress_note=?, repeat_rule=?, priority=?, list_id=?, updated_at=? WHERE id=?`,
+    [title,input.description === undefined ? old.description : input.description?.trim() || null,input.dueAt === undefined ? old.due_at : validateDate(input.dueAt),input.reminderAt === undefined ? old.reminder_at : validateDate(input.reminderAt),input.deadlineAt === undefined ? old.deadline_at : validateDate(input.deadlineAt),input.labels === undefined ? old.labels : JSON.stringify(normalizeLabels(input.labels)),workflowStatus,progressNote,input.repeatRule ?? old.repeat_rule,input.priority ?? old.priority,input.listID ?? old.list_id,nowISO(),id]);
+  const changed = getTask(db,id);
+  if (changed) recordTaskActivity(db,id,actor,"edited",null);
+  return changed;
+}
+
+export function listTaskActivity(db: Database, taskID: string): TaskActivityRow[] {
+  return db.query<TaskActivityRow,[string]>("SELECT * FROM task_activity WHERE task_id=? ORDER BY created_at DESC LIMIT 100").all(taskID);
+}
+
+export function recordTaskActivity(db: Database, taskID: string, actor: string, action: string, detail: string|null): void {
+  db.run("INSERT INTO task_activity(id,task_id,actor,action,detail,created_at) VALUES(?,?,?,?,?,?)",[newID("tac"),taskID,actor.slice(0,120),action.slice(0,40),detail,nowISO()]);
+}
+
+export function setTaskReminderJob(db: Database, taskID: string, jobID: string|null): void {
+  db.run("UPDATE tasks SET reminder_job_id=?,updated_at=? WHERE id=?",[jobID,nowISO(),taskID]);
+}
+
+function parseAttachmentIDs(value: string): string[] {
+  try { const parsed: unknown = JSON.parse(value); return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : []; }
+  catch { return []; }
+}
+
+function normalizeLabels(labels: string[] | undefined): string[] {
+  if (!labels) return [];
+  return [...new Set(labels.map((label) => label.trim().replace(/^#/, "")).filter(Boolean))].slice(0, 20);
+}
+
+function parseLabels(value: string): string[] {
+  try { const parsed: unknown = JSON.parse(value); return Array.isArray(parsed) ? normalizeLabels(parsed.filter((item): item is string => typeof item === "string")) : []; }
+  catch { return []; }
 }
 
 export function validateDate(value:string|null|undefined):string|null {
@@ -247,4 +335,4 @@ export function validateDate(value:string|null|undefined):string|null {
   return new Date(ms).toISOString();
 }
 export function validateStatus(value:string):asserts value is TaskStatus { if(!["open","done","snoozed"].includes(value))throw new Error("invalid task status"); }
-export function validatePriority(value:string):asserts value is TaskPriority { if(!["low","normal","high"].includes(value))throw new Error("invalid task priority"); }
+export function validatePriority(value:string):asserts value is TaskPriority { if(!["low","normal","high","urgent"].includes(value))throw new Error("invalid task priority"); }

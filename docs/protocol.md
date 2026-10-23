@@ -62,8 +62,11 @@ never reason about thread ids.
 | `job.list` | `{limit?}` | Tasks and routines, newest/next due first. |
 | `job.set` | `{jobID, action}` | `action`: `pause \| resume \| run`. |
 | `job.delete` | `{jobID}` | Deletes a task unless it is running; replies with a refreshed `job.list.ok`. |
-| `task.list` | `{status?, limit?}` | Lists durable tasks; status is `open \| done \| snoozed \| all`. |
-| `task.update` | `{taskID, action, until?}` | Completes, reopens, or snoozes a task until an ISO timestamp. |
+| `task.list` | `{status?, limit?}` | Lists durable tasks and task lists; status is `open \| done \| snoozed \| all`. |
+| `task.create` | `{title, description?, dueAt?, deadlineAt?, reminderAt?, labels?, repeatRule?, priority?, listID?, parentTaskID?, attachmentIDs?}` | Creates a task or subtask, optionally with a schedule, deadline, labels, repeat cadence and uploaded files. |
+| `task.list.create` | `{name}` | Creates a task list and returns the current list navigation data. |
+| `task.activity` | `{taskID}` | Reads the task's recent edit and status history. |
+| `task.update` | `{taskID, action, until?, title?, description?, dueAt?, deadlineAt?, reminderAt?, labels?, repeatRule?, priority?, listID?}` | Completes, reopens, snoozes, or edits a task. |
 | `task.answer` | `{taskID, questionID, text}` | Answers a question a delegated task asked. Its own frame, not a `msg.send`: the task must be in `needs_input`, the answer belongs to one question, and it is accepted exactly once. |
 | `bind.direct` | `{agentID}` | Pins this client to an agent: the server resolves that agent's conversation, its active session block and its DM channel, and answers with them. |
 | `provider.add` | `{providerID, apiKey, model?, baseUrl?, label?}` | Adds a supported API provider over the authenticated socket. `providerID: "custom"` adds an endpoint of the owner's own: `baseUrl` is an OpenAI-compatible base (`https://host/v1`), `label` names it in the list. The daemon stores the key in its mode-600 `.env` and the endpoint in `data/providers.json`; neither is ever returned. |
@@ -130,7 +133,10 @@ accountLabel?, error?, connectedAt?}`.
 | `conversation.history.ok` | `{conversationID, messages: [{id, role, text, createdAt, turnID?, sessionID?}]}` | Answer to `conversation.history`; addressed to the requester. Clients render a session divider wherever consecutive `sessionID`s differ. |
 | `thread.export.ok` | `{conversationID, url, token, records, createdAt}` | Answer to `thread.export`; addressed to the requester, not replayed. `url` is absolute and served by this daemon at `GET /share/<token>`; the token is the only access control on the file, so it is never logged or replayed. |
 | `job.list.ok` | `{jobs: [...]}` | Answer to `job.list`, `job.set`, or `job.delete`; addressed to the requester. |
-| `task.list.ok` | `{tasks: [...]}` | Task snapshots, including due date, priority, status, and snooze time. A delegation task also carries `ownerAgentId`, `origin`, `delegateState`, `jobId`, `result` and `resultRedacted`. The owner sees every result; `resultRedacted` is true when a result exists that this viewer may not see. |
+| `task.list.ok` | `{tasks: [...], lists: [...]}` | Task snapshots include due date, deadline, priority, workflow status (`not_started`, `in_progress`, `ai_review`), current progress note, list/collection, labels, optional parent, notes, reminder time, repeat cadence and attachment IDs. Lists include open task counts. A delegation task also carries `ownerAgentId`, `origin`, `delegateState`, `jobId`, `result` and `resultRedacted`. The owner sees every result; `resultRedacted` is true when a result exists that this viewer may not see. |
+| `task.create.ok` | `{task: {...}}` | Newly persisted task. |
+| `task.list.create.ok` | `{lists: [...]}` | Updated task list navigation. |
+| `task.activity.ok` | `{taskID, activity: [...]}` | Recent task activity, newest first. |
 | `task.update.ok` | `{task: {...}}` | Updated task snapshot after a persisted state change. |
 | `task.updated` | `{task: {...}}` | A delegated task changed state (queued, running, needs_input, done, failed). Replayable. |
 | `task.answer.ok` | `{task: {...}}` | The answer was accepted; the task is running again. |
