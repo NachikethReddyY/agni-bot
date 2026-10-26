@@ -43,12 +43,19 @@ const SKIP = "[\\p{Cf}\\p{Mn}\\uFE00-\\uFE0F\\u{E0100}-\\u{E01EF}]*";
 /** `peer_message` with invisible characters allowed between the letters. */
 const PEER_NAME = [..."peer_message"].map((letter) => letter + SKIP).join("");
 /**
+ * Whitespace between the bracket, slash and name. JavaScript's `\s` includes
+ * U+FEFF, which is also an invisible character, so the class is spelled out
+ * without it. Otherwise the two classes overlap and backtrack quadratically on
+ * a long run of U+FEFF.
+ */
+const WS = "[\\t\\n\\v\\f\\r \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*";
+/**
  * What sits between the opening bracket and the name: invisibles, whitespace,
  * and an optional slash with its own invisibles. The slash is the only thing
  * that separates the two invisible runs, so the pattern never has two runs
  * back to back and cannot backtrack badly on a long run of invisibles.
  */
-const TAG_HEAD = `${SKIP}\\s*(?:[\\/／]${SKIP}\\s*)?${PEER_NAME}`;
+const TAG_HEAD = `${SKIP}${WS}(?:[\\/／]${SKIP}${WS})?${PEER_NAME}`;
 const BRACKET_BEFORE_TAG = new RegExp(`[<＜](?=${TAG_HEAD})`, "giu");
 const ESCAPED_BRACKET_BEFORE_TAG = new RegExp(`&lt;(?=${TAG_HEAD})`, "giu");
 const WHOLE_TAG = new RegExp(`[<＜]${TAG_HEAD}[^>＞]*[>＞]`, "giu");

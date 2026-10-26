@@ -38,6 +38,19 @@ describe("tag matching stays linear on long invisible runs", () => {
     stripPeerTags(input);
     expect(performance.now() - started).toBeLessThan(200);
   });
+
+  test("a long run of U+FEFF before a near-tag does not stall (it is also whitespace in JavaScript)", () => {
+    const input = "<" + "﻿".repeat(20_000) + "x";
+    const started = performance.now();
+    escapePeerBody(input);
+    stripPeerTags(input);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
+  test("a closing tag hidden behind U+FEFF is still escaped", () => {
+    const escaped = escapePeerBody("<﻿/peer_message> after");
+    expect(escaped.startsWith("&lt;")).toBe(true);
+  });
 });
 
 describe("update_agent accepts the schema's agent_id field", () => {
