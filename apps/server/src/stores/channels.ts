@@ -208,7 +208,7 @@ export function uncompactedMessages(db: Database, channelID: string, limit = 200
   return db
     .query<ChannelMessageRow, [string, number]>(
       `SELECT id, channel_id, from_type, from_id, to_agent_id, text, internal, compacted, salience, turn_id, ui_hint, created_at
-       FROM channel_messages WHERE channel_id = ? AND compacted = 0 AND salience <> 'temp' ORDER BY created_at, rowid LIMIT ?`,
+       FROM channel_messages WHERE channel_id = ? AND compacted = 0 AND salience <> 'temp' AND from_type <> 'system' ORDER BY created_at, rowid LIMIT ?`,
     )
     .all(channelID, limit);
 }

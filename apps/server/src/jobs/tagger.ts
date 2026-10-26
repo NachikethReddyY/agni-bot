@@ -96,7 +96,7 @@ export function registerTaggerJob(runner: JobRunner, deps: TaggerJobDeps): void 
       .query<{ id: string; from_type: string; from_id: string; text: string; created_at: string; channel_id: string }, [number]>(
         `SELECT id, from_type, from_id, text, created_at, channel_id
          FROM channel_messages
-         WHERE tagged_at IS NULL AND salience <> 'temp'
+         WHERE tagged_at IS NULL AND salience <> 'temp' AND from_type <> 'system'
          ORDER BY created_at ASC, rowid ASC
          LIMIT ?`,
       )

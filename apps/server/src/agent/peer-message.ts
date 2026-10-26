@@ -54,3 +54,19 @@ export function peerEnvelope(peer: PeerMeta, body: string): string {
   ].join(" ");
   return `<peer_message ${attributes}>\n${escapePeerBody(body)}\n</peer_message>`;
 }
+
+const PEER_TAG = /<\s*\/?\s*peer_message\b[^>]*>/gi;
+const ESCAPED_PEER_TAG = /&lt;(?=\s*\/?\s*peer_message\b)/gi;
+
+/**
+ * Remove peer envelope tags from agent-authored display text.
+ *
+ * Each opening or closing tag is removed on its own, so a lone tag that a
+ * model echoes does not survive. The body between them is kept. An escaped
+ * `&lt;` that sits before a `peer_message` tag name is unescaped, so an escaped
+ * tag inside a body reads as the text it was. Only agent text should pass
+ * through this; owner text is never sent here.
+ */
+export function stripPeerTags(text: string): string {
+  return text.replace(PEER_TAG, "").replace(ESCAPED_PEER_TAG, "<").trim();
+}

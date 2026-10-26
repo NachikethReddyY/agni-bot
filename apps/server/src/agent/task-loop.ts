@@ -3,7 +3,7 @@ import { linkAttachments, messageAttachments, withAttachmentContent } from "../a
  * remains a separate, one-call path in agent/loop.ts. */
 import type { Database } from "bun:sqlite";
 import type { PeerIntent, ServerFrameBody, StopReason } from "@agni/protocol";
-import { peerEnvelope } from "./peer-message";
+import { peerEnvelope, stripPeerTags } from "./peer-message";
 import { ApprovalBroker, waitForApprovalDecision } from "./approval-broker";
 import { FormBroker } from "./form-broker";
 import type { Decision } from "./approval-broker";
@@ -482,10 +482,11 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   const channelBacked = Boolean(run.channelID);
   const publish = (text: string, uiHint: "normal" | "progress" = "normal"): void => {
     if (text.trim().length === 0) return;
-    appendMessage(db, { threadID, turnID, role: "assistant", text });
+    const displayText = stripPeerTags(text);
+    appendMessage(db, { threadID, turnID, role: "assistant", text: displayText });
     if (!run.channelID) return;
     const row = appendChannelMessage(db, {
-      channelID: run.channelID, fromType: "agent", fromID: persona.id, text, turnID, uiHint,
+      channelID: run.channelID, fromType: "agent", fromID: persona.id, text: displayText, turnID, uiHint,
     });
     const agent = db.query<{ display_name: string; avatar_color: string }, [string]>(
       "SELECT display_name, avatar_color FROM agents WHERE id = ?",
@@ -493,7 +494,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     run.emit({
       type: "msg.new", id: row.id, channelId: run.channelID, fromType: "agent", fromId: persona.id,
       senderName: agent?.display_name ?? persona.name, senderColor: agent?.avatar_color,
-      text, internal: false, uiHint, createdAt: row.created_at,
+      text: displayText, internal: false, uiHint, createdAt: row.created_at,
     });
   };
   try {
@@ -573,7 +574,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
           continue;
         }
         recentCalls.set(signature, stepCount);
-        const callResult = await executeTool(db, threadID, turnID, call, effectiveTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail);
+        const callResult = await executeTool(db, threadID, turnID, call, effectiveTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail, peerInput);
         let content = callResult.content;
         if (looking && offRoadSteps === OFF_ROAD_NUDGE_AT && !offRoadNudged && !acted) {
           offRoadNudged = true;
@@ -688,7 +689,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     if (runningTurns.get(threadID)?.turnID === turnID) runningTurns.delete(threadID);
   }
 
-  if (run.channelID) void compactChannelHistory(db, router, run.channelID, persona.id);
+  if (run.channelID) void compactChannelHistory(db, router, run.channelID, persona.id, peerInput);
   finishTurn(db, { id: turnID, stopReason, ...usage });
   touchThread(db, threadID);
   // A turn waiting for the owner's answer is not a failed turn: the session
@@ -841,7 +842,7 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
   registry: ReturnType<typeof buildTaskToolRegistry>, broker: ApprovalBroker, signal: AbortSignal,
   emit: (frame: ServerFrameBody) => void,
   setState: (state: string) => void,
-  persona: Persona, guardrail: GuardrailState,
+  persona: Persona, guardrail: GuardrailState, peerInput?: boolean,
 ): Promise<{ content: string; awaiting: boolean }> {
   const tool = registry.get(call.function.name);
   let args: Record<string, unknown> = {};
@@ -885,6 +886,7 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
         threadID,
         turnID,
         signal: combined,
+        peerInput,
         chain: {
           depth: guardrail.depth,
           rootAgentID: guardrail.rootAgentID,

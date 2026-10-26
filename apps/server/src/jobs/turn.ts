@@ -177,8 +177,11 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
       throw new Error(`turn ended with ${result.stopReason}${result.text ? " (partial output kept)" : ""}`);
     }
 
-    // TAG-001: a background turn is also material worth tagging.
-    scheduleTagger(deps.db, { agentID: persona.id, ...(payload.channelID ? { channelID: payload.channelID } : {}) });
+    // TAG-001: a background turn is also material worth tagging. A peer-influenced
+    // turn is not: its input never becomes a durable fact.
+    if (!payload.peer && payload.inputRole !== "system") {
+      scheduleTagger(deps.db, { agentID: persona.id, ...(payload.channelID ? { channelID: payload.channelID } : {}) });
+    }
 
     const reply = firstLine(result.text);
     if (delegationTaskID && !isDelegationCancelled(deps.db, delegationTaskID)) {

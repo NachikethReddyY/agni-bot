@@ -23,6 +23,7 @@ import { teamRoster, resolvePersona } from "../agent/personas";
 import { DEFAULT_VISIBILITY, redactForCaller } from "../agent/visibility";
 import { appendChannelMessage, ensureDMChannel } from "../stores/channels";
 import { checkPeerRequest, fingerprintPeerRequest } from "../stores/peer-chains";
+import { stripPeerTags } from "../agent/peer-message";
 
 const objectSchema = (properties: Record<string, unknown>, required: string[]): Record<string, unknown> => ({
   type: "object", properties, required, additionalProperties: false,
@@ -173,7 +174,7 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
       // direct chat with that agent reads like a conversation — the brief was
       // a note there, and this is the reply.
       if (result.text.trim()) {
-        post("agent", result.agentID, result.text, "normal", undefined, `dm:${result.agentID}`);
+        post("agent", result.agentID, stripPeerTags(result.text), "normal", undefined, `dm:${result.agentID}`);
       }
       // The one place the specialist's words cross into another agent's
       // context, so the one place visibility is applied. A private agent
