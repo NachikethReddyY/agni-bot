@@ -8,7 +8,7 @@
  * transcript — and the result lands back on the task row plus a notification.
  */
 import type { Database } from "bun:sqlite";
-import type { ServerFrameBody } from "@agni/protocol";
+import { PEER_INTENTS, PeerIntentSchema, type PeerIntent, type ServerFrameBody } from "@agni/protocol";
 import type { ToolRegistry } from "./registry";
 import { teamRoster, resolvePersona } from "../agent/personas";
 import { DEFAULT_VISIBILITY, redactStoredForCaller } from "../agent/visibility";
@@ -60,6 +60,11 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
         ? { type: "string", enum: team.map((member) => member.id), description: team.map((member) => `${member.id}: ${member.role}`).join("; ") }
         : stringProp,
       goal: { type: "string", minLength: 1, description: "What the specialist must accomplish, in one or two sentences." },
+      intent: {
+        type: "string",
+        enum: [...PEER_INTENTS],
+        description: "What this delegation is for: request (default), result, question, status or fyi.",
+      },
       constraints: { type: "array", items: { type: "string" }, description: "Rules the result must respect." },
       deadline: { type: "string", description: "Optional ISO date/time by which the work is needed." },
       outputSchema: { type: "string", description: "Optional description of the shape of the result." },
@@ -83,13 +88,16 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
       const factIDs = Array.isArray(args.factIDs) ? args.factIDs.map(String).slice(0, 20) : undefined;
       const brief: DelegationBrief = {
         goal,
+        intent: readIntent(args.intent),
         constraints: Array.isArray(args.constraints) ? args.constraints.map(String) : undefined,
         deadline: args.deadline === undefined ? null : String(args.deadline),
         outputSchema: args.outputSchema === undefined ? null : String(args.outputSchema),
         ...(factIDs && factIDs.length > 0 ? { factIDs } : {}),
       };      // Idempotency: the same goal already in flight for the same specialist
-      // is returned, not queued twice. A model retry must not double the work.
-      const existing = findActiveDelegation(deps.db, toAgentID, goal);
+      // from this caller is returned, not queued twice. A model retry must not
+      // double the work; two different callers asking the same thing are two
+      // pieces of work.
+      const existing = findActiveDelegation(deps.db, toAgentID, goal, deps.currentAgentID);
       if (existing) {
         if (args.mode === "wait") {
           const waited = await waitForDelegation(deps.db, existing.id, waitBudget(args.timeoutMs), ctx.signal);
@@ -192,6 +200,14 @@ function taskView(task: TaskRow, deps: DelegateTaskToolDeps): Record<string, unk
     jobID: task.job_id,
     updatedAt: task.updated_at,
   };
+}
+
+/** Read the optional intent; absent means "request", invalid is an error. */
+function readIntent(raw: unknown): PeerIntent {
+  if (raw === undefined || raw === null || raw === "") return "request";
+  const parsed = PeerIntentSchema.safeParse(raw);
+  if (!parsed.success) throw new Error(`intent must be one of ${PEER_INTENTS.join(", ")}`);
+  return parsed.data;
 }
 
 /** Clamp the wait budget so a model cannot pin a turn open indefinitely. */

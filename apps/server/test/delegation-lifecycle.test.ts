@@ -23,6 +23,7 @@ import {
   setDelegationState,
   setDelegationThread,
   setPendingQuestion,
+  taskInfo,
 } from "../src/stores/tasks";
 import { getArtifact } from "../src/stores/artifacts";
 import { listJobs, parseJobPayload } from "../src/stores/jobs";
@@ -58,7 +59,7 @@ afterEach(() => { db?.close(); db = undefined; });
 /** Queue a delegation the way the model would. */
 async function delegate(
   database: Database,
-  options: { toAgentID?: string; goal?: string; parentThreadID?: string; channelID?: string } = {},
+  options: { toAgentID?: string; goal?: string; parentThreadID?: string; channelID?: string; intent?: string } = {},
 ): Promise<{ taskID: string; jobID: string }> {
   const registry = new ToolRegistry();
   registerDelegateTaskTool(registry, {
@@ -73,7 +74,11 @@ async function delegate(
     handler: (args: Record<string, unknown>, ctx: { threadID: string; turnID: string; signal: AbortSignal }) => Promise<unknown>;
   };
   const result = (await tool.handler(
-    { toAgentID: options.toAgentID ?? "researcher", goal: options.goal ?? "Find the delay" },
+    {
+      toAgentID: options.toAgentID ?? "researcher",
+      goal: options.goal ?? "Find the delay",
+      ...(options.intent ? { intent: options.intent } : {}),
+    },
     { threadID: "thr_parent", turnID: "trn_parent", signal: new AbortController().signal },
   )) as { taskID: string; jobID: string };
   return result;
@@ -123,6 +128,21 @@ describe("a delegated task asks the owner a question", () => {
     setPendingQuestion(db, "tsk_1", { text: "Which account?", questionID: "qst_1" });
     expect(getTask(db, "tsk_1")?.delegate_state).toBe("needs_input");
     expect(getPendingQuestion(db, "tsk_1")?.questionID).toBe("qst_1");
+  });
+});
+
+describe("the delegation carries an intent", () => {
+  test("the brief intent defaults to request and survives the task finishing", async () => {
+    db = openDatabase(":memory:");
+    const plain = await delegate(db, { goal: "Find the delay" });
+    const question = await delegate(db, { goal: "Which account?", intent: "question" });
+
+    expect(taskInfo(getTask(db, plain.taskID)!).intent).toBe("request");
+    expect(taskInfo(getTask(db, question.taskID)!).intent).toBe("question");
+    expect(JSON.parse(getTask(db, question.taskID)!.brief!).intent).toBe("question");
+
+    setDelegationState(db, question.taskID, "done", "Answered.");
+    expect(taskInfo(getTask(db, question.taskID)!).intent).toBe("question");
   });
 });
 

@@ -174,6 +174,14 @@ export type JobInfo = z.infer<typeof JobInfoSchema>;
 export const TaskStatusSchema = z.enum(["open", "done", "snoozed"]);
 export const TaskWorkflowStatusSchema = z.enum(["not_started", "in_progress", "ai_review"]);
 export const DelegateStateSchema = z.enum(["none", "queued", "running", "needs_input", "done", "failed"]);
+/**
+ * What an agent-to-agent message is for: a request for work, a result coming
+ * back, a question, a status note, or an FYI. Phase 1 carries the value on the
+ * frame; routing on it comes later.
+ */
+export const PEER_INTENTS = ["request", "result", "question", "status", "fyi"] as const;
+export const PeerIntentSchema = z.enum(PEER_INTENTS);
+export type PeerIntent = z.infer<typeof PeerIntentSchema>;
 /** One remembered thing, as the memory view shows it. */
 export const MemoryItemSchema = z.object({
   id: z.string(),
@@ -198,6 +206,8 @@ export const TaskInfoSchema = z.object({
   // Delegation fields (DEL-001/DEL-005). Optional so older clients still parse.
   ownerAgentId: z.string().nullable().optional(),
   origin: z.enum(["user_direct", "ea_delegated"]).optional(),
+  /** What the delegation asks of the owner; absent on older tasks ("request"). */
+  intent: PeerIntentSchema.optional(),
   delegateState: DelegateStateSchema.optional(),
   jobId: z.string().nullable().optional(),
   result: z.string().nullable().optional(),
@@ -752,6 +762,8 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     text: z.string(),
     internal: z.boolean(),
     uiHint: z.enum(["onboarding_name_prompt", "handoff_notice", "progress", "needs_input", "normal"]).optional(),
+    /** What the agent-to-agent message is for; absent means "request". */
+    intent: PeerIntentSchema.optional(),
     /** The agent this message is about — a handoff notice names its target. */
     toAgentId: z.string().optional(),
     /** Set when the message is a question from a delegated task. */

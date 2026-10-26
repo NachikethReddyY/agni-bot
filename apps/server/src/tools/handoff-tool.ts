@@ -13,7 +13,7 @@
  * difference between "Vision asked Friday" and "I asked Friday".
  */
 import type { Database } from "bun:sqlite";
-import type { ServerFrameBody } from "@agni/protocol";
+import { PEER_INTENTS, PeerIntentSchema, type PeerIntent, type ServerFrameBody } from "@agni/protocol";
 import type { ToolRegistry } from "./registry";
 import type { TaskTurnSettings } from "../agent/task-loop";
 import type { Router } from "../models/router";
@@ -67,6 +67,7 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
     uiHint?: "onboarding_name_prompt" | "handoff_notice" | "progress" | "normal",
     toAgentID?: string,
     channelID = deps.channelID,
+    intent?: PeerIntent,
   ): void => {
     if (!channelID) return;
     // The specialist may not have a DM channel yet; create it so the reply
@@ -84,6 +85,7 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
       type: "msg.new", id: row.id, channelId: channelID, fromType,
       fromId: fromID, senderName: nameOf(fromID), senderColor: colorOf(fromID),
       text, internal: false, uiHint: uiHint ?? "normal",
+      ...(intent ? { intent } : {}),
       // The target rides along, so the client can make the name a link to
       // that agent's chat.
       ...(toAgentID ? { toAgentId: toAgentID } : {}),
@@ -106,6 +108,11 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
         : stringProp,
       task: { type: "string", minLength: 1, description: "The brief for the other agent." },
       context: { type: "string", minLength: 1, description: "Optional extra context for the other agent." },
+      intent: {
+        type: "string",
+        enum: [...PEER_INTENTS],
+        description: "What this handoff is for: request (default), result, question, status or fyi.",
+      },
     }, ["toAgentID", "task"]),
     handler: async (args: Record<string, unknown>) => {
       const toAgentID = String(args.toAgentID ?? "").trim();
@@ -115,12 +122,13 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
       }
       const task = String(args.task ?? "").trim();
       if (!task) throw new Error("handoff requires a task");
+      const intent = readIntent(args.intent);
 
       // The user sees who was asked, before the work starts — this is the
       // "message this bot" line they asked for. The brief is internal
       // routing: it belongs in the tool call, not in the chat. The target
       // rides along, so the name can be a link to that agent's chat.
-      post("system", deps.currentAgentID, `Messaged ${nameOf(toAgentID)}`, "handoff_notice", toAgentID);
+      post("system", deps.currentAgentID, `Messaged ${nameOf(toAgentID)}`, "handoff_notice", toAgentID, deps.channelID, intent);
       if (deps.channelID) {
         deps.emit({
           type: "status.update", channelId: deps.channelID, agentId: deps.currentAgentID,
@@ -171,4 +179,12 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
       };
     },
   });
+}
+
+/** Read the optional intent; absent means "request", invalid is an error. */
+function readIntent(raw: unknown): PeerIntent {
+  if (raw === undefined || raw === null || raw === "") return "request";
+  const parsed = PeerIntentSchema.safeParse(raw);
+  if (!parsed.success) throw new Error(`intent must be one of ${PEER_INTENTS.join(", ")}`);
+  return parsed.data;
 }

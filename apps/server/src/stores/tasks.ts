@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { TaskInfo } from "@agni/protocol";
+import { PeerIntentSchema, type PeerIntent, type TaskInfo } from "@agni/protocol";
 import { newID, nowISO } from "../util/ids";
 
 export type TaskStatus = "open" | "done" | "snoozed";
@@ -26,6 +26,11 @@ export interface TaskActivityRow { id: string; task_id: string; actor: string; a
 
 export interface DelegationBrief {
   goal: string;
+  /**
+   * What this delegation is for. Phase 1 stores and reports it; the value is
+   * not yet used to route or gate the work.
+   */
+  intent?: PeerIntent;
   constraints?: string[];
   deadline?: string | null;
   outputSchema?: string | null;
@@ -61,11 +66,14 @@ export function createDelegationTask(db: Database, input: {
   const goal = input.brief.goal.trim();
   if (!goal || goal.length > 500) throw new Error("delegation goal must be 1–500 characters");
   const origin = input.origin ?? "ea_delegated";
+  // The brief is the task's storage for intent too; default it here so every
+  // row written from now on carries one explicitly.
+  const brief: DelegationBrief = { ...input.brief, intent: input.brief.intent ?? "request" };
   const row: TaskRow = {
     id: newID("tsk"), title: goal, due_at: validateDate(input.dueAt), priority: "normal", status: "open",
     created_at: nowISO(), updated_at: nowISO(), snoozed_until: null, owner_device_id: null,
     owner_agent_id: input.ownerAgentID, origin, delegate_state: "queued",
-    brief: JSON.stringify(input.brief), result: null, job_id: null, parent_turn_id: input.parentTurnID ?? null,
+    brief: JSON.stringify(brief), result: null, job_id: null, parent_turn_id: input.parentTurnID ?? null,
     child_thread_id: null, parent_thread_id: input.parentThreadID ?? null, parent_channel_id: input.parentChannelID ?? null,
     parent_agent_id: input.parentAgentID ?? null,
     pending_question: null, pending_question_id: null, result_delivered_at: null, artifact_id: null,
@@ -165,14 +173,23 @@ export function getTaskByJob(db: Database, jobID: string): TaskRow | null {
   return db.query<TaskRow, [string]>("SELECT * FROM tasks WHERE job_id = ?").get(jobID) ?? null;
 }
 
-/** Find an in-flight delegation for the same owner and goal (idempotency). */
-export function findActiveDelegation(db: Database, ownerAgentID: string, goal: string): TaskRow | null {
+/**
+ * Find an in-flight delegation for the same owner, goal and delegating agent
+ * (idempotency). Two different callers asking for the same goal are two
+ * pieces of work; one caller retrying its own call is not.
+ */
+export function findActiveDelegation(
+  db: Database,
+  ownerAgentID: string,
+  goal: string,
+  delegatingAgentID: string,
+): TaskRow | null {
   return (
     db
-      .query<TaskRow, [string, string]>(
-        "SELECT * FROM tasks WHERE owner_agent_id = ? AND title = ? AND delegate_state IN ('queued', 'running', 'needs_input') ORDER BY created_at DESC LIMIT 1",
+      .query<TaskRow, [string, string, string]>(
+        "SELECT * FROM tasks WHERE owner_agent_id = ? AND title = ? AND parent_agent_id = ? AND delegate_state IN ('queued', 'running', 'needs_input') ORDER BY created_at DESC LIMIT 1",
       )
-      .get(ownerAgentID, goal.trim()) ?? null
+      .get(ownerAgentID, goal.trim(), delegatingAgentID) ?? null
   );
 }
 
@@ -251,6 +268,7 @@ export function taskInfo(task: TaskRow): TaskInfo {
     updatedAt: task.updated_at,
     ownerAgentId: task.owner_agent_id,
     origin: task.origin === "ea_delegated" ? "ea_delegated" : "user_direct",
+    intent: briefIntent(task.brief),
     delegateState,
     jobId: task.job_id,
     result: task.result,
@@ -312,6 +330,21 @@ export function recordTaskActivity(db: Database, taskID: string, actor: string, 
 
 export function setTaskReminderJob(db: Database, taskID: string, jobID: string|null): void {
   db.run("UPDATE tasks SET reminder_job_id=?,updated_at=? WHERE id=?",[jobID,nowISO(),taskID]);
+}
+
+/** The intent a delegation's stored brief carries; absent or old rows read as "request". */
+function briefIntent(brief: string | null): PeerIntent {
+  if (!brief) return "request";
+  try {
+    const parsed: unknown = JSON.parse(brief);
+    if (parsed && typeof parsed === "object") {
+      const intent = PeerIntentSchema.safeParse((parsed as { intent?: unknown }).intent);
+      if (intent.success) return intent.data;
+    }
+  } catch {
+    // A malformed brief is still a request, not a reason to fail the read.
+  }
+  return "request";
 }
 
 function parseAttachmentIDs(value: string): string[] {
