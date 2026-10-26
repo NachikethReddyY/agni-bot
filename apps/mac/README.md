@@ -1,6 +1,6 @@
 # Agni for Mac
 
-Native SwiftUI client for the Agni daemon. It uses the shared v1 WebSocket
+Native SwiftUI client for the Agni daemon. It uses the shared v2 WebSocket
 protocol, stores the device token in Keychain, and keeps the interface native
 to macOS: a thread sidebar, streaming conversation, and optional details
 inspector.

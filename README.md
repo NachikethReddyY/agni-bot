@@ -1,8 +1,15 @@
-# Agni
+# Agni Bot
 
-Speed-first personal assistant. Our own harness, our own server, our own apps.
-No walled gardens: free model tiers called by API, a Gmail mailbox, and clients
-we control. Full plan: [`docs/blueprint-v3.html`](docs/blueprint-v3.html).
+Agni Bot is a messaging app for bots. You talk to named, specialised bots to get
+work done. Each bot has its own name, role, and memory. It is like messaging a
+friend, with the people removed and bots in their place. Performance comes
+before UI polish. Our own server, our own apps, free model tiers called by API,
+and a Gmail mailbox for the agent. Full plan:
+[`docs/blueprint-v3.html`](docs/blueprint-v3.html). Doc index:
+[`docs/README.md`](docs/README.md).
+
+**Source-available, not open source.** License terms are being finalised and
+are not yet in this repo.
 
 ## Layout
 
@@ -11,7 +18,7 @@ we control. Full plan: [`docs/blueprint-v3.html`](docs/blueprint-v3.html).
 | `apps/server` | Bun + TypeScript core: WebSocket protocol, agent loop, model router, SQLite stores, daemon lifecycle, job queue. Runs on this Mac now, bb-1 later. |
 | `apps/web` | React + Vite web client, a faithful port of the native Mac UI. Shares `@agni/client` with future shells. |
 | `apps/mac` | Native SwiftUI macOS client (`AgniApp` + `AgniKit`). Token in Keychain, resumable streaming. |
-| `apps/app` | Tauri 2 clients (macOS + Android) from one codebase. P1 — Rust toolchain not installed yet. |
+| `apps/app` | Planned Tauri 2 client (macOS + Android). README only; no runnable code yet. |
 | `packages/client` | Client core: frame decoding, connection loop, conversation reducer, settings, formatting. Used by the web app; the reference for the Swift port. |
 | `packages/protocol` | Wire protocol v2: typed frames shared by server and every client. This is the contract. |
 | `tools/cli` | Protocol client: `chat` (interactive), `ask`, `bench`, `ping`. The P0 proof gate lives here. |
@@ -31,8 +38,9 @@ bun run daemon status       # pid, uptime, provider health, usage today
 ```
 
 Foreground alternative while hacking: `bun run dev` (watch mode). Both modes are
-the same process; the daemon just detaches it, writes `data/agni.pid`, appends
-to `data/agni.log`, and waits for `/health` before reporting success.
+the same process; the daemon just detaches it, writes `~/.agni/agni.pid`, appends
+to `~/.agni/agni.log`, and waits for `/health` before reporting success.
+(Paths come from `AGNI_PID_PATH` and `AGNI_LOG_PATH`; see `.env.example`.)
 
 On Windows, shell tools require Git for Windows (Git Bash). Agni uses that
 host-native shell rather than the Windows WSL launcher. Temporary credentials
@@ -174,7 +182,7 @@ bun run eval           # the deterministic evals
 bun run eval:nightly   # the same, with the nightly policy
 ```
 
-Six evals, each measuring a promise the system makes and failing when the
+Seven evals, each measuring a promise the system makes and failing when the
 promise breaks:
 
 | Eval | What it measures |
@@ -185,6 +193,7 @@ promise breaks:
 | EVAL-004 | leaks — private and scoped content never reaches the caller |
 | EVAL-005 | cost — the retrieval is cheap enough to sit on the turn's path |
 | EVAL-006 | drift — the summary and the source still agree |
+| EVAL-007 | provider-backed quality — checks that need a live model provider |
 
 They run against an in-memory database and a stub model, so they measure
 the *system* rather than the luck of a provider. The provider-backed checks
@@ -315,7 +324,8 @@ providers are enabled by the presence of their key, everything else has a
 working default.
 
 Model choices changed in the Mac app are stored on the daemon in
-`data/providers.json` (mode 600). Provider API keys remain in the daemon's
+`data/providers.json` (mode 600; set `AGNI_PROVIDER_CONFIG_PATH` to move it).
+This path is still `data/` relative to the working directory, not `~/.agni/`. Provider API keys remain in the daemon's
 mode-600 `.env`; the JSON file contains model IDs only.
 
 ## Phases

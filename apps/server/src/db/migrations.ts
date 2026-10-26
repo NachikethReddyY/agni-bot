@@ -924,4 +924,10 @@ export const MIGRATIONS: Migration[] = [
     name: "peer_influenced_channel_messages",
     sql: `ALTER TABLE channel_messages ADD COLUMN peer_influenced INTEGER NOT NULL DEFAULT 0;`,
   },
+  {
+    id: 40,
+    name: "default_bot_name_new_bot",
+    sql: `UPDATE agents SET default_name = 'New Bot', display_name = 'New Bot'
+      WHERE id = 'ea' AND display_name = 'Agni Bot';`,
+  },
 ];

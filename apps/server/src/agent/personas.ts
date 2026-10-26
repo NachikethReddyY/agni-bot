@@ -105,7 +105,7 @@ const AGNI_PROMPT_TEMPLATE = [
 export const PERSONAS: Persona[] = [
   {
     id: "ea",
-    name: "Agni Bot",
+    name: "New Bot",
     color: "#f0b95a",
     role: "front desk — replies fast, decides who should do the work, and synthesizes the answers",
     systemPromptTemplate: AGNI_PROMPT_TEMPLATE,

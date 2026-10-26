@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agni · Own-Base Assistant — Blueprint v3 · our own harness, server, and apps</title>
+<title>Agni Bot · Blueprint v3 · our own harness, server, and apps</title>
 <meta name="description" content="Revised plan: a speed-first assistant harness we build ourselves — Bun server, WebSocket protocol over Tailscale, Tauri Mac + Android apps, Gmail as the agent's mailbox, free model tiers with failover, ACP for subscription subscriptions.">
 <style>
 :root{color-scheme:dark}
@@ -52,7 +52,8 @@ footer{margin-top:52px;border-top:1px solid #1c1c1c;padding-top:14px;color:#8b90
 <body>
 <main>
 
-<h1>Agni — Own-Base Assistant · Blueprint v3</h1>
+<h1>Agni Bot — Blueprint v3</h1>
+<p class="sub"><b>Status note (2026-10-26):</b> Agni Bot is a messaging app for named, specialised bots, with performance ahead of UI polish. The project is source-available, not open source. Section 10 records what is built as of 2026-10-26.</p>
 <p class="sub">Our own speed-first harness &middot; our own server on bb-1 &middot; our own Mac and Android apps over Tailscale &middot; free model tiers with failover &middot; ACP only for subscription lanes. Supersedes <a href="https://q425c8y3vjlx.postplan.dev" target="_blank" rel="noopener noreferrer">Blueprint v2 (OpenCode-as-engine)</a>.</p>
 <p class="small">2026-10-16 · prepared for Nachiketh · evidence: live API tests and official docs retrieved today. Sources in the footer.</p>
 
@@ -79,7 +80,7 @@ footer{margin-top:52px;border-top:1px solid #1c1c1c;padding-top:14px;color:#8b90
 <tr><td>&ldquo;OpenCode mobile exists but I want our own app&rdquo;</td><td>Install a community OpenCode client</td><td>Own Mac + Android apps (Tauri 2), black theme, agents sidebar, connections page, approvals, streaming.</td></tr>
 <tr><td>&ldquo;No Resend&rdquo; + domain reality</td><td>Cloudflare routing + Resend</td><td><code>theynr.xyz</code> has no MX and its zone isn&rsquo;t in your Cloudflare account, so it&rsquo;s dropped from the path. A new Gmail account (<code>hey.agnibot@gmail.com</code>) is the agent&rsquo;s mailbox — reached over IMAP/SMTP with an app password (free; no Cloud project).</td></tr>
 <tr><td>&ldquo;Free models without a key&rdquo;</td><td>Via OpenCode credentials</td><td>Verified the guardrail (403 above). Free capacity now comes from NIM, Groq, Cerebras, Gemini free tier, OpenRouter <code>:free</code> models, and local LM Studio — all with keys, all free, none locked to an app.</td></tr>
-<tr><td>&ldquo;Everything free&rdquo;</td><td>—</td><td>Tailscale free (personal), Gmail free, all six model sources have free tiers, ntfy self-hosted on bb-1, apps built on open source. The only paid paths are opt-in fallbacks.</td></tr>
+<tr><td>&ldquo;Everything free&rdquo;</td><td>—</td><td>Tailscale free (personal), Gmail free, all model sources have free tiers, ntfy self-hosted on bb-1, apps built on free tooling. The only paid paths are opt-in fallbacks.</td></tr>
 </table>
 </div>
 
@@ -230,13 +231,13 @@ server → client   hello.ok {serverTime, seq}        token {turnID, delta}
 <h2 id="plan">10 · Build plan</h2>
 <div class="scroll">
 <table>
-<tr><th>Phase</th><th>Build</th><th>Proof</th></tr>
-<tr><td><b>P0 · tonight</b><br>Server + instant lane</td><td>Bun server: WS protocol v0, token auth, SQLite open; model router with Groq + NIM; one persona; CLI test client. No UI yet.</td><td>10 instant-lane questions over the socket: p50 ≤ 1.5 s server-side, streaming deltas observed, failover fires when one provider is artificially rate-limited.</td></tr>
-<tr><td><b>P1 · weekend</b><br>Mac app v0</td><td>Tauri app: pair by QR, agents sidebar, one thread, streaming bubbles, reconnect/resync. Store: costs per turn.</td><td>You type from the Mac app over Tailscale and watch tokens stream; kill and reopen the app mid-turn; the turn resumes.</td></tr>
-<tr><td><b>P2</b><br>Stores + rituals</td><td>memory/links/tasks tools with write-time indexing; capture flows; 07:55 brief via cron → ntfy; one-tap approve/snooze/done.</td><td>Paste a link → saved; ask for it by topic → returned; task due tomorrow appears in the brief; approval from a notification works.</td></tr>
-<tr><td><b>P3</b><br>ACP + MCP</td><td>ACP client; codex-acp as the first harness; coding lane routing; MCP client with REA as the first server.</td><td>A repo task runs through Codex from the app and streams into the same thread UI; an REA tool call works from our agent.</td></tr>
-<tr><td><b>P4</b><br>Email + calendar</td><td>Agni&rsquo;s Gmail via app password (no Cloud project): inbox watcher, read/draft/send; calendar reads via private ICS + one-tap invites; brief v2 merges mail + events + tasks.</td><td>Mail to the agent&rsquo;s Gmail surfaces in the app; an approved draft sends; the brief shows a real event you created from chat.</td></tr>
-<tr><td><b>P5</b><br>Android + bb-1 + polish</td><td>Android build of the same Tauri app; ntfy self-host; move server to bb-1 (systemd/compose + Tailscale); inline rich blocks (charts); backups.</td><td>Phone over Tailscale: chat, brief, approvals. Reboot bb-1; everything returns. A month of usage shows $0 and bounded jobs.</td></tr>
+<tr><th>Phase</th><th>Build</th><th>Proof</th><th>Status (2026-10-26)</th></tr>
+<tr><td><b>P0 · tonight</b><br>Server + instant lane</td><td>Bun server: WS protocol v0, token auth, SQLite open; model router with Groq + NIM; one persona; CLI test client. No UI yet.</td><td>10 instant-lane questions over the socket: p50 ≤ 1.5 s server-side, streaming deltas observed, failover fires when one provider is artificially rate-limited.</td><td>Built. <code>agni bench</code> gate exists in <code>tools/cli</code>. No recorded run in the repo.</td></tr>
+<tr><td><b>P1 · weekend</b><br>Mac app v0</td><td>Tauri app: pair by QR, agents sidebar, one thread, streaming bubbles, reconnect/resync. Store: costs per turn.</td><td>You type from the Mac app over Tailscale and watch tokens stream; kill and reopen the app mid-turn; the turn resumes.</td><td>Built as a native SwiftUI Mac app and a web client. The Tauri shell is not started.</td></tr>
+<tr><td><b>P2</b><br>Stores + rituals</td><td>memory/links/tasks tools with write-time indexing; capture flows; 07:55 brief via cron → ntfy; one-tap approve/snooze/done.</td><td>Paste a link → saved; ask for it by topic → returned; task due tomorrow appears in the brief; approval from a notification works.</td><td>Partly built. Memory, links, tasks, jobs, and approvals exist. No built-in 07:55 brief and no ntfy.</td></tr>
+<tr><td><b>P3</b><br>ACP + MCP</td><td>ACP client; codex-acp as the first harness; coding lane routing; MCP client with REA as the first server.</td><td>A repo task runs through Codex from the app and streams into the same thread UI; an REA tool call works from our agent.</td><td>Not built. No ACP client. MCP connectors appear in the plugin catalog only; no MCP client yet.</td></tr>
+<tr><td><b>P4</b><br>Email + calendar</td><td>Agni&rsquo;s Gmail via app password (no Cloud project): inbox watcher, read/draft/send; calendar reads via private ICS + one-tap invites; brief v2 merges mail + events + tasks.</td><td>Mail to the agent&rsquo;s Gmail surfaces in the app; an approved draft sends; the brief shows a real event you created from chat.</td><td>Partly built. Gmail read, draft, and send with approval rules. Calendar uses Google OAuth, not ICS. No inbox watcher found.</td></tr>
+<tr><td><b>P5</b><br>Android + bb-1 + polish</td><td>Android build of the same Tauri app; ntfy self-host; move server to bb-1 (systemd/compose + Tailscale); inline rich blocks (charts); backups.</td><td>Phone over Tailscale: chat, brief, approvals. Reboot bb-1; everything returns. A month of usage shows $0 and bounded jobs.</td><td>Not started.</td></tr>
 </table>
 </div>
 <p class="small">Scope guard: P0–P2 is the &ldquo;assistant that is faster than Hermes and usable daily&rdquo; milestone — a weekend of focused work. P3–P5 add reach, not obligation. We do not build IDE features, ever; that is what the ACP harnesses are for.</p>

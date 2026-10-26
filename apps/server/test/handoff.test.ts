@@ -142,14 +142,14 @@ describe("agent-to-agent handoff", () => {
     expect(block?.agent_id).toBe("researcher");
     expect(block?.conversation_id).toBe(conversation.id);
     // And it is titled as the conversation it is, not as the internal brief.
-    expect(block?.title).toBe("Agni Bot messaged Researcher");
+    expect(block?.title).toBe("New Bot messaged Researcher");
     // The work is in that conversation's transcript.
     const transcript = conversationTranscript(db!, conversation.id);
     expect(transcript.some((message) => message.text.includes("Here is the brief."))).toBe(true);
     // The brief is a note, not the owner speaking.
     const brief = transcript.find((message) => message.text.includes("messaged you"));
     expect(brief?.role).toBe("system");
-    expect(brief?.text).toContain("Agni Bot messaged you");
+    expect(brief?.text).toContain("New Bot messaged you");
   });
 
   test("the specialist's answer stays out of the user's channel", async () => {

@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { loadProviders, type ProviderConfig } from "./models/providers";
 import { DEFAULT_SLOT_BUDGETS, type SlotBudgets } from "./context/compiler";
 
@@ -68,9 +70,9 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): C
   return {
     host: env.AGNI_HOST?.trim() || "127.0.0.1",
     port: int(env, "AGNI_PORT", 8787),
-    dbPath: env.AGNI_DB_PATH?.trim() || "data/agni.sqlite",
-    pidPath: env.AGNI_PID_PATH?.trim() || "data/agni.pid",
-    logPath: env.AGNI_LOG_PATH?.trim() || "data/agni.log",
+    dbPath: env.AGNI_DB_PATH?.trim() || join(homedir(), ".agni", "agni.sqlite"),
+    pidPath: env.AGNI_PID_PATH?.trim() || join(homedir(), ".agni", "agni.pid"),
+    logPath: env.AGNI_LOG_PATH?.trim() || join(homedir(), ".agni", "agni.log"),
     providers: loadProviders(env),
     firstTokenTimeoutMs: int(env, "AGNI_FIRST_TOKEN_TIMEOUT_MS", 30000),
     turnTimeoutMs: int(env, "AGNI_TURN_TIMEOUT_MS", 120000),
@@ -78,7 +80,7 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): C
     frameLogCapacity: int(env, "AGNI_FRAME_LOG_CAPACITY", 1000),
     jobPollMs: int(env, "AGNI_JOB_POLL_MS", 3000),
     maxConcurrentTurns: int(env, "AGNI_MAX_CONCURRENT_TURNS", 4),
-    pluginsPath: env.AGNI_PLUGINS_PATH?.trim() || "data/plugins.json",
+    pluginsPath: env.AGNI_PLUGINS_PATH?.trim() || join(homedir(), ".agni", "plugins.json"),
     userFirstName: env.AGNI_USER_FIRST_NAME?.trim() || undefined,
     slotBudgets: slotBudgets(env),
     minRecallScore: float(env, "AGNI_MIN_RECALL_SCORE", 0.15),

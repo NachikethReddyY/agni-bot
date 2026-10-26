@@ -1632,7 +1632,7 @@ function emitOnboardingIfNeeded(deps: DispatchDeps): void {
     deps,
     "main",
     "ea",
-    `Hi ${firstName}, I'm ${primary.display_name ?? "Agni Bot"}, your personal assistant. I can help with work and everyday life, and take things off your plate.`,
+    `Hi ${firstName}, I'm ${primary.display_name ?? "New Bot"}, your personal assistant. I can help with work and everyday life, and take things off your plate.`,
     "normal",
   );
   emitOnboardingMessage(

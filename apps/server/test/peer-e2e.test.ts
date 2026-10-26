@@ -88,7 +88,7 @@ describe("peer handoff end-to-end", () => {
     const tool = registry.get("handoff") as unknown as Tool;
     const result = await tool.handler({ toAgentID: "researcher", task: "E2E-SYNC-BRIEF" }, ctx(parent.id)) as Record<string, unknown>;
     const all = requests.flatMap((request) => request.messages);
-    expect(all.some((m) => m.role === "user" && m.content.includes('<peer_message from="Agni Bot" intent="request">') && m.content.includes("E2E-SYNC-BRIEF"))).toBe(true);
+    expect(all.some((m) => m.role === "user" && m.content.includes('<peer_message from="New Bot" intent="request">') && m.content.includes("E2E-SYNC-BRIEF"))).toBe(true);
     expect(result).toMatchObject({ text: "Researcher answer.", agentID: "researcher", agentName: expect.any(String) });
     expect(emitted.some((frame) => frame.uiHint === "handoff_notice" && frame.channelId === "main")).toBe(true);
     const dm = db.query<{ text: string }, []>("SELECT text FROM channel_messages WHERE channel_id = 'dm:researcher'").all();

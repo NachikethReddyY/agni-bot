@@ -142,7 +142,7 @@ export function isPrimaryAgent(agent: AgentInfo | null | undefined): boolean {
 }
 
 function seedAgents(): AgentInfo[] {
-  return [{ id: "ea", name: "Agni Bot", color: "#f0b95a", tools: [] }];
+  return [{ id: "ea", name: "New Bot", color: "#f0b95a", tools: [] }];
 }
 
 /** What the "+" button makes: an agent with a placeholder name, not a form. */

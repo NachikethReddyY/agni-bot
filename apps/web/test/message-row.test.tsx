@@ -5,7 +5,7 @@ import { AppModel } from "../src/state/app-model";
 import { AppModelProvider } from "../src/state/use-app-model";
 import { MessageRowView } from "../src/components/MessageRowView";
 
-const agent: AgentInfo = { id: "ea", name: "Agni Bot", color: "#f0b95a", tools: [] };
+const agent: AgentInfo = { id: "ea", name: "New Bot", color: "#f0b95a", tools: [] };
 
 function message(partial: Partial<ChatMessage> & { id: string; role: ChatMessage["role"]; text: string }): ChatMessage {
   return {
@@ -43,12 +43,12 @@ afterEach(() => {
 describe("the thread", () => {
   it("never repeats the agent name above a message", () => {
     const { container } = renderRow(
-      message({ id: "m1", role: "assistant", text: "Hello there.", senderName: "Agni Bot" }),
+      message({ id: "m1", role: "assistant", text: "Hello there.", senderName: "New Bot" }),
     );
 
     expect(container.querySelector(".sender-line")).toBeNull();
     expect(container.querySelector(".sender-badge")).toBeNull();
-    expect(screen.queryByText("Agni Bot")).not.toBeInTheDocument();
+    expect(screen.queryByText("New Bot")).not.toBeInTheDocument();
     expect(screen.getByText("Hello there.")).toBeInTheDocument();
   });
 

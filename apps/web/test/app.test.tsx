@@ -103,9 +103,9 @@ describe("web shell", () => {
     model.start();
     renderApp(model);
 
-    expect(screen.getAllByText("Agni Bot").length).toBeGreaterThan(0);
-    expect(screen.getByPlaceholderText("Message Agni Bot")).toBeInTheDocument();
-    expect(screen.getByText("Message Agni Bot — one conversation, it never resets")).toBeInTheDocument();
+    expect(screen.getAllByText("New Bot").length).toBeGreaterThan(0);
+    expect(screen.getByPlaceholderText("Message New Bot")).toBeInTheDocument();
+    expect(screen.getByText("Message New Bot — one conversation, it never resets")).toBeInTheDocument();
   });
 
   it("keeps a failed local echo and explains why", () => {
@@ -119,7 +119,7 @@ describe("web shell", () => {
     model.start();
     renderApp(model);
 
-    const composer = screen.getByPlaceholderText("Message Agni Bot");
+    const composer = screen.getByPlaceholderText("Message New Bot");
     fireEvent.change(composer, { target: { value: "are you there?" } });
     fireEvent.keyDown(composer, { key: "Enter" });
 

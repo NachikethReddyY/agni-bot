@@ -31,7 +31,7 @@ describe("agent rename", () => {
   test("persists the new name, marks onboarding done, and reports the old one", () => {
     db = openDatabase(":memory:");
     const result = renameAgent(db, "ea", "  Baahu  ");
-    expect(result).toEqual({ ok: true, agentID: "ea", previousName: "Agni Bot", name: "Baahu" });
+    expect(result).toEqual({ ok: true, agentID: "ea", previousName: "New Bot", name: "Baahu" });
     expect(displayName(db, "ea")).toBe("Baahu");
     expect(db.query<{ onboarded: number }, []>("SELECT onboarded FROM agents WHERE id = 'ea'").get()?.onboarded).toBe(1);
   });
@@ -39,7 +39,7 @@ describe("agent rename", () => {
   test("a rename reaches the model through persona resolution", () => {
     db = openDatabase(":memory:");
     expect(resolvePersona(db, "ea")?.systemPrompt.split("\n")[0]).toBe(
-      "You are Agni Bot, personal assistant to the owner.",
+      "You are New Bot, personal assistant to the owner.",
     );
     renameAgent(db, "ea", "Baahu");
     expect(resolvePersona(db, "ea")?.systemPrompt.split("\n")[0]).toBe(
@@ -60,14 +60,14 @@ describe("agent rename", () => {
     db = openDatabase(":memory:");
     const result = renameAgent(db, "nobody", "Baahu");
     expect(result.ok).toBe(false);
-    expect(displayName(db, "ea")).toBe("Agni Bot");
+    expect(displayName(db, "ea")).toBe("New Bot");
   });
 
   test("an invalid name leaves the stored name untouched", () => {
     db = openDatabase(":memory:");
     const result = renameAgent(db, "ea", "  ");
     expect(result.ok).toBe(false);
-    expect(displayName(db, "ea")).toBe("Agni Bot");
+    expect(displayName(db, "ea")).toBe("New Bot");
   });
 
   test("a rename settles the stored name prompt so the field does not come back", () => {
