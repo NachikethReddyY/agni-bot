@@ -14,6 +14,7 @@
 import type { ResolvedPersona } from "./personas";
 import { clampFactPrefix, MAX_FACT_PREFIX_CHARS } from "./guardrails";
 import { assembleContext, type Anchor } from "../context/compiler";
+import { PEER_RULE } from "./peer-message";
 
 /** Stable lane header — kept identical across turns in the same lane. */
 export function laneHeader(lane: "instant" | "task" | "deep"): string {
@@ -80,7 +81,6 @@ export function buildDelegationPrefix(params: {
   persona: ResolvedPersona;
   facts: string[];
   carrySummary: string | null;
-  handoffSummary: string | null;
   depth: number;
   maxDepth: number;
   toolHints?: string[];
@@ -102,10 +102,8 @@ export function buildDelegationPrefix(params: {
   if (params.rollups?.length) {
     summaries.push(`Earlier, at a wider scope:\n${params.rollups.join("\n")}`);
   }
-  if (params.handoffSummary) {
-    summaries.push(`Handoff context from the delegating agent: ${params.handoffSummary}`);
-  }
   const tail: string[] = [];
+  tail.push(PEER_RULE);
   if (params.team?.length) {
     // The roster is the model's only view of who else exists, so it states both
     // who they are and what the contract is: hand off in one call, then fold

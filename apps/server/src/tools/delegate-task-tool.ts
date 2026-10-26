@@ -133,8 +133,16 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
         kind: "turn",
         payload: {
           lane: "task",
+          // A brief is a peer's note, not the owner speaking: logged as system,
+          // so it is not replayed to the model as a bare user message later.
+          inputRole: "system",
           agentID: toAgentID,
           text: formatBrief(brief),
+          peer: {
+            from: deps.db.query<{ display_name: string | null }, [string]>("SELECT display_name FROM agents WHERE id = ?").get(deps.currentAgentID)?.display_name?.trim() || deps.currentAgentID,
+            intent: brief.intent ?? "request",
+            task: task.id,
+          },
           notify: true,
           delegationTaskID: task.id,
         },

@@ -2,7 +2,8 @@ import { linkAttachments, messageAttachments, withAttachmentContent } from "../a
 /** Bounded Plan → Act → Observe runner for the task lane. The instant lane
  * remains a separate, one-call path in agent/loop.ts. */
 import type { Database } from "bun:sqlite";
-import type { ServerFrameBody, StopReason } from "@agni/protocol";
+import type { PeerIntent, ServerFrameBody, StopReason } from "@agni/protocol";
+import { peerEnvelope } from "./peer-message";
 import { ApprovalBroker, waitForApprovalDecision } from "./approval-broker";
 import { FormBroker } from "./form-broker";
 import type { Decision } from "./approval-broker";
@@ -65,6 +66,13 @@ export interface TaskTurnRun {
   carrySummary?: string | null;
   /** Agent-to-agent: summary the delegating agent passed in. */
   handoffSummary?: string | null;
+  /**
+   * The peer who wrote this request, when it did not come from the owner.
+   * The model text is then wrapped in the server-built envelope, so peer
+   * text travels as attributed data, not authority. The durable log row
+   * keeps the plain text either way.
+   */
+  peer?: { from: string; intent: PeerIntent; task?: string };
   /** Agent-to-agent: root turn/depth guardrail state. */
   guardrail?: GuardrailState;
   /** When false, bounded durable facts are not injected into the prefix. */
@@ -263,7 +271,13 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   const inputMessage = appendMessage(db, { threadID, turnID, role: run.inputRole ?? "user", text: run.inputText ?? run.text });
   if (run.attachmentIDs?.length) linkAttachments(db, inputMessage.id, run.attachmentIDs);
   titleThreadFromFirstMessage(db, threadID, run.text);
-  messages.push({ role: "user", content: run.text, attachmentIDs: run.attachmentIDs });
+  // The model sees peer-written text inside the envelope; the durable log
+  // row (above) keeps the plain text so the UI stays readable.
+  messages.push({
+    role: "user",
+    content: run.peer ? peerEnvelope(run.peer, run.text) : run.text,
+    attachmentIDs: run.attachmentIDs,
+  });
   run.emit({
     type: "turn.start",
     turnID,
@@ -329,8 +343,9 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   const delegationPrefix = buildDelegationPrefix({
     persona,
     facts,
+    // The delegating agent's context travels inside the peer envelope in the
+    // user message now — not as system-prefix text.
     carrySummary: [run.carrySummary, channelSummary].filter(Boolean).join("\n\n") || null,
-    handoffSummary: run.handoffSummary ?? null,
     depth: guardrail.depth,
     maxDepth: 5,
     toolHints: dynamicHints,

@@ -146,6 +146,15 @@ describe("the delegation carries an intent", () => {
   });
 });
 
+describe("a delegated brief is logged as a system note", () => {
+  test("the job carries system role, so the brief is not replayed as an owner message", async () => {
+    db = openDatabase(":memory:");
+    const queued = await delegate(db, {});
+    const job = db.query<{ payload: string }, [string]>("SELECT payload FROM jobs WHERE id = ?").get(queued.jobID);
+    expect(JSON.parse(job!.payload).inputRole).toBe("system");
+  });
+});
+
 describe("the parent is woken when the work lands", () => {
   test("the completion wakes the parent once", async () => {
     db = openDatabase(":memory:");

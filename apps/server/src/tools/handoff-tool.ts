@@ -140,6 +140,7 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
         toAgentID,
         task,
         context: args.context === undefined ? undefined : String(args.context).trim(),
+        intent,
         emit: deps.emit,
         signal: deps.signal,
       };

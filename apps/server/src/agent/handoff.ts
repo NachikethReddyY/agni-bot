@@ -14,7 +14,7 @@
  * with the parent turn's stores — no duplicate schemas.
  */
 import type { Database } from "bun:sqlite";
-import type { ServerFrameBody } from "@agni/protocol";
+import type { PeerIntent, ServerFrameBody } from "@agni/protocol";
 import { GuardrailError, enterDelegation, rootGuardrail, type GuardrailState } from "./guardrails";
 import { defaultResolvedPersona, getPersona, resolvePersona, type ResolvedPersona } from "./personas";
 import type { Router } from "../models/router";
@@ -30,6 +30,11 @@ export interface HandoffRequest {
   task: string;
   /** Optional context the parent wants the child to have. */
   context?: string;
+  /**
+   * What this handoff is for (request, question, …); absent reads as
+   * "request". It rides in the child's peer envelope.
+   */
+  intent?: PeerIntent;
   /** Parent turn's emit, so the child streams to the same client. */
   emit: (frame: ServerFrameBody) => void;
   /** Parent turn's abort signal; cancelling the parent cancels the child. */
@@ -75,19 +80,31 @@ export async function handoff(deps: HandoffDeps, request: HandoffRequest): Promi
   // that agent's conversation, so opening that agent's chat in the app shows
   // the work instead of an empty room.
   const conversation = ensureConversation(deps.db, persona.id);
-  const childThread = delegationSession(deps.db, conversation, `${parentName(deps.db, deps.guardrail.currentAgentID)} messaged ${persona.name}`);
+  const parent = parentName(deps.db, deps.guardrail.currentAgentID);
+  const childThread = delegationSession(deps.db, conversation, `${parent} messaged ${persona.name}`);
   const childThreadID = childThread.id;
+
+  // Peer context is data, not authority: the brief and the delegating
+  // agent's context both travel inside the peer envelope, so they arrive
+  // with their attribution and none of the system prefix's weight.
+  const text = request.context?.trim()
+    ? `${request.task}\n\nContext from the delegating agent:\n${request.context.trim()}`
+    : request.task;
 
   const run: TaskTurnRun = {
     threadID: childThreadID,
-    text: request.task,
+    text,
     persona,
+    peer: {
+      from: parent,
+      intent: request.intent ?? "request",
+    },
     conversationID: conversation.id,
     // The brief is a message *to* the specialist, not the owner speaking:
     // it is written to the log as a note, so the specialist's chat reads
     // like a conversation rather than a transcript of someone else's brief.
     inputRole: "system",
-    inputText: `${parentName(deps.db, deps.guardrail.currentAgentID)} messaged you: ${request.task}`,
+    inputText: `${parent} messaged you: ${text}`,
     carrySummary: deps.carrySummary ?? null,
     // Child work is internal; the parent receives the result through the tool
     // response and remains the only agent writing to the user-facing stream.
@@ -96,8 +113,7 @@ export async function handoff(deps: HandoffDeps, request: HandoffRequest): Promi
     },
     signal: deps.signal,
     guardrail: child,
-    // The child carries the handoff summary as its carried summary so it
-    // opens with the parent's context — the seam between agents.
+    // Preserve guardrail bookkeeping; peer context itself is carried in text.
     handoffSummary: child.handoffSummary,
   };
 
