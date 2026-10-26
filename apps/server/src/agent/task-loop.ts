@@ -400,7 +400,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // queued; the specialist runs in a background session with only the brief.
   registerDelegateTaskTool(registry, {
     db, emit: run.emit, currentAgentID: persona.id, channelID: run.channelID, parentTurnID: turnID,
-    parentThreadID: threadID,
+    parentThreadID: threadID, chainID: guardrail.chainID,
   });
   // DEL-006: a delegated task can ask the owner a question and wait. The
   // tool is only registered for a delegated turn, and the turn stops with

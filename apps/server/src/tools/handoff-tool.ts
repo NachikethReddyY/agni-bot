@@ -22,6 +22,7 @@ import { handoff, type HandoffDeps, type HandoffRequest } from "../agent/handoff
 import { teamRoster, resolvePersona } from "../agent/personas";
 import { DEFAULT_VISIBILITY, redactForCaller } from "../agent/visibility";
 import { appendChannelMessage, ensureDMChannel } from "../stores/channels";
+import { checkPeerRequest, fingerprintPeerRequest } from "../stores/peer-chains";
 
 const objectSchema = (properties: Record<string, unknown>, required: string[]): Record<string, unknown> => ({
   type: "object", properties, required, additionalProperties: false,
@@ -123,6 +124,17 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
       const task = String(args.task ?? "").trim();
       if (!task) throw new Error("handoff requires a task");
       const intent = readIntent(args.intent);
+      const context = args.context === undefined ? "" : String(args.context).trim();
+      // The fingerprint is the primary request text only, the same canonical
+      // form delegate_task uses, so one request sent through either tool is
+      // one request. Context is not hashed: it cannot make two tasks collide.
+      const check = checkPeerRequest(deps.db, deps.guardrail.chainID,
+        fingerprintPeerRequest(deps.currentAgentID, toAgentID, intent, task));
+      if (check === "retry") return { repeated: true, note: "That exact request was already sent in this chain. Say something new, or stop." };
+      if (check === "stop") {
+        post("system", deps.currentAgentID, "Stopped: agents repeated the same request in this chain.", "normal", undefined, deps.channelID ?? "main");
+        return { stopped: true, note: "The chain is stopped; report to the owner." };
+      }
 
       // The user sees who was asked, before the work starts — this is the
       // "message this bot" line they asked for. The brief is internal
@@ -139,7 +151,7 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
       const request: HandoffRequest = {
         toAgentID,
         task,
-        context: args.context === undefined ? undefined : String(args.context).trim(),
+        context: context || undefined,
         intent,
         emit: deps.emit,
         signal: deps.signal,

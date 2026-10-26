@@ -26,6 +26,7 @@ export interface TaskActivityRow { id: string; task_id: string; actor: string; a
 
 export interface DelegationBrief {
   goal: string;
+  chainID?: string;
   /**
    * What this delegation is for. Phase 1 stores and reports it; the value is
    * not yet used to route or gate the work.
@@ -345,6 +346,12 @@ function briefIntent(brief: string | null): PeerIntent {
     // A malformed brief is still a request, not a reason to fail the read.
   }
   return "request";
+}
+
+/** The chain a delegation was started in; absent for briefs written before chains. */
+export function briefChainID(raw: string | null): string | undefined {
+  if (!raw) return undefined;
+  try { const value = JSON.parse(raw) as { chainID?: unknown }; return typeof value.chainID === "string" ? value.chainID : undefined; } catch { return undefined; }
 }
 
 function parseAttachmentIDs(value: string): string[] {

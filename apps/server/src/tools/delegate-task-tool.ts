@@ -23,6 +23,8 @@ import {
 } from "../stores/tasks";
 import { enqueueJob } from "../stores/jobs";
 import { readFacts } from "./expand-tool";
+import { checkPeerRequest, fingerprintPeerRequest } from "../stores/peer-chains";
+import { appendChannelMessage } from "../stores/channels";
 
 const objectSchema = (properties: Record<string, unknown>, required: string[]): Record<string, unknown> => ({
   type: "object", properties, required, additionalProperties: false,
@@ -39,6 +41,7 @@ export interface DelegateTaskToolDeps {
   parentTurnID?: string;
   /** The parent thread, so the answer to a question can go back to it. */
   parentThreadID?: string;
+  chainID?: string;
 }
 
 export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateTaskToolDeps): void {
@@ -117,6 +120,17 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
           message: `That work is already in flight with ${toAgentID}.`,
         };
       }
+      const check = checkPeerRequest(deps.db, deps.chainID ?? `legacy:${deps.currentAgentID}`,
+        fingerprintPeerRequest(deps.currentAgentID, toAgentID, brief.intent ?? "request", goal));
+      if (check === "retry") return { repeated: true, note: "That exact request was already sent in this chain. Say something new, or stop." };
+      if (check === "stop") {
+        const text = "Stopped: agents repeated the same request in this chain.";
+        const channelID = deps.channelID ?? "main";
+        const row = appendChannelMessage(deps.db, { channelID, fromType: "system", fromID: deps.currentAgentID, text, uiHint: "normal" });
+        deps.emit({ type: "msg.new", id: row.id, channelId: channelID, fromType: "system", fromId: deps.currentAgentID, senderName: deps.currentAgentID, text, internal: false, uiHint: "normal", createdAt: row.created_at });
+        return { stopped: true, note: "The chain is stopped; report to the owner." };
+      }
+      brief.chainID = deps.chainID ?? `legacy:${deps.currentAgentID}`;
       const task = createDelegationTask(deps.db, {
         ownerAgentID: toAgentID,
         brief,
@@ -133,6 +147,7 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
         kind: "turn",
         payload: {
           lane: "task",
+          chainID: brief.chainID,
           // A brief is a peer's note, not the owner speaking: logged as system,
           // so it is not replayed to the model as a bare user message later.
           inputRole: "system",

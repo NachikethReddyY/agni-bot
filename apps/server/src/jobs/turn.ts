@@ -30,6 +30,7 @@ import {
   setDelegationState,
   setDelegationThread,
   taskInfo,
+  briefChainID,
 } from "../stores/tasks";
 import { saveArtifact } from "../stores/artifacts";
 import { scheduleTagger } from "./tagger";
@@ -42,6 +43,7 @@ import type { JobRunner } from "./runner";
 const WAKE_RETRY_MS = 1_500;
 
 export interface TurnJobPayload {
+  chainID?: string;
   threadID?: string;
   text: string;
   agentID?: string;
@@ -298,6 +300,7 @@ function wakeParent(deps: TurnJobDeps, taskID: string, summary: string): void {
         notify: false,
         inputRole: "system",
         wakeKey,
+        chainID: briefChainID(task.brief),
         results: [item],
       },
     });
@@ -344,7 +347,7 @@ async function runTurn(
       signal,
       conversationID: conversation?.id,
       carrySummary: conversation?.summary ?? null,
-      guardrail: rootGuardrail(persona.id),
+      guardrail: rootGuardrail(persona.id, payload.chainID),
       facts: payload.facts,
       ...(payload.channelID ? { channelID: payload.channelID } : {}),
       ...(payload.inputRole ? { inputRole: payload.inputRole } : {}),

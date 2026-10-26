@@ -901,4 +901,22 @@ export const MIGRATIONS: Migration[] = [
     name: "task_progress_notes",
     sql: `ALTER TABLE tasks ADD COLUMN progress_note TEXT NOT NULL DEFAULT '';`,
   },
+  {
+    id: 38,
+    name: "peer_chains",
+    sql: `
+      CREATE TABLE peer_chains (
+        id TEXT PRIMARY KEY,
+        retried INTEGER NOT NULL DEFAULT 0,
+        stopped_at TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE peer_chain_messages (
+        chain_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(chain_id, fingerprint)
+      );
+    `,
+  },
 ];
