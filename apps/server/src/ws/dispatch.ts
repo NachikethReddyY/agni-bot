@@ -64,7 +64,7 @@ import { putAgentMemory, listAgentMemories, type AgentMemoryRow } from "../store
 import { appendChannelMessage, ensureDMChannel, getChannel } from "../stores/channels";
 import { canonicalURL, saveLink, searchLinks } from "../stores/links";
 import { buildShareDocument, publishShare, shareBaseURL } from "../share/document";
-import { createTask, createTaskList, editTask, getTask, listTaskActivity, listTaskLists, listTasks, setTaskStatus, snoozeTask, cancelDelegation, clearPendingQuestion, setDelegationJob, setDelegationState, taskInfo } from "../stores/tasks";
+import { createTask, createTaskList, editTask, getTask, listTaskActivity, listTaskLists, listTasks, setTaskStatus, snoozeTask, cancelDelegation, clearPendingQuestion, setDelegationJob, setDelegationState, taskInfo, briefChainID } from "../stores/tasks";
 import { fetchPage } from "../tools/fetch-url";
 import { scheduleTaskReminder } from "../jobs/task-reminders";
 import type { PluginService } from "../plugins/service";
@@ -916,6 +916,9 @@ function handleTaskAnswer(deps: DispatchDeps, session: Session, frame: Extract<C
       text: answer,
       notify: false,
       delegationTaskID: task.id,
+      // The answer resumes the task inside the chain it started in, so a
+      // stopped chain stays stopped.
+      chainID: briefChainID(task.brief),
     },
   });
   setDelegationJob(deps.db, task.id, job.id);

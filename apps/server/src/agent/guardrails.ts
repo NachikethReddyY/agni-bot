@@ -12,6 +12,7 @@
  * (they are runtime metadata), so they never disturb the stable system prefix
  * that providers cache.
  */
+import { newID } from "../util/ids";
 
 /** How deep a chain of delegated turns may run. Root turn is depth 1. */
 export const MAX_DEPTH = 5;
@@ -25,6 +26,7 @@ export const MAX_HANDOFF_SUMMARY_CHARS = 1_200;
 export const MAX_FACT_PREFIX_CHARS = 2_400;
 
 export interface GuardrailState {
+  chainID: string;
   /** 1 = root turn, 2 = first delegation, … */
   depth: number;
   /** Steps taken in the current turn of the chain. */
@@ -39,9 +41,10 @@ export interface GuardrailState {
   handoffSummary: string | null;
 }
 
-export function rootGuardrail(rootAgentID: string): GuardrailState {
+export function rootGuardrail(rootAgentID: string, chainID?: string): GuardrailState {
   return {
     depth: 1,
+    chainID: chainID ?? newID("chn"),
     chainSteps: 0,
     totalSteps: 0,
     rootAgentID,
@@ -73,6 +76,7 @@ export function enterDelegation(
   }
   return {
     depth: state.depth + 1,
+    chainID: state.chainID,
     chainSteps: 0,
     totalSteps: state.totalSteps,
     rootAgentID: state.rootAgentID,

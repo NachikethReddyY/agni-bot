@@ -190,7 +190,7 @@ describe("task-lane prompt", () => {
     const db = openDatabase(":memory:");
     const prefix = buildDelegationPrefix({
       persona: defaultResolvedPersona(db), facts: [], carrySummary: "SUMMARY-MARKER-7",
-      handoffSummary: null, depth: 0, maxDepth: 3,
+      depth: 0, maxDepth: 3,
     });
     expect(prefix).toContain("SUMMARY-MARKER-7");
     db.close();

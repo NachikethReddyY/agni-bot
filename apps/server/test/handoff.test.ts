@@ -192,4 +192,57 @@ describe("agent-to-agent handoff", () => {
     const conversation = ensureConversation(db, "researcher");
     expect(conversationTranscript(db, conversation.id).some((message) => message.text.includes("private answer"))).toBe(true);
   });
+
+  test("the handoff notice carries the delegation intent", async () => {
+    db = openDatabase(":memory:");
+    const parent = createThread(db, defaultResolvedPersona(db!).id);
+    const emitted: Array<{ type: string; [key: string]: unknown }> = [];
+    const registry = new ToolRegistry();
+    registerHandoffTool(registry, {
+      db,
+      router: makeRouter(["Done."]),
+      settings: { firstTokenTimeoutMs: 1000, turnTimeoutMs: 5000 },
+      emit: (frame) => emitted.push(frame as { type: string; [key: string]: unknown }),
+      signal: new AbortController().signal,
+      threadID: parent.id,
+      channelID: "main",
+      currentAgentID: "ea",
+      guardrail: rootGuardrail("ea"),
+    });
+    const tool = registry.get("handoff") as unknown as {
+      handler: (args: Record<string, unknown>, ctx: { threadID: string; turnID: string; signal: AbortSignal }) => Promise<unknown>;
+    };
+    await tool.handler(
+      { toAgentID: "researcher", task: "Find it", intent: "question" },
+      { threadID: parent.id, turnID: "trn_handoff", signal: new AbortController().signal },
+    );
+
+    const notice = emitted.find((frame) => frame.type === "msg.new" && frame.uiHint === "handoff_notice");
+    expect(notice?.intent).toBe("question");
+
+    // Absent means request — the frame still says so, so a client never has
+    // to guess what silence meant.
+    const second = new ToolRegistry();
+    const defaultEmitted: Array<{ type: string; [key: string]: unknown }> = [];
+    registerHandoffTool(second, {
+      db,
+      router: makeRouter(["Done."]),
+      settings: { firstTokenTimeoutMs: 1000, turnTimeoutMs: 5000 },
+      emit: (frame) => defaultEmitted.push(frame as { type: string; [key: string]: unknown }),
+      signal: new AbortController().signal,
+      threadID: parent.id,
+      channelID: "main",
+      currentAgentID: "ea",
+      guardrail: rootGuardrail("ea"),
+    });
+    const defaultTool = second.get("handoff") as unknown as {
+      handler: (args: Record<string, unknown>, ctx: { threadID: string; turnID: string; signal: AbortSignal }) => Promise<unknown>;
+    };
+    await defaultTool.handler(
+      { toAgentID: "researcher", task: "Find it again" },
+      { threadID: parent.id, turnID: "trn_handoff_2", signal: new AbortController().signal },
+    );
+    const defaultNotice = defaultEmitted.find((frame) => frame.type === "msg.new" && frame.uiHint === "handoff_notice");
+    expect(defaultNotice?.intent).toBe("request");
+  });
 });

@@ -30,16 +30,20 @@ import {
   setDelegationState,
   setDelegationThread,
   taskInfo,
+  briefChainID,
 } from "../stores/tasks";
 import { saveArtifact } from "../stores/artifacts";
 import { scheduleTagger } from "./tagger";
 import { nextDailyRun } from "./schedule";
+import { peerEnvelope } from "../agent/peer-message";
+import type { PeerIntent } from "@agni/protocol";
 import type { JobRunner } from "./runner";
 
 /** How long a wake waits when the parent's thread is busy. */
 const WAKE_RETRY_MS = 1_500;
 
 export interface TurnJobPayload {
+  chainID?: string;
   threadID?: string;
   text: string;
   agentID?: string;
@@ -90,6 +94,7 @@ export interface TurnJobPayload {
   channelID?: string;
   /** How the request is written to the durable log. */
   inputRole?: "user" | "system";
+  peer?: { from: string; intent: PeerIntent; task?: string };
 }
 
 export interface TurnJobDeps {
@@ -172,8 +177,11 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
       throw new Error(`turn ended with ${result.stopReason}${result.text ? " (partial output kept)" : ""}`);
     }
 
-    // TAG-001: a background turn is also material worth tagging.
-    scheduleTagger(deps.db, { agentID: persona.id, ...(payload.channelID ? { channelID: payload.channelID } : {}) });
+    // TAG-001: a background turn is also material worth tagging. A peer-influenced
+    // turn is not: its input never becomes a durable fact.
+    if (!payload.peer && payload.inputRole !== "system") {
+      scheduleTagger(deps.db, { agentID: persona.id, ...(payload.channelID ? { channelID: payload.channelID } : {}) });
+    }
 
     const reply = firstLine(result.text);
     if (delegationTaskID && !isDelegationCancelled(deps.db, delegationTaskID)) {
@@ -234,8 +242,20 @@ export function buildWakeText(results: Array<{ taskID: string; agentID: string; 
     if (result.redacted) {
       return `- Task ${result.taskID} (${result.agentID}) finished. Its result is private to that agent; open its chat to read it.`;
     }
-    return `- Task ${result.taskID} (${result.agentID}) finished: ${result.summary}`;
+    return `- Task ${result.taskID} (${result.agentID}) finished: ${peerEnvelope({ from: result.agentID, intent: "result", task: result.taskID }, result.summary)}`;
   });
+  return [
+    "A delegated task finished. Tell the owner what came of it, in one or two sentences.",
+    "If the work is not finished, keep going in the background instead of waiting.",
+    "",
+    ...lines,
+  ].join("\n");
+}
+
+function buildWakeLogText(results: Array<{ taskID: string; agentID: string; summary: string; redacted: boolean }>): string {
+  const lines = results.map((result) => result.redacted
+    ? `- Task ${result.taskID} (${result.agentID}) finished. Its result is private to that agent; open its chat to read it.`
+    : `- Task ${result.taskID} (${result.agentID}) finished: ${result.summary}`);
   return [
     "A delegated task finished. Tell the owner what came of it, in one or two sentences.",
     "If the work is not finished, keep going in the background instead of waiting.",
@@ -283,6 +303,7 @@ function wakeParent(deps: TurnJobDeps, taskID: string, summary: string): void {
         notify: false,
         inputRole: "system",
         wakeKey,
+        chainID: briefChainID(task.brief),
         results: [item],
       },
     });
@@ -329,10 +350,12 @@ async function runTurn(
       signal,
       conversationID: conversation?.id,
       carrySummary: conversation?.summary ?? null,
-      guardrail: rootGuardrail(persona.id),
+      guardrail: rootGuardrail(persona.id, payload.chainID),
       facts: payload.facts,
       ...(payload.channelID ? { channelID: payload.channelID } : {}),
       ...(payload.inputRole ? { inputRole: payload.inputRole } : {}),
+      ...(payload.peer ? { peer: payload.peer } : {}),
+      ...(payload.wakeKey && payload.results ? { inputText: buildWakeLogText(payload.results) } : {}),
       ...(delegationTaskID && task
         ? {
             delegation: {

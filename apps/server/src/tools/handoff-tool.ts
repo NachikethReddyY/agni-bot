@@ -13,7 +13,7 @@
  * difference between "Vision asked Friday" and "I asked Friday".
  */
 import type { Database } from "bun:sqlite";
-import type { ServerFrameBody } from "@agni/protocol";
+import { PEER_INTENTS, PeerIntentSchema, type PeerIntent, type ServerFrameBody } from "@agni/protocol";
 import type { ToolRegistry } from "./registry";
 import type { TaskTurnSettings } from "../agent/task-loop";
 import type { Router } from "../models/router";
@@ -22,6 +22,8 @@ import { handoff, type HandoffDeps, type HandoffRequest } from "../agent/handoff
 import { teamRoster, resolvePersona } from "../agent/personas";
 import { DEFAULT_VISIBILITY, redactForCaller } from "../agent/visibility";
 import { appendChannelMessage, ensureDMChannel } from "../stores/channels";
+import { checkPeerRequest, fingerprintPeerRequest } from "../stores/peer-chains";
+import { stripPeerTags } from "../agent/peer-message";
 
 const objectSchema = (properties: Record<string, unknown>, required: string[]): Record<string, unknown> => ({
   type: "object", properties, required, additionalProperties: false,
@@ -67,6 +69,8 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
     uiHint?: "onboarding_name_prompt" | "handoff_notice" | "progress" | "normal",
     toAgentID?: string,
     channelID = deps.channelID,
+    intent?: PeerIntent,
+    peerInfluenced = false,
   ): void => {
     if (!channelID) return;
     // The specialist may not have a DM channel yet; create it so the reply
@@ -79,11 +83,13 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
       text,
       uiHint: uiHint ?? null,
       toAgentID: toAgentID ?? null,
+      peerInfluenced,
     });
     deps.emit({
       type: "msg.new", id: row.id, channelId: channelID, fromType,
       fromId: fromID, senderName: nameOf(fromID), senderColor: colorOf(fromID),
       text, internal: false, uiHint: uiHint ?? "normal",
+      ...(intent ? { intent } : {}),
       // The target rides along, so the client can make the name a link to
       // that agent's chat.
       ...(toAgentID ? { toAgentId: toAgentID } : {}),
@@ -106,8 +112,13 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
         : stringProp,
       task: { type: "string", minLength: 1, description: "The brief for the other agent." },
       context: { type: "string", minLength: 1, description: "Optional extra context for the other agent." },
+      intent: {
+        type: "string",
+        enum: [...PEER_INTENTS],
+        description: "What this handoff is for: request (default), result, question, status or fyi.",
+      },
     }, ["toAgentID", "task"]),
-    handler: async (args: Record<string, unknown>) => {
+    handler: async (args: Record<string, unknown>, ctx) => {
       const toAgentID = String(args.toAgentID ?? "").trim();
       if (!toAgentID) throw new Error("handoff requires a toAgentID");
       if (team.length > 0 && !team.some((member) => member.id === toAgentID)) {
@@ -115,12 +126,24 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
       }
       const task = String(args.task ?? "").trim();
       if (!task) throw new Error("handoff requires a task");
+      const intent = readIntent(args.intent);
+      const context = args.context === undefined ? "" : String(args.context).trim();
+      // The fingerprint is the primary request text only, the same canonical
+      // form delegate_task uses, so one request sent through either tool is
+      // one request. Context is not hashed: it cannot make two tasks collide.
+      const check = checkPeerRequest(deps.db, deps.guardrail.chainID,
+        fingerprintPeerRequest(deps.currentAgentID, toAgentID, intent, task));
+      if (check === "retry") return { repeated: true, note: "That exact request was already sent in this chain. Say something new, or stop." };
+      if (check === "stop") {
+        post("system", deps.currentAgentID, "Stopped: agents repeated the same request in this chain.", "normal", undefined, deps.channelID ?? "main", undefined, Boolean(ctx.peerInput));
+        return { stopped: true, note: "The chain is stopped; report to the owner." };
+      }
 
       // The user sees who was asked, before the work starts — this is the
       // "message this bot" line they asked for. The brief is internal
       // routing: it belongs in the tool call, not in the chat. The target
       // rides along, so the name can be a link to that agent's chat.
-      post("system", deps.currentAgentID, `Messaged ${nameOf(toAgentID)}`, "handoff_notice", toAgentID);
+      post("system", deps.currentAgentID, `Messaged ${nameOf(toAgentID)}`, "handoff_notice", toAgentID, deps.channelID, intent, Boolean(ctx.peerInput));
       if (deps.channelID) {
         deps.emit({
           type: "status.update", channelId: deps.channelID, agentId: deps.currentAgentID,
@@ -131,7 +154,8 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
       const request: HandoffRequest = {
         toAgentID,
         task,
-        context: args.context === undefined ? undefined : String(args.context).trim(),
+        context: context || undefined,
+        intent,
         emit: deps.emit,
         signal: deps.signal,
       };
@@ -152,7 +176,7 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
       // direct chat with that agent reads like a conversation — the brief was
       // a note there, and this is the reply.
       if (result.text.trim()) {
-        post("agent", result.agentID, result.text, "normal", undefined, `dm:${result.agentID}`);
+        post("agent", result.agentID, stripPeerTags(result.text), "normal", undefined, `dm:${result.agentID}`, undefined, true);
       }
       // The one place the specialist's words cross into another agent's
       // context, so the one place visibility is applied. A private agent
@@ -171,4 +195,12 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
       };
     },
   });
+}
+
+/** Read the optional intent; absent means "request", invalid is an error. */
+function readIntent(raw: unknown): PeerIntent {
+  if (raw === undefined || raw === null || raw === "") return "request";
+  const parsed = PeerIntentSchema.safeParse(raw);
+  if (!parsed.success) throw new Error(`intent must be one of ${PEER_INTENTS.join(", ")}`);
+  return parsed.data;
 }

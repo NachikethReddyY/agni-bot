@@ -59,7 +59,7 @@ const objectSchema = (properties: Record<string, unknown>, required: string[]): 
 const stringProp = { type: "string", minLength: 1 };
 
 /** The `update_agent` tool. */
-export function createUpdateAgentTool(deps: UpdateAgentDeps): ToolDefinition<UpdateAgentArgs, UpdateAgentResult> {
+export function createUpdateAgentTool(deps: UpdateAgentDeps): ToolDefinition<UpdateAgentArgs & { agent_id?: string }, UpdateAgentResult | { error: string }> {
   return {
     name: "update_agent",
     description:
@@ -75,8 +75,10 @@ export function createUpdateAgentTool(deps: UpdateAgentDeps): ToolDefinition<Upd
       visibility: { type: "string", enum: ["private", "summary", "shared"], description: "What other agents may see of this agent's work." },
     }, ["agent_id"]),
     timeoutMs: 2_000,
-    handler: async (args) => {
-      const result = updateAgent(deps.db, args);
+    handler: async (args, ctx) => {
+      if (ctx.peerInput) return { error: "not done: this turn started from another agent's message" };
+      // The schema names the field agent_id; the store reads agentID.
+      const result = updateAgent(deps.db, { ...args, agentID: args.agent_id ?? args.agentID });
       // The roster follows, so the app shows the new role straight away.
       deps.emit({ type: "agents.update", agents: personaInfo(deps.db), mentions: mentionRoster(deps.db) });
       return result;

@@ -15,6 +15,7 @@ import type { ResolvedPersona } from "./personas";
 import { recallFact } from "../tools/facts";
 import { buildFastPathMessages } from "./prompts";
 import type { MailAccountResolver } from "../plugins/credentials";
+import { stripPeerTags } from "./peer-message";
 
 /** S1: hard ceiling on history riding in the prompt — never the full thread. */
 export const HISTORY_MESSAGE_LIMIT = 16;
@@ -136,7 +137,7 @@ export async function runInstantTurn(
 
   // Partial output is still output: save whatever streamed before a timeout
   // or cancellation, and let stopReason carry the honest story.
-  if (text.length > 0) appendMessage(db, { threadID, turnID, role: "assistant", text });
+  if (text.length > 0) appendMessage(db, { threadID, turnID, role: "assistant", text: stripPeerTags(text) });
   finishTurn(db, {
     id: turnID,
     stopReason,

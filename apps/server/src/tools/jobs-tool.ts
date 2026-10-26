@@ -190,6 +190,7 @@ export function createJobTools(db: Database): ToolDefinition<unknown, unknown>[]
       }, ["text"]),
       timeoutMs: 3_000,
       handler: async (args, ctx) => {
+        if (ctx.peerInput) return { error: "not done: this turn started from another agent's message" };
         const input = (args ?? {}) as Record<string, unknown>;
         return scheduleJob(db, {
           text: String(input.text ?? ""),
@@ -221,7 +222,8 @@ export function createJobTools(db: Database): ToolDefinition<unknown, unknown>[]
       kind: "static",
       schema: objectSchema({ id: stringProp }, ["id"]),
       timeoutMs: 2_000,
-      handler: async (args) => {
+      handler: async (args, ctx) => {
+        if (ctx.peerInput) return { error: "not done: this turn started from another agent's message" };
         const input = (args ?? {}) as Record<string, unknown>;
         return cancelScheduledJob(db, String(input.id ?? ""));
       },

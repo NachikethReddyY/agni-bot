@@ -2,7 +2,8 @@ import { linkAttachments, messageAttachments, withAttachmentContent } from "../a
 /** Bounded Plan → Act → Observe runner for the task lane. The instant lane
  * remains a separate, one-call path in agent/loop.ts. */
 import type { Database } from "bun:sqlite";
-import type { ServerFrameBody, StopReason } from "@agni/protocol";
+import type { PeerIntent, ServerFrameBody, StopReason } from "@agni/protocol";
+import { peerEnvelope, stripPeerTags } from "./peer-message";
 import { ApprovalBroker, waitForApprovalDecision } from "./approval-broker";
 import { FormBroker } from "./form-broker";
 import type { Decision } from "./approval-broker";
@@ -65,6 +66,13 @@ export interface TaskTurnRun {
   carrySummary?: string | null;
   /** Agent-to-agent: summary the delegating agent passed in. */
   handoffSummary?: string | null;
+  /**
+   * The peer who wrote this request, when it did not come from the owner.
+   * The model text is then wrapped in the server-built envelope, so peer
+   * text travels as attributed data, not authority. The durable log row
+   * keeps the plain text either way.
+   */
+  peer?: { from: string; intent: PeerIntent; task?: string };
   /** Agent-to-agent: root turn/depth guardrail state. */
   guardrail?: GuardrailState;
   /** When false, bounded durable facts are not injected into the prefix. */
@@ -263,7 +271,18 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   const inputMessage = appendMessage(db, { threadID, turnID, role: run.inputRole ?? "user", text: run.inputText ?? run.text });
   if (run.attachmentIDs?.length) linkAttachments(db, inputMessage.id, run.attachmentIDs);
   titleThreadFromFirstMessage(db, threadID, run.text);
-  messages.push({ role: "user", content: run.text, attachmentIDs: run.attachmentIDs });
+  // Peer-originated input (a brief, a handoff, a completion wake) must not shape
+  // the system prefix. The topic anchor and the retrieval rewrite therefore read
+  // only the history from before this input, and never the input's own text.
+  const peerInput = Boolean(run.peer) || run.inputRole === "system" || Boolean(run.delegation);
+  const priorHistory = messages.slice();
+  // The model sees peer-written text inside the envelope; the durable log
+  // row (above) keeps the plain text so the UI stays readable.
+  messages.push({
+    role: "user",
+    content: run.peer ? peerEnvelope(run.peer, run.text) : run.text,
+    attachmentIDs: run.attachmentIDs,
+  });
   run.emit({
     type: "turn.start",
     turnID,
@@ -307,30 +326,33 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // the cached prefix.
   const anchor = deriveAnchor({
     carrySummary: [run.carrySummary, channelSummary].filter(Boolean).join("\n\n") || null,
-    history: messages,
-    userText: run.text,
+    history: priorHistory,
+    userText: peerInput ? "" : run.text,
   });
   // ASM-003/004/006: what this turn needs, retrieved rather than carried.
   // The query is rewritten when the message points back, the search is
   // hybrid, and when nothing good enough comes back the tail of the
   // previous block is used instead of a wider, worse search.
-  const rewritten = rewriteForRetrieval(run.text, { anchor, history: messages });
-  const retrieved = await retrieveFacts(db, {
+  const rewritten = rewriteForRetrieval(run.text, { anchor, history: priorHistory });
+  // Peer input never drives retrieval: a search on a brief's own words could
+  // pull stored peer text back into the system prefix as recall.
+  const retrieved = peerInput ? null : await retrieveFacts(db, {
     query: rewritten.query,
     callerAgentID: persona.id,
     limit: 6,
     minScore: settings.minRecallScore,
     embedder: embedderConfig(),
   });
-  const recall: string[] = retrieved.hits.map((hit) => hit.row.content);
-  if (retrieved.belowThreshold) {
+  const recall: string[] = retrieved ? retrieved.hits.map((hit) => hit.row.content) : [];
+  if (!retrieved || retrieved.belowThreshold) {
     recall.push(...previousBlockTail(db, { conversationID: run.conversationID ?? null, threadID }));
   }
   const delegationPrefix = buildDelegationPrefix({
     persona,
     facts,
+    // carrySummary is the conversation's own summary. Peer context travels in
+    // the user message inside the envelope, never through this prefix.
     carrySummary: [run.carrySummary, channelSummary].filter(Boolean).join("\n\n") || null,
-    handoffSummary: run.handoffSummary ?? null,
     depth: guardrail.depth,
     maxDepth: 5,
     toolHints: dynamicHints,
@@ -385,7 +407,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // queued; the specialist runs in a background session with only the brief.
   registerDelegateTaskTool(registry, {
     db, emit: run.emit, currentAgentID: persona.id, channelID: run.channelID, parentTurnID: turnID,
-    parentThreadID: threadID,
+    parentThreadID: threadID, chainID: guardrail.chainID,
   });
   // DEL-006: a delegated task can ask the owner a question and wait. The
   // tool is only registered for a delegated turn, and the turn stops with
@@ -458,12 +480,16 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // so it stays in the model's context instead of becoming a bubble for every
   // internal step. Direct turns (the CLI) keep streaming live for feedback.
   const channelBacked = Boolean(run.channelID);
+  const emitToken = (delta: string): void => {
+    if (!peerInput) run.emit({ type: "token", turnID, threadID, delta });
+  };
   const publish = (text: string, uiHint: "normal" | "progress" = "normal"): void => {
     if (text.trim().length === 0) return;
-    appendMessage(db, { threadID, turnID, role: "assistant", text });
+    const displayText = stripPeerTags(text);
+    appendMessage(db, { threadID, turnID, role: "assistant", text: displayText });
     if (!run.channelID) return;
     const row = appendChannelMessage(db, {
-      channelID: run.channelID, fromType: "agent", fromID: persona.id, text, turnID, uiHint,
+      channelID: run.channelID, fromType: "agent", fromID: persona.id, text: displayText, turnID, uiHint, peerInfluenced: peerInput,
     });
     const agent = db.query<{ display_name: string; avatar_color: string }, [string]>(
       "SELECT display_name, avatar_color FROM agents WHERE id = ?",
@@ -471,7 +497,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     run.emit({
       type: "msg.new", id: row.id, channelId: run.channelID, fromType: "agent", fromId: persona.id,
       senderName: agent?.display_name ?? persona.name, senderColor: agent?.avatar_color,
-      text, internal: false, uiHint, createdAt: row.created_at,
+      text: displayText, internal: false, uiHint, createdAt: row.created_at,
     });
   };
   try {
@@ -499,7 +525,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
           activeStepText += delta;
           // Hold channel turns until the step is known to be the answer: a
           // step that calls tools is narration, not something to show.
-          if (!channelBacked) run.emit({ type: "token", turnID, threadID, delta });
+          if (!channelBacked) emitToken(delta);
         },
       });
       activeStepText = "";
@@ -516,7 +542,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         // The buffered answer arrives as one token so the client fills the
         // bubble it already owns, then the durable message seals it.
         if (channelBacked && result.text.length > 0) {
-          run.emit({ type: "token", turnID, threadID, delta: result.text });
+          emitToken(result.text);
         }
         publish(result.text);
         break;
@@ -551,7 +577,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
           continue;
         }
         recentCalls.set(signature, stepCount);
-        const callResult = await executeTool(db, threadID, turnID, call, effectiveTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail);
+        const callResult = await executeTool(db, threadID, turnID, call, effectiveTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail, peerInput);
         let content = callResult.content;
         if (looking && offRoadSteps === OFF_ROAD_NUDGE_AT && !offRoadNudged && !acted) {
           offRoadNudged = true;
@@ -589,7 +615,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
       if (consecutiveNonTextSteps > MAX_NONTEXT_STEPS) {
         const text = "I couldn't make progress on this — please rephrase or continue in a new message.";
         answerText = text;
-        run.emit({ type: "token", turnID, threadID, delta: text });
+        emitToken(text);
         messages.push({ role: "assistant", content: text });
         publish(text);
         break;
@@ -599,7 +625,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
       if (offRoadSteps >= OFF_ROAD_STOP_AT && !acted) {
         const text = offRoadMessage();
         answerText = text;
-        run.emit({ type: "token", turnID, threadID, delta: text });
+        emitToken(text);
         messages.push({ role: "assistant", content: text });
         publish(text);
         break;
@@ -613,7 +639,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     if (!answerText && stopReason === "end" && (tokenCount >= MAX_TOKENS || stepCount >= MAX_STEPS)) {
       const text = budgetExhaustedMessage(toolOutcomes);
       answerText = text;
-      run.emit({ type: "token", turnID, threadID, delta: text });
+      emitToken(text);
       messages.push({ role: "assistant", content: text });
       publish(text);
     }
@@ -635,7 +661,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         if (activeStepText) {
           answerText = activeStepText;
           messages.push({ role: "assistant", content: activeStepText });
-          if (channelBacked) run.emit({ type: "token", turnID, threadID, delta: activeStepText });
+          if (channelBacked) emitToken(activeStepText);
           publish(activeStepText);
           activeStepText = "";
         }
@@ -648,7 +674,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
           // marked failed so the UI never presents an interrupted task as done.
           answerText = activeStepText;
           messages.push({ role: "assistant", content: activeStepText });
-          if (channelBacked) run.emit({ type: "token", turnID, threadID, delta: activeStepText });
+          if (channelBacked) emitToken(activeStepText);
           publish(activeStepText);
         } else if (!answerText && stopReason === "error") {
           // A turn that failed with nothing to say still owes the user a trace:
@@ -666,7 +692,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     if (runningTurns.get(threadID)?.turnID === turnID) runningTurns.delete(threadID);
   }
 
-  if (run.channelID) void compactChannelHistory(db, router, run.channelID, persona.id);
+  if (run.channelID) void compactChannelHistory(db, router, run.channelID, persona.id, peerInput);
   finishTurn(db, { id: turnID, stopReason, ...usage });
   touchThread(db, threadID);
   // A turn waiting for the owner's answer is not a failed turn: the session
@@ -819,7 +845,7 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
   registry: ReturnType<typeof buildTaskToolRegistry>, broker: ApprovalBroker, signal: AbortSignal,
   emit: (frame: ServerFrameBody) => void,
   setState: (state: string) => void,
-  persona: Persona, guardrail: GuardrailState,
+  persona: Persona, guardrail: GuardrailState, peerInput?: boolean,
 ): Promise<{ content: string; awaiting: boolean }> {
   const tool = registry.get(call.function.name);
   let args: Record<string, unknown> = {};
@@ -863,6 +889,7 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
         threadID,
         turnID,
         signal: combined,
+        peerInput,
         chain: {
           depth: guardrail.depth,
           rootAgentID: guardrail.rootAgentID,

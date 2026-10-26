@@ -13,6 +13,12 @@ export interface ToolContext {
   turnID: string;
   signal: AbortSignal;
   /**
+   * True when this turn was started from another agent's message (a delegation
+   * brief, a handoff, or a completion wake). Tools that write durable memory
+   * refuse to run in that case.
+   */
+  peerInput?: boolean;
+  /**
    * Agent-to-agent chain metadata. Absent for a root turn; populated for
    * delegated work so tools (notably `handoff`) can refuse or behave
    * differently inside a chain.

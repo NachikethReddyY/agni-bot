@@ -8,8 +8,15 @@ const KEEP_RECENT = 12;
 const COMPACT_TOKEN_AT = 12_000;
 const COMPACT_BATCH = 24;
 
-/** Compact older channel messages in the background; failures never block a turn. */
-export async function compactChannelHistory(db: Database, router: Router, channelID: string, agentID: string): Promise<void> {
+/**
+ * Compact older channel messages in the background; failures never block a turn.
+ * A peer-influenced turn passes `peerInput` and gets no compaction: its output
+ * must not become durable facts or a channel summary.
+ */
+export async function compactChannelHistory(db: Database, router: Router, channelID: string, agentID: string, peerInput = false): Promise<void> {
+  if (peerInput) return;
+  // System rows (peer briefs, handoffs, wake results) are excluded in the query,
+  // before the limit, so they can never starve compaction of real messages.
   const messages = uncompactedMessages(db, channelID, 200);
   const tokenEstimate = messages.reduce((sum, message: ChannelMessageRow) => sum + Math.ceil(message.text.length / 4), 0);
   if (messages.length <= COMPACT_AT && tokenEstimate <= COMPACT_TOKEN_AT) return;

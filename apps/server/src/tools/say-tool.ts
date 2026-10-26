@@ -11,6 +11,7 @@ import type { ServerFrameBody } from "@agni/protocol";
 import type { ToolRegistry } from "./registry";
 import { appendChannelMessage } from "../stores/channels";
 import { appendMessage } from "../stores/threads";
+import { stripPeerTags } from "../agent/peer-message";
 
 export interface SayDeps {
   db: Database;
@@ -35,9 +36,11 @@ export function registerSayTool(registry: ToolRegistry, deps: SayDeps): void {
       "Do not repeat these updates in the final answer.",
     schema: objectSchema({ text: { type: "string", minLength: 1, maxLength: 800 } }, ["text"]),
     timeoutMs: 2_000,
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const input = (args ?? {}) as Record<string, unknown>;
-      const text = String(input.text ?? "").trim();
+      const raw = String(input.text ?? "").trim();
+      // A peer-influenced turn shows its words without the envelope tags.
+      const text = ctx.peerInput ? stripPeerTags(raw) : raw;
       if (!text) throw new Error("text is required");
       const message = appendMessage(deps.db, {
         threadID: deps.threadID,
@@ -61,6 +64,7 @@ export function registerSayTool(registry: ToolRegistry, deps: SayDeps): void {
         text,
         turnID: deps.turnID,
         uiHint: "progress",
+        peerInfluenced: Boolean(ctx.peerInput),
       });
       deps.emit({
         type: "msg.new",
