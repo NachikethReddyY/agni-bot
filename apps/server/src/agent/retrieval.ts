@@ -149,6 +149,7 @@ export function previousBlockTail(
        FROM messages m
        JOIN threads t ON t.id = m.thread_id
        WHERE t.conversation_id = ? AND t.id <> ? AND t.closed_at IS NOT NULL
+         AND m.role IN ('user', 'assistant')
        ORDER BY m.created_at DESC, m.rowid DESC
        LIMIT ?`,
     )

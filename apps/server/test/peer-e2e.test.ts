@@ -14,6 +14,9 @@ import { registerTurnJob } from "../src/jobs/turn";
 import { createThread, recentMessages } from "../src/stores/threads";
 import { listJobs, parseJobPayload } from "../src/stores/jobs";
 import { putAgentMemory } from "../src/stores/agent-memories";
+import { previousBlockTail } from "../src/agent/retrieval";
+import { ensureConversation } from "../src/stores/conversations";
+import { appendMessage } from "../src/stores/threads";
 
 const provider: ProviderConfig = { id: "test", label: "Test", baseUrl: "https://test.local/v1", apiKey: "test", model: "mock" };
 const settings = { firstTokenTimeoutMs: 1000, turnTimeoutMs: 5000 };
@@ -47,6 +50,18 @@ let db: Database | undefined;
 afterEach(() => { db?.close(); db = undefined; });
 
 describe("peer handoff end-to-end", () => {
+  test("previous-block context never carries a peer note", () => {
+    db = openDatabase(":memory:");
+    const conversationID = ensureConversation(db, "researcher").id;
+    const closed = createThread(db, "researcher");
+    db.run("UPDATE threads SET conversation_id = ?, closed_at = ? WHERE id = ?", [conversationID, new Date().toISOString(), closed.id]);
+    appendMessage(db, { threadID: closed.id, role: "system", text: "ea messaged you: E2E-TAIL-BRIEF" });
+    appendMessage(db, { threadID: closed.id, role: "user", text: "owner note" });
+    const tail = previousBlockTail(db, { conversationID, threadID: "thr_current" }).join("\n");
+    expect(tail).toContain("owner note");
+    expect(tail).not.toContain("E2E-TAIL-BRIEF");
+  });
+
   test("peer input never pulls stored text into the system prefix", async () => {
     db = openDatabase(":memory:");
     // Durable facts always ride in the prefix, so the stored note appears once
