@@ -271,6 +271,11 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   const inputMessage = appendMessage(db, { threadID, turnID, role: run.inputRole ?? "user", text: run.inputText ?? run.text });
   if (run.attachmentIDs?.length) linkAttachments(db, inputMessage.id, run.attachmentIDs);
   titleThreadFromFirstMessage(db, threadID, run.text);
+  // Peer-originated input (a brief, a handoff, a completion wake) must not shape
+  // the system prefix. The topic anchor and the retrieval rewrite therefore read
+  // only the history from before this input, and never the input's own text.
+  const peerInput = Boolean(run.peer) || run.inputRole === "system";
+  const priorHistory = messages.slice();
   // The model sees peer-written text inside the envelope; the durable log
   // row (above) keeps the plain text so the UI stays readable.
   messages.push({
@@ -321,30 +326,32 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // the cached prefix.
   const anchor = deriveAnchor({
     carrySummary: [run.carrySummary, channelSummary].filter(Boolean).join("\n\n") || null,
-    history: messages,
-    userText: run.text,
+    history: priorHistory,
+    userText: peerInput ? "" : run.text,
   });
   // ASM-003/004/006: what this turn needs, retrieved rather than carried.
   // The query is rewritten when the message points back, the search is
   // hybrid, and when nothing good enough comes back the tail of the
   // previous block is used instead of a wider, worse search.
-  const rewritten = rewriteForRetrieval(run.text, { anchor, history: messages });
-  const retrieved = await retrieveFacts(db, {
+  const rewritten = rewriteForRetrieval(run.text, { anchor, history: priorHistory });
+  // Peer input never drives retrieval: a search on a brief's own words could
+  // pull stored peer text back into the system prefix as recall.
+  const retrieved = peerInput ? null : await retrieveFacts(db, {
     query: rewritten.query,
     callerAgentID: persona.id,
     limit: 6,
     minScore: settings.minRecallScore,
     embedder: embedderConfig(),
   });
-  const recall: string[] = retrieved.hits.map((hit) => hit.row.content);
-  if (retrieved.belowThreshold) {
+  const recall: string[] = retrieved ? retrieved.hits.map((hit) => hit.row.content) : [];
+  if (!retrieved || retrieved.belowThreshold) {
     recall.push(...previousBlockTail(db, { conversationID: run.conversationID ?? null, threadID }));
   }
   const delegationPrefix = buildDelegationPrefix({
     persona,
     facts,
-    // The delegating agent's context travels inside the peer envelope in the
-    // user message now — not as system-prefix text.
+    // carrySummary is the conversation's own summary. Peer context travels in
+    // the user message inside the envelope, never through this prefix.
     carrySummary: [run.carrySummary, channelSummary].filter(Boolean).join("\n\n") || null,
     depth: guardrail.depth,
     maxDepth: 5,

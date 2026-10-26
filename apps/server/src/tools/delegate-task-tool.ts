@@ -100,14 +100,28 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
       // from this caller is returned, not queued twice. A model retry must not
       // double the work; two different callers asking the same thing are two
       // pieces of work.
+      // The chain check runs before the in-flight lookup: an identical request
+      // already in flight is still a repeat. A stopped chain refuses everything.
+      const chainID = deps.chainID ?? `legacy:${deps.currentAgentID}`;
+      const check = checkPeerRequest(deps.db, chainID,
+        fingerprintPeerRequest(deps.currentAgentID, toAgentID, brief.intent ?? "request", goal));
+      if (check === "stop") {
+        const text = "Stopped: agents repeated the same request in this chain.";
+        const channelID = deps.channelID ?? "main";
+        const row = appendChannelMessage(deps.db, { channelID, fromType: "system", fromID: deps.currentAgentID, text, uiHint: "normal" });
+        deps.emit({ type: "msg.new", id: row.id, channelId: channelID, fromType: "system", fromId: deps.currentAgentID, senderName: deps.currentAgentID, text, internal: false, uiHint: "normal", createdAt: row.created_at });
+        return { stopped: true, note: "The chain is stopped; report to the owner." };
+      }
       const existing = findActiveDelegation(deps.db, toAgentID, goal, deps.currentAgentID);
       if (existing) {
+        const repeated = check === "retry";
         if (args.mode === "wait") {
           const waited = await waitForDelegation(deps.db, existing.id, waitBudget(args.timeoutMs), ctx.signal);
           return {
             ...taskView(waited.task, deps),
             jobID: existing.job_id,
             duplicate: true,
+            repeated,
             waitTimedOut: waited.timedOut,
           };
         }
@@ -117,20 +131,12 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
           agentID: toAgentID,
           state: existing.delegate_state,
           duplicate: true,
+          repeated,
           message: `That work is already in flight with ${toAgentID}.`,
         };
       }
-      const check = checkPeerRequest(deps.db, deps.chainID ?? `legacy:${deps.currentAgentID}`,
-        fingerprintPeerRequest(deps.currentAgentID, toAgentID, brief.intent ?? "request", goal));
       if (check === "retry") return { repeated: true, note: "That exact request was already sent in this chain. Say something new, or stop." };
-      if (check === "stop") {
-        const text = "Stopped: agents repeated the same request in this chain.";
-        const channelID = deps.channelID ?? "main";
-        const row = appendChannelMessage(deps.db, { channelID, fromType: "system", fromID: deps.currentAgentID, text, uiHint: "normal" });
-        deps.emit({ type: "msg.new", id: row.id, channelId: channelID, fromType: "system", fromId: deps.currentAgentID, senderName: deps.currentAgentID, text, internal: false, uiHint: "normal", createdAt: row.created_at });
-        return { stopped: true, note: "The chain is stopped; report to the owner." };
-      }
-      brief.chainID = deps.chainID ?? `legacy:${deps.currentAgentID}`;
+      brief.chainID = chainID;
       const task = createDelegationTask(deps.db, {
         ownerAgentID: toAgentID,
         brief,
