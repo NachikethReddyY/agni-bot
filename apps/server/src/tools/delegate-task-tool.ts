@@ -108,7 +108,7 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
       if (check === "stop") {
         const text = "Stopped: agents repeated the same request in this chain.";
         const channelID = deps.channelID ?? "main";
-        const row = appendChannelMessage(deps.db, { channelID, fromType: "system", fromID: deps.currentAgentID, text, uiHint: "normal" });
+        const row = appendChannelMessage(deps.db, { channelID, fromType: "system", fromID: deps.currentAgentID, text, uiHint: "normal", peerInfluenced: Boolean(ctx.peerInput) });
         deps.emit({ type: "msg.new", id: row.id, channelId: channelID, fromType: "system", fromId: deps.currentAgentID, senderName: deps.currentAgentID, text, internal: false, uiHint: "normal", createdAt: row.created_at });
         return { stopped: true, note: "The chain is stopped; report to the owner." };
       }

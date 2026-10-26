@@ -919,4 +919,9 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    id: 39,
+    name: "peer_influenced_channel_messages",
+    sql: `ALTER TABLE channel_messages ADD COLUMN peer_influenced INTEGER NOT NULL DEFAULT 0;`,
+  },
 ];

@@ -45,7 +45,8 @@ export function registerCreateAgentTool(registry: ToolRegistry, deps: CreateAgen
       additionalProperties: false,
     },
     timeoutMs: 2_000,
-    handler: async (args: Record<string, unknown>) => {
+    handler: async (args: Record<string, unknown>, ctx) => {
+      if (ctx.peerInput) return { error: "not done: this turn started from another agent's message" };
       const db = deps.db;
       const known = registry.listByKind("static").map((tool) => tool.name);
       const created = createAgentPersona(

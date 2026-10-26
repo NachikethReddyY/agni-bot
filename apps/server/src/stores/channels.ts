@@ -32,6 +32,7 @@ export interface ChannelMessageRow {
   salience: string;
   turn_id: string | null;
   ui_hint: string | null;
+  peer_influenced?: number;
   created_at: string;
 }
 
@@ -158,6 +159,7 @@ export function appendChannelMessage(
     uiHint?: string | null;
     /** Gate salience; defaults to recent_turns when the caller does not classify. */
     salience?: string;
+    peerInfluenced?: boolean;
   },
 ): ChannelMessageRow {
   const row: ChannelMessageRow = {
@@ -175,8 +177,8 @@ export function appendChannelMessage(
     created_at: nowISO(),
   };
   db.run(
-    `INSERT INTO channel_messages (id, channel_id, from_type, from_id, to_agent_id, text, internal, compacted, salience, turn_id, ui_hint, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO channel_messages (id, channel_id, from_type, from_id, to_agent_id, text, internal, compacted, salience, turn_id, ui_hint, created_at, peer_influenced)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       row.id,
       row.channel_id,
@@ -190,6 +192,7 @@ export function appendChannelMessage(
       row.turn_id,
       row.ui_hint,
       row.created_at,
+      input.peerInfluenced ? 1 : 0,
     ],
   );
   return row;
@@ -208,7 +211,7 @@ export function uncompactedMessages(db: Database, channelID: string, limit = 200
   return db
     .query<ChannelMessageRow, [string, number]>(
       `SELECT id, channel_id, from_type, from_id, to_agent_id, text, internal, compacted, salience, turn_id, ui_hint, created_at
-       FROM channel_messages WHERE channel_id = ? AND compacted = 0 AND salience <> 'temp' AND from_type <> 'system' ORDER BY created_at, rowid LIMIT ?`,
+       FROM channel_messages WHERE channel_id = ? AND compacted = 0 AND salience <> 'temp' AND from_type <> 'system' AND peer_influenced = 0 ORDER BY created_at, rowid LIMIT ?`,
     )
     .all(channelID, limit);
 }

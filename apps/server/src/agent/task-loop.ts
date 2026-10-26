@@ -274,7 +274,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // Peer-originated input (a brief, a handoff, a completion wake) must not shape
   // the system prefix. The topic anchor and the retrieval rewrite therefore read
   // only the history from before this input, and never the input's own text.
-  const peerInput = Boolean(run.peer) || run.inputRole === "system";
+  const peerInput = Boolean(run.peer) || run.inputRole === "system" || Boolean(run.delegation);
   const priorHistory = messages.slice();
   // The model sees peer-written text inside the envelope; the durable log
   // row (above) keeps the plain text so the UI stays readable.
@@ -480,13 +480,16 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // so it stays in the model's context instead of becoming a bubble for every
   // internal step. Direct turns (the CLI) keep streaming live for feedback.
   const channelBacked = Boolean(run.channelID);
+  const emitToken = (delta: string): void => {
+    if (!peerInput) run.emit({ type: "token", turnID, threadID, delta });
+  };
   const publish = (text: string, uiHint: "normal" | "progress" = "normal"): void => {
     if (text.trim().length === 0) return;
     const displayText = stripPeerTags(text);
     appendMessage(db, { threadID, turnID, role: "assistant", text: displayText });
     if (!run.channelID) return;
     const row = appendChannelMessage(db, {
-      channelID: run.channelID, fromType: "agent", fromID: persona.id, text: displayText, turnID, uiHint,
+      channelID: run.channelID, fromType: "agent", fromID: persona.id, text: displayText, turnID, uiHint, peerInfluenced: peerInput,
     });
     const agent = db.query<{ display_name: string; avatar_color: string }, [string]>(
       "SELECT display_name, avatar_color FROM agents WHERE id = ?",
@@ -522,7 +525,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
           activeStepText += delta;
           // Hold channel turns until the step is known to be the answer: a
           // step that calls tools is narration, not something to show.
-          if (!channelBacked) run.emit({ type: "token", turnID, threadID, delta });
+          if (!channelBacked) emitToken(delta);
         },
       });
       activeStepText = "";
@@ -539,7 +542,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         // The buffered answer arrives as one token so the client fills the
         // bubble it already owns, then the durable message seals it.
         if (channelBacked && result.text.length > 0) {
-          run.emit({ type: "token", turnID, threadID, delta: result.text });
+          emitToken(result.text);
         }
         publish(result.text);
         break;
@@ -612,7 +615,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
       if (consecutiveNonTextSteps > MAX_NONTEXT_STEPS) {
         const text = "I couldn't make progress on this — please rephrase or continue in a new message.";
         answerText = text;
-        run.emit({ type: "token", turnID, threadID, delta: text });
+        emitToken(text);
         messages.push({ role: "assistant", content: text });
         publish(text);
         break;
@@ -622,7 +625,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
       if (offRoadSteps >= OFF_ROAD_STOP_AT && !acted) {
         const text = offRoadMessage();
         answerText = text;
-        run.emit({ type: "token", turnID, threadID, delta: text });
+        emitToken(text);
         messages.push({ role: "assistant", content: text });
         publish(text);
         break;
@@ -636,7 +639,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     if (!answerText && stopReason === "end" && (tokenCount >= MAX_TOKENS || stepCount >= MAX_STEPS)) {
       const text = budgetExhaustedMessage(toolOutcomes);
       answerText = text;
-      run.emit({ type: "token", turnID, threadID, delta: text });
+      emitToken(text);
       messages.push({ role: "assistant", content: text });
       publish(text);
     }
@@ -658,7 +661,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         if (activeStepText) {
           answerText = activeStepText;
           messages.push({ role: "assistant", content: activeStepText });
-          if (channelBacked) run.emit({ type: "token", turnID, threadID, delta: activeStepText });
+          if (channelBacked) emitToken(activeStepText);
           publish(activeStepText);
           activeStepText = "";
         }
@@ -671,7 +674,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
           // marked failed so the UI never presents an interrupted task as done.
           answerText = activeStepText;
           messages.push({ role: "assistant", content: activeStepText });
-          if (channelBacked) run.emit({ type: "token", turnID, threadID, delta: activeStepText });
+          if (channelBacked) emitToken(activeStepText);
           publish(activeStepText);
         } else if (!answerText && stopReason === "error") {
           // A turn that failed with nothing to say still owes the user a trace:

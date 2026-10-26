@@ -69,7 +69,7 @@ export function scheduleTagger(
   const pending = db
     .query<{ count: number }, []>(
       `SELECT count(*) AS count FROM channel_messages
-       WHERE tagged_at IS NULL AND salience <> 'temp'`,
+       WHERE tagged_at IS NULL AND salience <> 'temp' AND from_type <> 'system' AND peer_influenced = 0`,
     )
     .get()?.count ?? 0;
   if (pending === 0) return;
@@ -96,7 +96,7 @@ export function registerTaggerJob(runner: JobRunner, deps: TaggerJobDeps): void 
       .query<{ id: string; from_type: string; from_id: string; text: string; created_at: string; channel_id: string }, [number]>(
         `SELECT id, from_type, from_id, text, created_at, channel_id
          FROM channel_messages
-         WHERE tagged_at IS NULL AND salience <> 'temp' AND from_type <> 'system'
+         WHERE tagged_at IS NULL AND salience <> 'temp' AND from_type <> 'system' AND peer_influenced = 0
          ORDER BY created_at ASC, rowid ASC
          LIMIT ?`,
       )

@@ -34,15 +34,33 @@ function sanitizeAttribute(value: string): string {
 }
 
 /**
- * Escape the body so it cannot alter the envelope itself: a `<` that begins
- * an opening or closing `peer_message` tag (case-insensitive, optional
- * whitespace after the bracket or the slash) becomes `&lt;`.
+ * Invisible characters an attacker can hide inside a tag name: format
+ * characters, combining marks and variation selectors, including the
+ * supplementary selectors. They are skipped only inside the tag pattern, so
+ * ordinary text keeps its combining marks and non-Latin scripts stay intact.
+ */
+const SKIP = "[\\p{Cf}\\p{Mn}\\uFE00-\\uFE0F\\u{E0100}-\\u{E01EF}]*";
+/** `peer_message` with invisible characters allowed between the letters. */
+const PEER_NAME = [..."peer_message"].map((letter) => letter + SKIP).join("");
+/**
+ * What sits between the opening bracket and the name: invisibles, whitespace,
+ * and an optional slash with its own invisibles. The slash is the only thing
+ * that separates the two invisible runs, so the pattern never has two runs
+ * back to back and cannot backtrack badly on a long run of invisibles.
+ */
+const TAG_HEAD = `${SKIP}\\s*(?:[\\/／]${SKIP}\\s*)?${PEER_NAME}`;
+const BRACKET_BEFORE_TAG = new RegExp(`[<＜](?=${TAG_HEAD})`, "giu");
+const ESCAPED_BRACKET_BEFORE_TAG = new RegExp(`&lt;(?=${TAG_HEAD})`, "giu");
+const WHOLE_TAG = new RegExp(`[<＜]${TAG_HEAD}[^>＞]*[>＞]`, "giu");
+
+/**
+ * Escape the body so it cannot alter the envelope itself: a bracket that begins
+ * an opening or closing `peer_message` tag becomes `&lt;`. Fullwidth forms are
+ * folded to ASCII first, and invisible characters inside the name do not hide
+ * the tag.
  */
 export function escapePeerBody(body: string): string {
-  // Fold lookalikes first: NFKC maps fullwidth brackets to ASCII, and the
-  // zero-width and soft-hyphen characters are dropped so they cannot hide a tag.
-  const folded = body.normalize("NFKC").replace(/[­​-‍⁠﻿]/g, "");
-  return folded.replace(/<(\s*\/?\s*peer_message)/gi, "&lt;$1");
+  return body.normalize("NFKC").replace(BRACKET_BEFORE_TAG, "&lt;");
 }
 
 /** Wrap peer text in the server-built envelope. */
@@ -55,18 +73,15 @@ export function peerEnvelope(peer: PeerMeta, body: string): string {
   return `<peer_message ${attributes}>\n${escapePeerBody(body)}\n</peer_message>`;
 }
 
-const PEER_TAG = /<\s*\/?\s*peer_message\b[^>]*>/gi;
-const ESCAPED_PEER_TAG = /&lt;(?=\s*\/?\s*peer_message\b)/gi;
-
 /**
  * Remove peer envelope tags from agent-authored display text.
  *
- * Each opening or closing tag is removed on its own, so a lone tag that a
- * model echoes does not survive. The body between them is kept. An escaped
- * `&lt;` that sits before a `peer_message` tag name is unescaped, so an escaped
- * tag inside a body reads as the text it was. Only agent text should pass
- * through this; owner text is never sent here.
+ * Each opening or closing tag is removed on its own, so a lone tag a model
+ * echoes does not survive, and invisible characters inside the name do not
+ * hide it. The body between tags is kept. An escaped `&lt;` before a tag name is
+ * unescaped, so an escaped tag inside a body reads as the text it was. Only
+ * agent text passes through here; owner text is never sent.
  */
 export function stripPeerTags(text: string): string {
-  return text.replace(PEER_TAG, "").replace(ESCAPED_PEER_TAG, "<").trim();
+  return text.replace(WHOLE_TAG, "").replace(ESCAPED_BRACKET_BEFORE_TAG, "<").trim();
 }
