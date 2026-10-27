@@ -473,7 +473,9 @@ function CronRoutineRow({ job, routine }: { job: JobInfo; routine: RoutineInfo }
               type="button"
               className="btn small"
               disabled={job.state === "running"}
-              onClick={() => model.deleteTask(job)}
+              onClick={() => {
+                if (window.confirm(`Delete routine "${routine.name}" and its run history?`)) model.deleteTask(job);
+              }}
             >
               Delete
             </button>
