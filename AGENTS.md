@@ -35,8 +35,7 @@ Two-minute summary: `docs/architecture.md`. Doc status index: `docs/README.md`.
 | Bot / agent | A named, specialised assistant with memory and a role. Stored in the `agents` table. |
 | Conversation | The one continuous chat with one bot. Never reset. |
 | Session block | A `threads` row: a context span inside a conversation. Opens with the carried summary, closes into it. |
-| Instant lane | One model call, no tools, no steps (`runInstantTurn`, `apps/server/src/agent/loop.ts`). Must stay instant. |
-| Task lane | Plan → act → observe loop with tools, step and token budgets (`apps/server/src/agent/task-loop.ts`). |
+| Task lane | Plan → act → observe loop with tools, step and token budgets (`apps/server/src/agent/task-loop.ts`). The only turn runner: chat and background jobs both use it. The one-call instant lane was removed. |
 | Turn job | A background prompt run by the daemon's job queue. |
 | Plugin | A connected account or MCP server with scoped capabilities (`apps/server/src/plugins/`). |
 
@@ -66,8 +65,10 @@ assistant" framing. Treat those as history, not as current status.
   prompt-injection instead of obeying it.
 - No IDE features: no LSP, no repo indexing. Coding jobs go through the ACP
   bridge when it exists (P3).
-- Keep the instant lane instant: one call, no tools, bounded prompt (S1/S2/S3
-  in the blueprint). If a change makes quick questions slower, it is a bug.
+- Keep quick questions fast. The instant lane is gone (owner decision,
+  2026-10-27); every turn runs the task lane, so the bounded prompt (S1/S2)
+  and a cheap first step matter. If a change makes quick questions slower,
+  it is a bug.
 
 ## Conventions
 

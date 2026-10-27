@@ -414,8 +414,7 @@ function SystemPanel({ overview, agentName }: { overview: DebugOverview; agentNa
     <>
       <div className="debug-section-title">How a reply works</div>
       <div className="debug-card debug-explain">
-        <div><b>Task lane</b> — every chat message: the bot loops <i>think → call a tool → read the result</i> until it can answer. Each tool call is one step.</div>
-        <div><b>Instant lane</b> — background jobs only (unless they ask for the task lane): one model call, no tools.</div>
+        <div><b>Every reply</b> — chat and background jobs alike: the bot loops <i>think → call a tool → read the result</i> until it can answer. Each tool call is one step.</div>
         <div><b>Limits</b> — {overview.limits.maxSteps} tool calls, {overview.limits.maxTokens.toLocaleString()} written tokens, {Math.round(overview.limits.turnTimeoutMs / 1000)}s per turn; a model gets {Math.round(overview.limits.firstTokenTimeoutMs / 1000)}s to start replying before the next provider is tried.</div>
       </div>
 
@@ -459,7 +458,7 @@ function SystemPanel({ overview, agentName }: { overview: DebugOverview; agentNa
             <span className={`debug-dot ${job.state === "failed" ? "bad" : job.state === "running" ? "working" : job.state === "done" ? "ok" : "waiting"}`} />
             <strong className="debug-clip">{job.title ?? job.kind}</strong>
             <span className="spacer" />
-            {job.kind === "turn" ? <span className="debug-badge">{job.lane ?? "instant"} lane</span> : <span className="debug-badge">{job.kind}</span>}
+            <span className="debug-badge">{job.kind}</span>
           </div>
           <div className="machine muted">
             {job.state}{job.attempts > 0 ? ` · ${job.attempts} attempts` : ""}{job.agentID ? ` · ${agentName(job.agentID)}` : ""} · {job.state === "queued" ? `runs ${new Date(job.run_at).toLocaleTimeString()}` : ago(job.updated_at)}

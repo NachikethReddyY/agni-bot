@@ -1,6 +1,6 @@
 import { linkAttachments, messageAttachments, withAttachmentContent } from "../attachments/store";
-/** Bounded Plan → Act → Observe runner for the task lane. The instant lane
- * remains a separate, one-call path in agent/loop.ts. */
+/** Bounded Plan → Act → Observe runner for the task lane: every chat turn and
+ * every background job runs here. */
 import type { Database } from "bun:sqlite";
 import type { PeerIntent, ServerFrameBody, StopReason } from "@agni/protocol";
 import { peerEnvelope, stripPeerTags } from "./peer-message";

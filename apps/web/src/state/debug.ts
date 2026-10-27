@@ -64,7 +64,6 @@ export interface DebugJob {
   enabled: number;
   result: string | null;
   updated_at: string;
-  lane: string | null;
   agentID: string | null;
   title: string | null;
 }

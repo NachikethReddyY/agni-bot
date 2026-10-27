@@ -13,8 +13,7 @@
  */
 import type { Database } from "bun:sqlite";
 import type { ServerFrameBody } from "@agni/protocol";
-import { runInstantTurn, type TurnSettings } from "../agent/loop";
-import { runTaskTurn, isThreadActive } from "../agent/task-loop";
+import { runTaskTurn, isThreadActive, type TaskTurnSettings } from "../agent/task-loop";
 import { defaultResolvedPersona, getPersona, resolvePersona, type ResolvedPersona } from "../agent/personas";
 import { DEFAULT_VISIBILITY, redactForCaller } from "../agent/visibility";
 import { rootGuardrail } from "../agent/guardrails";
@@ -56,15 +55,6 @@ export interface TurnJobPayload {
    */
   dailyAt?: string;
   days?: number[];
-  /**
-   * Which lane the job runs in. `instant` (default) is one call, no tools,
-   * bounded prompt (S1/S3) — the fast path for routine chat. `task` runs the
-   * Plan → Act → Observe loop with tools, so a job can delegate to another
-   * agent via the `handoff` tool. Background work that needs delegation must
-   * opt into the task lane; it cannot be the default because the instant lane
-   * is what keeps quick questions fast.
-   */
-  lane?: "instant" | "task";
   /** When true (default), bounded durable facts ride in the prompt prefix. */
   facts?: boolean;
   /** The delegation task row this job fulfils (DEL-001). */
@@ -100,7 +90,7 @@ export interface TurnJobPayload {
 export interface TurnJobDeps {
   db: Database;
   router: Router;
-  settings: TurnSettings;
+  settings: TaskTurnSettings;
   emit: (frame: ServerFrameBody) => void;
 }
 
@@ -171,7 +161,7 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
     }
 
     if (result.stopReason !== "end") {
-      // runInstantTurn already reported the failure as frames; a non-end stop
+      // runTaskTurn already reported the failure as frames; a non-end stop
       // is a failed job so the runner retries it honestly.
       if (delegationTaskID) setDelegationState(deps.db, delegationTaskID, "failed", `turn ended with ${result.stopReason}`);
       throw new Error(`turn ended with ${result.stopReason}${result.text ? " (partial output kept)" : ""}`);
@@ -296,7 +286,6 @@ function wakeParent(deps: TurnJobDeps, taskID: string, summary: string): void {
     enqueueJob(deps.db, {
       kind: "turn",
       payload: {
-        lane: "task",
         agentID: parentAgentID,
         threadID: parentThreadID,
         channelID: task.parent_channel_id,
@@ -323,11 +312,8 @@ function announceTask(deps: TurnJobDeps, taskID: string): void {
 }
 
 /**
- * Run the job's prompt in the requested lane. The instant lane is the fast
- * path (one call, no tools, bounded prompt — S1/S3); the task lane runs the
- * Plan → Act → Observe loop with tools, which is what lets a background job
- * delegate to another agent via the `handoff` tool. The task lane is opt-in
- * because it is slower and stateful; routine chat stays on the instant lane.
+ * Run the job's prompt in the task lane: the Plan → Act → Observe loop with
+ * tools, the same runner chat uses.
  */
 async function runTurn(
   deps: TurnJobDeps,
@@ -337,47 +323,33 @@ async function runTurn(
   conversation: ConversationRow | undefined,
   text: string,
 ): Promise<{ turnID: string; text: string; stopReason: string }> {
-  const lane = payload.lane ?? "instant";
   const signal = new AbortController().signal;
-  if (lane === "task") {
-    const delegationTaskID = payload.delegationTaskID?.trim() || null;
-    const task = delegationTaskID ? getTask(deps.db, delegationTaskID) : null;
-    const result = await runTaskTurn(deps.db, deps.router, deps.settings, {
-      threadID,
-      text,
-      persona,
-      emit: deps.emit,
-      signal,
-      conversationID: conversation?.id,
-      carrySummary: conversation?.summary ?? null,
-      guardrail: rootGuardrail(persona.id, payload.chainID),
-      facts: payload.facts,
-      ...(payload.channelID ? { channelID: payload.channelID } : {}),
-      ...(payload.inputRole ? { inputRole: payload.inputRole } : {}),
-      ...(payload.peer ? { peer: payload.peer } : {}),
-      ...(payload.wakeKey && payload.results ? { inputText: buildWakeLogText(payload.results) } : {}),
-      ...(delegationTaskID && task
-        ? {
-            delegation: {
-              taskID: delegationTaskID,
-              ownerAgentID: persona.id,
-              parentAgentID: task.parent_agent_id,
-              parentChannelID: task.parent_channel_id,
-            },
-          }
-        : {}),
-    });
-    return { turnID: result.turnID, text: result.text, stopReason: result.stopReason };
-  }
-  const result = await runInstantTurn(deps.db, deps.router, deps.settings, {
+  const delegationTaskID = payload.delegationTaskID?.trim() || null;
+  const task = delegationTaskID ? getTask(deps.db, delegationTaskID) : null;
+  const result = await runTaskTurn(deps.db, deps.router, deps.settings, {
     threadID,
     text,
     persona,
-    conversationID: conversation?.id,
-    carrySummary: conversation?.summary ?? null,
     emit: deps.emit,
     signal,
+    conversationID: conversation?.id,
+    carrySummary: conversation?.summary ?? null,
+    guardrail: rootGuardrail(persona.id, payload.chainID),
     facts: payload.facts,
+    ...(payload.channelID ? { channelID: payload.channelID } : {}),
+    ...(payload.inputRole ? { inputRole: payload.inputRole } : {}),
+    ...(payload.peer ? { peer: payload.peer } : {}),
+    ...(payload.wakeKey && payload.results ? { inputText: buildWakeLogText(payload.results) } : {}),
+    ...(delegationTaskID && task
+      ? {
+          delegation: {
+            taskID: delegationTaskID,
+            ownerAgentID: persona.id,
+            parentAgentID: task.parent_agent_id,
+            parentChannelID: task.parent_channel_id,
+          },
+        }
+      : {}),
   });
   return { turnID: result.turnID, text: result.text, stopReason: result.stopReason };
 }

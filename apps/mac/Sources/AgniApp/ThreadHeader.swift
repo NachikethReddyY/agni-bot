@@ -183,7 +183,7 @@ struct AgentSwitcherView: View {
             AgentAvatar(agent: agent, size: .medium)
             VStack(alignment: .leading, spacing: 2) {
               Text(agent.name).font(Typography.rowTitle)
-              Text(agent.model ?? "instant lane")
+              Text(agent.model ?? "task lane")
                 .font(Typography.machine)
                 .foregroundStyle(Palette.inkSecondary)
             }

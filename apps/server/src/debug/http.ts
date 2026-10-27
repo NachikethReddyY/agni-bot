@@ -78,7 +78,6 @@ export function debugOverview(db: Database, router: Router, config: Config, limi
       const parsed = parseJSON(payload) as Record<string, unknown> | null;
       return {
         ...job,
-        lane: typeof parsed?.lane === "string" ? parsed.lane : null,
         agentID: typeof parsed?.agentID === "string" ? parsed.agentID : null,
         title: typeof parsed?.title === "string" ? parsed.title : typeof parsed?.text === "string" ? clip(parsed.text, 120) : null,
       };

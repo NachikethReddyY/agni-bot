@@ -152,7 +152,6 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
       const job = enqueueJob(deps.db, {
         kind: "turn",
         payload: {
-          lane: "task",
           chainID: brief.chainID,
           // A brief is a peer's note, not the owner speaking: logged as system,
           // so it is not replayed to the model as a bare user message later.

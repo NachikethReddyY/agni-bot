@@ -22,8 +22,8 @@ CLI (tools/cli) ────┘                                                �
                                                                      ▼
                                                       apps/server  (Bun + TypeScript)
                                                       ├─ ws: server / dispatch / frame log
-                                                      ├─ agent: bots (personas), instant lane,
-                                                      │         task lane, creation, visibility
+                                                      ├─ agent: bots (personas), task lane,
+                                                      │         creation, visibility
                                                       ├─ jobs: queue runner + turn kind
                                                       │        (daemon work while idle)
                                                       ├─ models: router → Groq · Cerebras ·
@@ -94,11 +94,11 @@ they get `resync_gap` and reload from the database. See [`protocol.md`](protocol
 ## Speed rules (why this stays fast)
 
 - **S1 constant prompt**: system + persona + the last 16 messages, hard cap.
-  Nothing grows with history (`agent/loop.ts`).
+  Nothing grows with history (`agent/task-loop.ts`).
 - **S2 memory is a tool**: FTS5 indexes (memories, links) are read by tools on
   demand, never injected into the prompt prefix.
-- **S3 lane isolation**: the instant lane is one call, no tools, no steps
-  (`runInstantTurn`). The task lane has its own runner and the job queue.
+- **S3 one lane**: every turn, chat or background job, runs the task lane
+  (`runTaskTurn`). The separate one-call instant lane was removed.
 - **S4 write-time work**: summaries and indexes are written when data lands,
   not at read time. Scheduled work lives in the job queue.
 - **S5 warm path**: router health and cooldown avoid paying timeouts twice.
@@ -108,8 +108,8 @@ they get `resync_gap` and reload from the database. See [`protocol.md`](protocol
 
 ## Task lane
 
-The task persona runs through `agent/task-loop.ts`. The instant bot continues
-through the one-call instant runner. Each task step sends the same system prompt
+Every turn runs through `agent/task-loop.ts`, including background jobs.
+Each task step sends the same system prompt
 and tool schemas first, then the compacted session and recent messages. That
 keeps the request prefix stable for provider-side caching.
 
