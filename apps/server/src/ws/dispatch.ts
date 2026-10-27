@@ -1282,9 +1282,8 @@ function handleJobSet(
     }
     case "run": {
       // "Run now" resumes a paused job: a claim would skip it otherwise.
+      // Run now does not reset the failure streak: only resume does.
       wakeJob(deps.db, job.id);
-      const routine = getRoutineByJobID(deps.db, job.id);
-      if (routine) updateRoutineState(deps.db, routine.id, { failureStreak: 0 });
       break;
     }
   }
