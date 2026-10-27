@@ -9,6 +9,10 @@ import { buildRoutinePrompt } from "../src/routines/prompt";
 import type { Routine } from "../src/routines/types";
 import { insertRoutine, getRoutine } from "../src/stores/routines";
 import { createThread } from "../src/stores/threads";
+import { ensureConversation, backgroundSession } from "../src/stores/conversations";
+import { runTaskTurn } from "../src/agent/task-loop";
+import { resolvePersona } from "../src/agent/personas";
+import { rootGuardrail } from "../src/agent/guardrails";
 
 let db: Database | undefined;
 let dbPath: string | undefined;
@@ -130,6 +134,29 @@ describe("routine execution", () => {
       expect(names).not.toContain(banned);
     }
     for (const name of names) expect(ROUTINE_TOOL_ALLOWLIST).toContain(name);
+  });
+
+  test("a tool allowlist never grants a tool the persona lacks", async () => {
+    const r = routine({ preflight: { kind: "none" } });
+    const database = setup(r);
+    const persona = { ...resolvePersona(database, "ea")!, tools: ["grep"] };
+    const conversation = ensureConversation(database, "ea");
+    const thread = backgroundSession(database, conversation, "scope check");
+    const sent: string[] = [];
+    const fake = routerWith((request) => {
+      sent.push(...request.tools.map((tool: any) => tool.function.name));
+      return { text: "Done.", outputTokens: 1, provider: "fake", model: "fake", latencyMs: 1 };
+    });
+    await runTaskTurn(database, fake.router, settings, {
+      threadID: thread.id, text: "check", persona, emit: () => {}, signal: AbortSignal.timeout(5_000),
+      conversationID: conversation.id, carrySummary: null, guardrail: rootGuardrail("ea"),
+      toolAllowlist: ["grep", "bash", "mail_send"],
+    });
+    expect(sent).not.toContain("bash");
+    expect(sent).not.toContain("mail_send");
+    expect(sent).not.toContain("ask");
+    expect(sent).toContain("grep");
+    expect(sent.every((name) => name === "grep")).toBe(true);
   });
 
   test("web_fetch to a host outside the routine's allowlist is refused", async () => {
