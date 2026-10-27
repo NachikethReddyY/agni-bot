@@ -15,6 +15,7 @@ import { SidebarView } from "./SidebarView";
 import { ThreadHeader } from "./ThreadHeader";
 import { ThreadView } from "./ThreadView";
 import { InspectorView } from "./InspectorView";
+import { DebugView } from "./DebugView";
 import { ChatGPTPlanNotice } from "./ChatGPTConnectionView";
 import { TasksView } from "./TasksView";
 
@@ -56,6 +57,11 @@ export function RootView() {
       if (command && event.shiftKey && event.key.toLowerCase() === "i") {
         event.preventDefault();
         model.toggleInspector();
+        return;
+      }
+      if (command && event.shiftKey && event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        model.toggleDebug();
         return;
       }
       if (command && event.shiftKey && event.key.toLowerCase() === "r") {
@@ -104,6 +110,7 @@ export function RootView() {
       {snapshot.screen === "pairing" ? <PairingView /> : <ChatView />}
       {snapshot.isAgentSwitcherPresented ? <AgentSwitcherView /> : null}
       {snapshot.isSettingsPresented ? <SettingsView /> : null}
+      {snapshot.isDebugPresented && snapshot.screen !== "pairing" ? <DebugView /> : null}
       <ChatGPTPlanNotice />
       {snapshot.toast ? <Toast /> : null}
     </div>

@@ -111,8 +111,8 @@ export interface TaskTurnResult { turnID: string; text: string; stopReason: Stop
  *   - MAX_TOKENS: how much the turn may generate (the prompt is re-sent on
  *     every step, so it does not count against this).
  */
-const MAX_STEPS = 16;
-const MAX_TOKENS = 16_000;
+export const MAX_STEPS = 16;
+export const MAX_TOKENS = 16_000;
 const MAX_PROMPT_CHARS = MAX_TOKENS * 2.5;
 const MAX_TOOL_RESULT_CHARS = 4_000;
 const MAX_HISTORY_MESSAGES = 16;
@@ -856,12 +856,13 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
     return { content: JSON.stringify({ error: "This tool call was interrupted before completion and was not repeated." }), awaiting: false };
   }
   const rowID = newID("tcl");
+  const startedAt = Date.now();
   db.run("INSERT INTO tool_calls (id, thread_id, turn_id, call_id, tool_name, args, result, ok, error, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, 0, NULL, ?)", [rowID, threadID, turnID, call.id, call.function.name, JSON.stringify(args), nowISO()]);
   // Surface the tool call as an activity strip so the UI can render nested
   // work (delegated turns, deep research) without guessing from tokens.
   emit({ type: "tool.start", callID: call.id, name: call.function.name, preview: describePreview(call.function.name, args) });
   const storeResult = (content: string, ok: boolean, error: string | null): void => {
-    db.run("UPDATE tool_calls SET result = ?, ok = ?, error = ?, duration_ms = ? WHERE id = ?", [content, ok ? 1 : 0, error, 0, rowID]);
+    db.run("UPDATE tool_calls SET result = ?, ok = ?, error = ?, duration_ms = ? WHERE id = ?", [content, ok ? 1 : 0, error, Date.now() - startedAt, rowID]);
   };
   if (!tool || !allowlist.includes(call.function.name)) {
     const content = JSON.stringify({ error: `Tool is not available to this persona: ${call.function.name}` });
