@@ -4,8 +4,9 @@
  * reported by the daemon or absent — nothing is estimated.
  */
 import { useState } from "react";
-import { Plus, RefreshCw } from "lucide-react";
+import { ChevronDown, Plus, RefreshCw } from "lucide-react";
 import { format, type JobInfo, type MemoryItem, type TaskInfo } from "@agni/client";
+import type { RoutineInfo, RoutineRunInfo } from "@agni/protocol";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import { AgentAvatar, PresenceDot } from "./bits";
 import { AddProviderView } from "./AddProviderView";
@@ -18,8 +19,8 @@ export function InspectorView() {
   const agent = model.agent;
   const openTasks = snapshot.tasks.filter((task) => task.status !== "done");
   const completed = snapshot.tasks.filter((task) => task.status === "done").slice(0, 5);
-  const recurring = snapshot.jobs.filter((job) => job.everyMs !== undefined);
-  const scheduled = snapshot.jobs.filter((job) => job.everyMs === undefined);
+  const recurring = snapshot.jobs.filter((job) => job.routine !== undefined || job.everyMs !== undefined);
+  const scheduled = snapshot.jobs.filter((job) => job.routine === undefined && job.everyMs === undefined);
 
   return (
     <aside className="inspector">
@@ -102,7 +103,7 @@ export function InspectorView() {
             <strong>Nothing scheduled</strong>
             <span>
               Routines are background turns the daemon runs while you are away. Add one with
-              bun run job add "…" --every 1h.
+              bun run job add "…" --every 1h, or ask your bot to create one.
             </span>
           </div>
         ) : null}
@@ -316,8 +317,42 @@ export function TaskRow({ task }: { task: TaskInfo }) {
   );
 }
 
+const OUTCOME_LABEL: Record<RoutineRunInfo["outcome"], string> = {
+  ran: "Ran",
+  skipped_no_delta: "Skipped, no change",
+  failed: "Failed",
+  timed_out: "Timed out",
+  budget_exceeded: "Over budget",
+};
+
+/**
+ * "Daily at 09:00 · Europe/London" for the cron shapes routines are usually
+ * written in; anything else keeps the raw cron string.
+ */
+function humanCadence(cron: string, timezone: string): string {
+  const fields = cron.trim().split(/\s+/u);
+  const zone = ` · ${timezone}`;
+  if (fields.length !== 5) return `${cron}${zone}`;
+  const [minute = "", hour = "", dom, month, dow] = fields;
+  const hourStep = hour.match(/^\*\/(\d+)$/u);
+  const minuteStep = minute.match(/^\*\/(\d+)$/u);
+  if (minuteStep && hour === "*" && dom === "*" && month === "*" && dow === "*") {
+    return `Every ${format.count(Number(minuteStep[1]), "minute")}${zone}`;
+  }
+  if (minute === "0" && hourStep && dom === "*" && month === "*" && dow === "*") {
+    return `Every ${format.count(Number(hourStep[1]), "hour")}${zone}`;
+  }
+  if (/^\d+$/u.test(minute) && /^\d+$/u.test(hour) && Number(minute) < 60 && Number(hour) < 24 && dom === "*" && month === "*") {
+    const clock = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
+    if (dow === "*" || dow === "0-6") return `Daily at ${clock}${zone}`;
+    if (dow === "1-5") return `Weekdays at ${clock}${zone}`;
+  }
+  return `${cron}${zone}`;
+}
+
 function RoutineRow({ job }: { job: JobInfo }) {
   const model = useAppModel();
+  if (job.routine) return <CronRoutineRow job={job} routine={job.routine} />;
   const cadence = format.cadence(job.everyMs ?? null, format.parseISO(job.runAt));
   const timing =
     job.state === "running"
@@ -355,6 +390,115 @@ function RoutineRow({ job }: { job: JobInfo }) {
         title={job.enabled ? "Pause this routine" : "Resume this routine"}
         onChange={(event) => model.setRoutine(job, event.target.checked)}
       />
+    </div>
+  );
+}
+
+/**
+ * A routine with its details. The header is the summary; clicking it shows
+ * the last five runs, the config, and the actions. The full reports are in
+ * the conversation, so "Open report" goes there.
+ */
+function CronRoutineRow({ job, routine }: { job: JobInfo; routine: RoutineInfo }) {
+  const model = useAppModel();
+  const [expanded, setExpanded] = useState(false);
+  const runs = routine.recentRuns;
+  const last = runs[0];
+  const lastAt = last ? format.parseISO(last.at) : null;
+  const next = format.parseISO(job.runAt);
+  const skipped = runs.filter((run) => run.outcome === "skipped_no_delta");
+  const skippedTokens = skipped.reduce((sum, run) => sum + run.tokens, 0);
+  const timing =
+    job.state === "running" ? "Running now" : !job.enabled ? "Paused" : next ? `next ${format.stamp(next)}` : null;
+  const streak =
+    routine.failureStreak > 0
+      ? `${routine.failureStreak} failed in a row`
+      : routine.successStreak > 0
+        ? `${routine.successStreak} ok in a row`
+        : null;
+  const threadID = job.threadID;
+
+  return (
+    <div className="routine-row">
+      <button
+        type="button"
+        className="routine-main routine-toggle"
+        aria-expanded={expanded}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="routine-title">
+          {routine.name}
+          <ChevronDown size={12} className="routine-chevron" aria-hidden="true" />
+        </span>
+        <span className="routine-meta">
+          {[humanCadence(routine.cron, routine.timezone), timing].filter(Boolean).join(" · ")}
+        </span>
+        <span className={`routine-meta${routine.failureStreak > 0 ? " warning-text" : ""}`}>
+          {last
+            ? [
+                `Last ${OUTCOME_LABEL[last.outcome].toLowerCase()}`,
+                lastAt ? format.stamp(lastAt) : null,
+                streak,
+              ]
+                .filter(Boolean)
+                .join(" · ")
+            : ["No runs yet", streak].filter(Boolean).join(" · ")}
+        </span>
+      </button>
+      {expanded ? (
+        <div className="routine-detail">
+          {runs.length > 0 ? (
+            <div className="routine-meta">
+              {`${skipped.length} of last ${runs.length} runs skipped, ${skippedTokens.toLocaleString()} tokens`}
+            </div>
+          ) : null}
+          {runs.map((run, index) => (
+            <RoutineRunLine key={index} run={run} />
+          ))}
+          <Row label="Pre-flight" value={routine.preflight} />
+          <Row label="Max tokens" value={routine.maxTokens.toLocaleString()} />
+          <Row label="Max time" value={`${routine.maxExecutionMs.toLocaleString()} ms`} />
+          <Row
+            label="Domains"
+            value={routine.allowedDomains.length > 0 ? routine.allowedDomains.join(", ") : "none"}
+          />
+          <div className="routine-actions">
+            <button type="button" className="btn small" onClick={() => model.setRoutine(job, !job.enabled)}>
+              {job.enabled ? "Pause" : "Resume"}
+            </button>
+            <button type="button" className="btn small" onClick={() => model.runRoutine(job)}>
+              Run now
+            </button>
+            <button
+              type="button"
+              className="btn small"
+              disabled={job.state === "running"}
+              onClick={() => model.deleteTask(job)}
+            >
+              Delete
+            </button>
+            {threadID ? (
+              <button type="button" className="link" onClick={() => model.openThreadFromNotification(threadID)}>
+                Open report
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RoutineRunLine({ run }: { run: RoutineRunInfo }) {
+  const at = format.parseISO(run.at);
+  return (
+    <div className="routine-run">
+      <div className="routine-meta">
+        {[OUTCOME_LABEL[run.outcome], at ? format.stamp(at) : null, `${run.tokens.toLocaleString()} tokens`]
+          .filter(Boolean)
+          .join(" · ")}
+      </div>
+      {run.summary ? <div className="routine-meta tertiary">{format.preview(run.summary, 200)}</div> : null}
     </div>
   );
 }
