@@ -11,9 +11,10 @@ const SUMMARY_TAIL_BYTES = 200_000;
 /**
  * Fetch a public web page without accepting private hosts. Redirects are
  * followed (the web is full of them — youtu.be → youtube.com), but every hop
- * re-runs the same safety checks on its new host, within a hop cap.
+ * re-runs the same safety checks on its new host, within a hop cap. When
+ * `allowedHost` is given, a hop to a host it rejects fails before any request.
  */
-export async function fetchPage(rawURL: string): Promise<{ title: string|null; summary: string|null }> {
+export async function fetchPage(rawURL: string, allowedHost?: (url: URL) => boolean): Promise<{ title: string|null; summary: string|null }> {
   let current = parsePublicURL(rawURL);
   for (let hop = 0; ; hop += 1) {
     const response = await fetchOne(current);
@@ -24,6 +25,7 @@ export async function fetchPage(rawURL: string): Promise<{ title: string|null; s
     if (!location) throw new Error("redirect with no destination");
     if (hop >= MAX_REDIRECT_HOPS) throw new Error("too many redirects");
     current = parsePublicURL(new URL(location, current).toString());
+    if (allowedHost && !allowedHost(current)) throw new Error("redirect to a host outside the allowlist");
   }
 }
 
@@ -74,7 +76,7 @@ async function readPage(response: Response): Promise<{ title: string|null; summa
   } finally { reader.cancel().catch(() => {}); }
 }
 
-async function assertPublicHost(host: string): Promise<void> {
+export async function assertPublicHost(host: string): Promise<void> {
   const name = host.replace(/^\[|\]$/g, "").toLowerCase();
   if (name === "localhost" || name.endsWith(".localhost") || name.endsWith(".local") || name.endsWith(".internal")) throw new Error("private host blocked");
   const addresses = isIP(name) ? [{ address: name }] : await lookup(name, { all: true, verbatim: true });

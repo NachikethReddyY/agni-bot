@@ -32,6 +32,8 @@ export interface ToolContext {
     /** Short summary passed in by the delegating agent. */
     handoffSummary: string | null;
   };
+  /** Routine egress: true when a URL's host is on the run's allowlist. Absent outside routines. */
+  hostAllowed?: (url: URL) => boolean;
 }
 
 export type ToolKind = "static" | "dynamic";

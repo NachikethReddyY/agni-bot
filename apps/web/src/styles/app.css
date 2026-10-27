@@ -2814,9 +2814,49 @@ button:disabled {
 
 .routine-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 10px;
   padding: 6px 0;
+}
+
+.routine-toggle {
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+}
+
+.routine-chevron {
+  margin-left: 4px;
+  color: var(--ink-tertiary);
+  vertical-align: -1px;
+}
+
+.routine-toggle[aria-expanded="true"] .routine-chevron {
+  transform: rotate(180deg);
+}
+
+.routine-detail {
+  display: flex;
+  flex-direction: column;
+  flex-basis: 100%;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--hairline);
+}
+
+.routine-run {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.routine-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .routine-main {

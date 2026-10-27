@@ -930,4 +930,44 @@ export const MIGRATIONS: Migration[] = [
     sql: `UPDATE agents SET default_name = 'New Bot', display_name = 'New Bot'
       WHERE id = 'ea' AND display_name = 'Agni Bot';`,
   },
+  {
+    id: 41,
+    name: "routines",
+    sql: `
+      CREATE TABLE routines (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        cron TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        misfire TEXT NOT NULL DEFAULT 'run_once',
+        preflight TEXT NOT NULL,
+        max_tokens INTEGER NOT NULL,
+        max_execution_ms INTEGER NOT NULL,
+        allowed_domains TEXT NOT NULL DEFAULT '[]',
+        thread_id TEXT,
+        last_state_hash TEXT,
+        state_context TEXT,
+        success_streak INTEGER NOT NULL DEFAULT 0,
+        failure_streak INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX routines_job_id ON routines(job_id);
+      CREATE TABLE routine_runs (
+        id TEXT PRIMARY KEY,
+        routine_id TEXT NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        outcome TEXT NOT NULL,
+        tokens INTEGER NOT NULL DEFAULT 0,
+        summary TEXT,
+        tool_trace TEXT,
+        error TEXT
+      );
+      CREATE INDEX routine_runs_routine_started ON routine_runs(routine_id, started_at);
+    `,
+  },
 ];

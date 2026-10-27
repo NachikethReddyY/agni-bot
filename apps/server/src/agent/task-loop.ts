@@ -37,6 +37,7 @@ import { appendChannelMessage, getChannelSummary } from "../stores/channels";
 import { compactChannelHistory } from "./compactor";
 import { GuardrailError, enterDelegation, rootGuardrail, stepGuardrail, type GuardrailState } from "./guardrails";
 import type { MailAccountResolver } from "../plugins/credentials";
+import { domainAllowed } from "../routines/egress";
 
 export interface TaskTurnSettings {
   firstTokenTimeoutMs: number;
@@ -100,6 +101,12 @@ export interface TaskTurnRun {
     /** The channel the owner is watching. */
     parentChannelID: string | null;
   };
+  /** Restrict task tools to this list, intersected with the persona's tools. */
+  toolAllowlist?: string[];
+  /** Optional output-token budget for bounded background work such as routines. */
+  maxTokens?: number;
+  /** Optional domain allowlist for web tools. */
+  allowedDomains?: string[];
 }
 export interface TaskTurnResult { turnID: string; text: string; stopReason: StopReason }
 
@@ -298,13 +305,18 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // separate messages; `run_privileged` is only meaningful next to `bash`.
   // `ask` puts a question to the owner — every agent may do that. A draft
   // only makes sense to an agent that can send the mail.
-  const effectiveTools = [...new Set([
-    ...memoryTools,
-    "say",
-    "ask",
-    ...(memoryTools.includes("bash") ? ["run_privileged"] : []),
-    ...(memoryTools.includes("mail_send") ? ["draft_email"] : []),
-  ])];
+  const effectiveTools = run.toolAllowlist
+    ? [...new Set(run.toolAllowlist.filter((name) => memoryTools.includes(name)))]
+    : [...new Set([
+      ...memoryTools,
+      "say",
+      "ask",
+      ...(memoryTools.includes("bash") ? ["run_privileged"] : []),
+      ...(memoryTools.includes("mail_send") ? ["draft_email"] : []),
+    ])];
+  // Most turns have no generated-token ceiling. Scheduled routines may set an
+  // explicit per-run cap so their own cost bound survives the shared loop.
+  const tokenLimit = run.maxTokens === undefined ? null : Math.max(1, run.maxTokens);
   const dynamicHints = taskToolHints(registry, effectiveTools);
   if (dynamicHints.length > 0) {
     (globalThis as any).__AGNI_DYNAMIC_TOOL_HINTS__ = dynamicHints;
@@ -513,6 +525,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         firstTokenTimeoutMs: settings.firstTokenTimeoutMs,
         tools,
         toolChoice: tools.length ? "auto" : "none",
+        ...(tokenLimit === null ? {} : { maxTokens: Math.min(2_048, tokenLimit - tokenCount) }),
         onDelta: (delta: string) => {
           activeStepText += delta;
           // Hold channel turns until the step is known to be the answer: a
@@ -524,6 +537,13 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
       // Counted for the record (the debugger shows it), not enforced.
       tokenCount += result.outputTokens ?? estimateTokens(result.text + JSON.stringify(result.toolCalls ?? []));
       usage = { provider: result.provider, model: result.model, inputTokens: result.inputTokens, outputTokens: result.outputTokens, latencyMs: result.latencyMs };
+      if (tokenLimit !== null && tokenCount >= tokenLimit) {
+        stopReason = "budget";
+        answerText = "This run reached its output-token limit before it could finish.";
+        messages.push({ role: "assistant", content: answerText });
+        publish(answerText);
+        break;
+      }
       if (!result.toolCalls?.length) {
         answerText = result.text;
         messages.push(assistantMessage(result.text, result.reasoning));
@@ -565,7 +585,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
           continue;
         }
         recentCalls.set(signature, stepCount);
-        const callResult = await executeTool(db, threadID, turnID, call, effectiveTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail, peerInput);
+        const callResult = await executeTool(db, threadID, turnID, call, effectiveTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail, peerInput, run.allowedDomains);
         let content = callResult.content;
         if (looking && offRoadSteps === OFF_ROAD_NUDGE_AT && !offRoadNudged && !acted) {
           offRoadNudged = true;
@@ -780,7 +800,7 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
   registry: ReturnType<typeof buildTaskToolRegistry>, broker: ApprovalBroker, signal: AbortSignal,
   emit: (frame: ServerFrameBody) => void,
   setState: (state: string) => void,
-  persona: Persona, guardrail: GuardrailState, peerInput?: boolean,
+  persona: Persona, guardrail: GuardrailState, peerInput?: boolean, allowedDomains?: string[],
 ): Promise<{ content: string; awaiting: boolean }> {
   const tool = registry.get(call.function.name);
   let args: Record<string, unknown> = {};
@@ -804,6 +824,21 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
     storeResult(content, false, "tool_not_allowed");
     emit({ type: "tool.end", callID: call.id, ok: false, preview: `not available to ${persona.id}` });
     return { content, awaiting: false };
+  }
+  if (allowedDomains && (call.function.name === "web_fetch" || call.function.name === "web_search")) {
+    if (call.function.name === "web_fetch") {
+      if (typeof args.url !== "string" || !domainAllowed(args.url, allowedDomains)) {
+        const content = JSON.stringify({ error: "domain is not allowed" });
+        storeResult(content, false, "domain_not_allowed");
+        emit({ type: "tool.end", callID: call.id, ok: false, preview: "domain not allowed" });
+        return { content, awaiting: false };
+      }
+    } else if (allowedDomains.length === 0) {
+      const content = JSON.stringify({ error: "domain is not allowed" });
+      storeResult(content, false, "domain_not_allowed");
+      emit({ type: "tool.end", callID: call.id, ok: false, preview: "domain not allowed" });
+      return { content, awaiting: false };
+    }
   }
   if (broker.requiresApproval(tool.name, args)) {
     setState("awaiting_approval");
@@ -832,10 +867,18 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
           currentAgentID: guardrail.currentAgentID,
           handoffSummary: guardrail.handoffSummary,
         },
+        hostAllowed: allowedDomains ? (url: URL) => domainAllowed(url.toString(), allowedDomains) : undefined,
       }),
       new Promise<never>((_, reject) => combined.addEventListener("abort", () => reject(new Error("tool timed out or was cancelled")), { once: true })),
     ]);
-    const content = truncate(JSON.stringify(result), MAX_TOOL_RESULT_CHARS);
+    let safeResult = result;
+    if (allowedDomains && call.function.name === "web_search" && typeof result === "object" && result !== null && Array.isArray((result as { results?: unknown }).results)) {
+      safeResult = { ...(result as Record<string, unknown>), results: (result as { results: unknown[] }).results.filter((item) => {
+        if (typeof item !== "object" || item === null || typeof (item as { url?: unknown }).url !== "string") return false;
+        return domainAllowed((item as { url: string }).url, allowedDomains);
+      }) };
+    }
+    const content = truncate(JSON.stringify(safeResult), MAX_TOOL_RESULT_CHARS);
     storeResult(content, true, null);
     emit({ type: "tool.end", callID: call.id, ok: true, preview: toolPreview(result) });
     return { content, awaiting: false };

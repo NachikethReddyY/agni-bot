@@ -154,6 +154,41 @@ export const JOB_ACTIONS = ["pause", "resume", "run"] as const;
 export const JobActionSchema = z.enum(JOB_ACTIONS);
 export type JobAction = z.infer<typeof JobActionSchema>;
 
+/** What happened on one routine run (docs/routines-plan.md §2). */
+export const RUN_OUTCOMES = ["ran", "skipped_no_delta", "failed", "timed_out", "budget_exceeded"] as const;
+export const RunOutcomeSchema = z.enum(RUN_OUTCOMES);
+export type RunOutcome = z.infer<typeof RunOutcomeSchema>;
+
+/** One remembered routine run, as the Routines panel lists it. */
+export const RoutineRunInfoSchema = z.object({
+  at: z.string(),
+  outcome: RunOutcomeSchema,
+  tokens: z.number().int().nonnegative(),
+  summary: z.string().optional(),
+});
+export type RoutineRunInfo = z.infer<typeof RoutineRunInfoSchema>;
+
+/**
+ * Routines metadata, on `routine`-kind jobs only. Optional like the
+ * `lists` field on `task.list.ok` (additive v2): non-routine jobs omit it
+ * and clients that do not know it ignore it.
+ */
+export const RoutineInfoSchema = z.object({
+  name: z.string(),
+  cron: z.string(),
+  timezone: z.string(),
+  misfire: z.enum(["skip", "run_once"]),
+  preflight: z.enum(["http", "sql", "none"]),
+  maxTokens: z.number().int().positive(),
+  maxExecutionMs: z.number().int().positive(),
+  allowedDomains: z.array(z.string()),
+  successStreak: z.number().int().nonnegative(),
+  failureStreak: z.number().int().nonnegative(),
+  /** At most the last five runs, newest first. */
+  recentRuns: z.array(RoutineRunInfoSchema).max(5),
+});
+export type RoutineInfo = z.infer<typeof RoutineInfoSchema>;
+
 /** One job, as listed by `job.list` (the Routines panel reads these). */
 export const JobInfoSchema = z.object({
   id: z.string().min(1),
@@ -168,6 +203,8 @@ export const JobInfoSchema = z.object({
   title: z.string().optional(),
   threadID: z.string().optional(),
   lastResult: z.string().optional(),
+  /** Routine details; set only on `routine`-kind jobs (additive v2). */
+  routine: RoutineInfoSchema.optional(),
 });
 export type JobInfo = z.infer<typeof JobInfoSchema>;
 
@@ -401,6 +438,8 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
   /** Read the routine list, or act on one routine (pause, resume, run now). */
   z.object({ type: z.literal("job.list"), limit: z.number().int().positive().max(200).optional() }),
   z.object({ type: z.literal("job.set"), jobID: z.string().min(1), action: JobActionSchema }),
+  /** Owner-only: replace a routine's web domain allowlist (additive v2). Bots cannot send this. */
+  z.object({ type: z.literal("routine.domains.set"), jobID: z.string().min(1), domains: z.array(z.string().max(253)).max(20) }),
   /** Delete a task unless it is currently running. */
   z.object({ type: z.literal("job.delete"), jobID: z.string().min(1) }),
   z.object({ type: z.literal("task.list"), status: z.enum(["open", "done", "snoozed", "all"]).optional(), limit: z.number().int().positive().max(200).optional() }),

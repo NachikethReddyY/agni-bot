@@ -18,6 +18,7 @@ import { registerTaggerJob } from "./tagger";
 import { registerMemoryJobs } from "./memory";
 import { registerRolloverJob } from "./rollover";
 import { registerTaskReminderJob } from "./task-reminders";
+import { registerRoutineJob } from "./routine";
 
 export interface AllJobsDeps {
   db: Database;
@@ -30,6 +31,7 @@ export interface AllJobsDeps {
 /** Register every job kind the daemon knows how to run. */
 export function registerAllJobs(runner: JobRunner, deps: AllJobsDeps): void {
   registerTurnJob(runner, { db: deps.db, router: deps.router, settings: deps.settings, emit: deps.emit });
+  registerRoutineJob(runner, { db: deps.db, router: deps.router, settings: deps.settings, emit: deps.emit });
   registerBriefJob(runner, { db: deps.db, emit: deps.emit });
   registerTaskReminderJob(runner, { db: deps.db, emit: deps.emit });
   // TAG-001: memory is extracted in batches, never on the path of a turn.

@@ -138,8 +138,10 @@ export interface WebFetchArgs {
 }
 
 /** Fetch page content. Uses Firecrawl (cloud or self-hosted) for JS-rendered pages, else fetchPage. */
-export async function webFetch(args: WebFetchArgs): Promise<{ title: string | null; summary: string | null; url: string }> {
-  const base = firecrawlBase();
+export async function webFetch(args: WebFetchArgs, allowedHost?: (url: URL) => boolean): Promise<{ title: string | null; summary: string | null; url: string }> {
+  // Firecrawl follows redirects on its side, out of reach of allowedHost, so a
+  // host-restricted (routine) fetch always goes through fetchPage.
+  const base = allowedHost ? null : firecrawlBase();
   if (base) {
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -164,7 +166,7 @@ export async function webFetch(args: WebFetchArgs): Promise<{ title: string | nu
     }
   }
 
-  const page = await fetchPage(args.url);
+  const page = await fetchPage(args.url, allowedHost);
   let summary = page.summary ?? null;
   if (args.maxChars && summary && summary.length > args.maxChars) {
     summary = summary.slice(0, args.maxChars) + "…";

@@ -81,7 +81,7 @@ assistant" framing. Treat those as history, not as current status.
 - Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, …), body wrapped
   at 72 characters.
 - Store schemas and migrations live in `apps/server/src/db/migrations.ts` —
-  append numbered migrations, never edit applied ones. There are currently 40.
+  append numbered migrations, never edit applied ones. There are currently 41.
 - Generated artifacts and evidence stay local (`artifacts/`, `.evidence/` are
   gitignored).
 

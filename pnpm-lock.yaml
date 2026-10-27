@@ -167,7 +167,7 @@ importers:
   .:
     devDependencies:
       '@types/bun':
-        specifier: latest
+        specifier: 1.4.3
         version: 1.4.3
       turbo:
         specifier: ^2.11.9
@@ -183,6 +183,9 @@ importers:
       '@agni/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      croner:
+        specifier: ^11.0.0
+        version: 11.0.0
       image-size:
         specifier: ^2.0.4
         version: 2.0.4
@@ -194,7 +197,7 @@ importers:
         version: 4.6.7
     devDependencies:
       '@types/bun':
-        specifier: latest
+        specifier: 1.4.3
         version: 1.4.3
       typescript:
         specifier: ^7
@@ -281,7 +284,7 @@ importers:
         version: 4.6.7
     devDependencies:
       '@types/bun':
-        specifier: latest
+        specifier: 1.4.3
         version: 1.4.3
       typescript:
         specifier: ^7
@@ -294,7 +297,7 @@ importers:
         version: link:../../packages/protocol
     devDependencies:
       '@types/bun':
-        specifier: latest
+        specifier: 1.4.3
         version: 1.4.3
       typescript:
         specifier: ^7
@@ -303,7 +306,7 @@ importers:
   tools/mock-provider:
     devDependencies:
       '@types/bun':
-        specifier: latest
+        specifier: 1.4.3
         version: 1.4.3
       typescript:
         specifier: ^7
@@ -878,6 +881,10 @@ packages:
 
   comma-separated-tokens@2.0.3:
     resolution: {integrity: sha512-Fu4hJdvzeylCfQPp9SGWidpzrMs7tTrlu6Vb8XGaRGck8QSNZJJp538Wrb60Lax4fPwR64ViY468OIUTbRlGZg==}
+
+  croner@11.0.0:
+    resolution: {integrity: sha512-T17ADjdttrVToyzLpLq9Xb9xzcMwpQ/M3Qs9szhh0MVNTbv6NWQ9OFYa2qlzPYXFMn+uoDlnW1IpIv6cAvFtyA==}
+    engines: {node: '>=18.0'}
 
   css-tree@3.2.1:
     resolution: {integrity: sha512-X7sjQzceUhu1u7Y/ylrRZFU2FS6LRiFVp6rKLPg23y3x3c3DOKAwuXGDp+PAGjh6CSnCjYeAul8pcT8bAl+lSA==}
@@ -1964,6 +1971,8 @@ snapshots:
   character-reference-invalid@2.0.1: {}
 
   comma-separated-tokens@2.0.3: {}
+
+  croner@11.0.0: {}
 
   css-tree@3.2.1:
     dependencies:

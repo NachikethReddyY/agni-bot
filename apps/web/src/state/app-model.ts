@@ -1011,6 +1011,12 @@ export class AppModel {
     void connection.send({ type: "job.set", jobID: job.id, action: "run" }).catch(() => undefined);
   }
 
+  setRoutineDomains(job: JobInfo, domains: string[]): void {
+    const connection = this.connection;
+    if (!connection) return;
+    void connection.send({ type: "routine.domains.set", jobID: job.id, domains }).catch(() => undefined);
+  }
+
   openTask(_job: JobInfo): void {
     // A task's results land as session blocks inside the agent's one
     // conversation — there is no separate chat window to open.
