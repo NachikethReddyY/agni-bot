@@ -14,6 +14,21 @@ function bareHost(entry: string): string | null {
   return host;
 }
 
+/**
+ * Validate owner-entered domains for storage. Throws on any malformed entry
+ * rather than dropping it, so a typo is visible instead of silently narrowing
+ * or widening what the routine can reach.
+ */
+export function normalizeAllowedDomains(entries: string[]): string[] {
+  const hosts = new Set<string>();
+  for (const entry of entries) {
+    const host = bareHost(entry);
+    if (!host || !/^[a-z0-9.-]+$/.test(host)) throw new Error(`not a bare domain: "${entry}"`);
+    hosts.add(host);
+  }
+  return [...hosts];
+}
+
 /** True when `url` is http(s) and its host is an allowed host or subdomain. */
 export function domainAllowed(url: string, allowed: string[]): boolean {
   let parsed: URL;

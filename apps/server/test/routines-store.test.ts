@@ -121,6 +121,16 @@ describe("routine store", () => {
     db.close();
   });
 
+  test("owner-set allowedDomains persist and clear", () => {
+    const db = freshDb();
+    const routine = makeRoutine({ allowedDomains: [] });
+    insertRoutine(db, routine);
+    updateRoutineState(db, routine.id, { allowedDomains: ["news.example.com"] });
+    expect(getRoutine(db, routine.id)?.allowedDomains).toEqual(["news.example.com"]);
+    updateRoutineState(db, routine.id, { allowedDomains: [] });
+    expect(getRoutine(db, routine.id)?.allowedDomains).toEqual([]);
+  });
+
   test("getRoutineByJobID and listRoutines", () => {
     const db = freshDb();
     const first = makeRoutine({ createdAt: "2026-01-01T00:00:00.000Z" });

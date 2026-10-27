@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { domainAllowed } from "../src/routines/egress";
+import { domainAllowed, normalizeAllowedDomains } from "../src/routines/egress";
 
 describe("routine egress allowlist", () => {
   test("allows the exact host and its subdomains", () => {
@@ -26,5 +26,14 @@ describe("routine egress allowlist", () => {
     expect(domainAllowed("https://evil.com/", ["https://evil.com"])).toBe(false);
     expect(domainAllowed("https://evil.com/", ["evil.com/path"])).toBe(false);
     expect(domainAllowed("https://evil.com/", ["evil.com:8443"])).toBe(false);
+  });
+
+  test("owner-entered domains are lowercased, de-duplicated, and malformed ones throw", () => {
+    expect(normalizeAllowedDomains([" Example.COM ", "example.com", "docs.example.org"])).toEqual(["example.com", "docs.example.org"]);
+    expect(normalizeAllowedDomains([])).toEqual([]);
+    expect(() => normalizeAllowedDomains(["https://example.com"])).toThrow("not a bare domain");
+    expect(() => normalizeAllowedDomains(["example.com/x"])).toThrow("not a bare domain");
+    expect(() => normalizeAllowedDomains(["*.example.com"])).toThrow("not a bare domain");
+    expect(() => normalizeAllowedDomains([""])).toThrow("not a bare domain");
   });
 });

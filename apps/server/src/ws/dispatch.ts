@@ -72,6 +72,7 @@ import { pluginMailResolver } from "../plugins/credentials";
 import type { FrameLog } from "./frame-log";
 import { activateAppearanceProfile, deleteAppearanceProfile, listAppearanceProfiles, saveAppearanceProfile } from "../stores/appearance";
 import { getRoutineByJobID, listRuns, updateRoutineState } from "../stores/routines";
+import { normalizeAllowedDomains } from "../routines/egress";
 import { deleteRoutineJob } from "../tools/routines-tool";
 
 export interface Session {
@@ -157,6 +158,8 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleJobList(deps, session, frame);
     case "job.set":
       return handleJobSet(deps, session, frame);
+    case "routine.domains.set":
+      return handleRoutineDomainsSet(deps, session, frame);
     case "job.delete":
       return handleJobDelete(deps, session, frame);
     case "task.list":
@@ -1288,6 +1291,25 @@ function handleJobSet(
     }
   }
   // The write answers with the fresh list, so toggles never drift from truth.
+  deps.reply({ type: "job.list.ok", jobs: jobSnapshot(deps.db, 50) });
+}
+
+function handleRoutineDomainsSet(
+  deps: DispatchDeps,
+  session: Session,
+  frame: Extract<ClientFrame, { type: "routine.domains.set" }>,
+): void {
+  if (!requireAuth(deps, session)) return;
+  const job = getJobByPrefix(deps.db, frame.jobID);
+  const routine = job ? getRoutineByJobID(deps.db, job.id) : null;
+  if (!routine) return sendError(deps, session, "unknown_job", `no routine ${frame.jobID}`);
+  let domains: string[];
+  try {
+    domains = normalizeAllowedDomains(frame.domains);
+  } catch (error) {
+    return sendError(deps, session, "invalid_domains", error instanceof Error ? error.message : String(error));
+  }
+  updateRoutineState(deps.db, routine.id, { allowedDomains: domains });
   deps.reply({ type: "job.list.ok", jobs: jobSnapshot(deps.db, 50) });
 }
 

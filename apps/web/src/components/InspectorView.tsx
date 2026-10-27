@@ -224,6 +224,31 @@ export function InspectorView() {
   );
 }
 
+/** Owner-only: the bot cannot widen its own egress, so this is the only place domains change. */
+function DomainsEditor({ job, domains }: { job: JobInfo; domains: string[] }) {
+  const model = useAppModel();
+  const [draft, setDraft] = useState(domains.join(", "));
+  const save = () => model.setRoutineDomains(job, draft.split(",").map((entry) => entry.trim()).filter(Boolean));
+  return (
+    <div className="kv-row">
+      <span className="kv-label">Domains</span>
+      <input
+        className="kv-value"
+        aria-label="Routine domains"
+        placeholder="none"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") save();
+        }}
+      />
+      <button type="button" className="btn small" onClick={save}>
+        Save
+      </button>
+    </div>
+  );
+}
+
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="kv-row">
@@ -458,10 +483,7 @@ function CronRoutineRow({ job, routine }: { job: JobInfo; routine: RoutineInfo }
           <Row label="Pre-flight" value={routine.preflight} />
           <Row label="Max tokens" value={routine.maxTokens.toLocaleString()} />
           <Row label="Max time" value={`${routine.maxExecutionMs.toLocaleString()} ms`} />
-          <Row
-            label="Domains"
-            value={routine.allowedDomains.length > 0 ? routine.allowedDomains.join(", ") : "none"}
-          />
+          <DomainsEditor job={job} domains={routine.allowedDomains} />
           <div className="routine-actions">
             <button type="button" className="btn small" onClick={() => model.setRoutine(job, !job.enabled)}>
               {job.enabled ? "Pause" : "Resume"}

@@ -438,6 +438,8 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
   /** Read the routine list, or act on one routine (pause, resume, run now). */
   z.object({ type: z.literal("job.list"), limit: z.number().int().positive().max(200).optional() }),
   z.object({ type: z.literal("job.set"), jobID: z.string().min(1), action: JobActionSchema }),
+  /** Owner-only: replace a routine's web domain allowlist (additive v2). Bots cannot send this. */
+  z.object({ type: z.literal("routine.domains.set"), jobID: z.string().min(1), domains: z.array(z.string().max(253)).max(20) }),
   /** Delete a task unless it is currently running. */
   z.object({ type: z.literal("job.delete"), jobID: z.string().min(1) }),
   z.object({ type: z.literal("task.list"), status: z.enum(["open", "done", "snoozed", "all"]).optional(), limit: z.number().int().positive().max(200).optional() }),

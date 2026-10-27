@@ -73,7 +73,19 @@ describe("the routines panel", () => {
     expect(screen.getByText(/^No runs yet/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Morning brief/ }));
     expect(screen.queryByText(/runs skipped/)).not.toBeInTheDocument();
-    expect(screen.getByText("none")).toBeInTheDocument();
+    expect(screen.getByLabelText("Routine domains")).toHaveValue("");
+  });
+
+  it("saves the owner's domain list through the owner-only frame", () => {
+    const model = modelWithJobs([routineJob({ allowedDomains: [] })]);
+    const setRoutineDomains = vi.spyOn(model, "setRoutineDomains").mockImplementation(() => undefined);
+    renderInspector(model);
+    fireEvent.click(screen.getByRole("button", { name: /Morning brief/ }));
+
+    fireEvent.change(screen.getByLabelText("Routine domains"), { target: { value: " news.example.com, docs.example.org ," } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(setRoutineDomains).toHaveBeenCalledWith(expect.objectContaining({ id: "job_routine" }), ["news.example.com", "docs.example.org"]);
   });
 
   it("counts skipped runs and their tokens for the zero-token gate", () => {
@@ -98,7 +110,7 @@ describe("the routines panel", () => {
     expect(screen.getByText("Three stories.")).toBeInTheDocument();
     expect(screen.getByText("Nothing new.")).toBeInTheDocument();
     expect(screen.getByText("812 tokens", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("news.example.com")).toBeInTheDocument();
+    expect(screen.getByLabelText("Routine domains")).toHaveValue("news.example.com");
     expect(screen.getByText((4000).toLocaleString())).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));

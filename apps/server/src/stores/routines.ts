@@ -152,10 +152,14 @@ export function listRoutines(db: Database): Routine[] {
 export function updateRoutineState(
   db: Database,
   id: string,
-  patch: Partial<Pick<Routine, "threadID" | "lastStateHash" | "stateContext" | "successStreak" | "failureStreak">>,
+  patch: Partial<Pick<Routine, "threadID" | "lastStateHash" | "stateContext" | "successStreak" | "failureStreak" | "allowedDomains">>,
 ): void {
   const sets: string[] = [];
   const values: (string | number | null)[] = [];
+  if ("allowedDomains" in patch) {
+    sets.push("allowed_domains = ?");
+    values.push(JSON.stringify(patch.allowedDomains ?? []));
+  }
   if ("threadID" in patch) {
     sets.push("thread_id = ?");
     values.push(patch.threadID ?? null);
