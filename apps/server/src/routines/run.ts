@@ -10,7 +10,7 @@ import { getJob, setJobEnabled } from "../stores/jobs";
 import { newID, nowISO } from "../util/ids";
 import { runPreflight } from "./preflight";
 import { buildRoutinePrompt, parseRoutineState } from "./prompt";
-import { recordRun, updateRoutineState } from "../stores/routines";
+import { getRoutine, recordRun, updateRoutineState } from "../stores/routines";
 import { ROUTINE_LIMITS, type Routine, type RoutineRun } from "./types";
 
 export const ROUTINE_TOOL_ALLOWLIST = [
@@ -40,8 +40,11 @@ function record(deps: RoutineRunDeps, run: RoutineRun): RoutineRun {
 }
 
 function updateStreak(deps: RoutineRunDeps, routine: Routine, succeeded: boolean): number {
-  const successStreak = succeeded ? routine.successStreak + 1 : 0;
-  const failureStreak = succeeded ? 0 : routine.failureStreak + 1;
+  // Re-read: pause, resume or run-now may have changed the streak mid-run.
+  const current = getRoutine(deps.db, routine.id);
+  if (!current) return 0;
+  const successStreak = succeeded ? current.successStreak + 1 : 0;
+  const failureStreak = succeeded ? 0 : current.failureStreak + 1;
   updateRoutineState(deps.db, routine.id, { successStreak, failureStreak });
   return failureStreak;
 }

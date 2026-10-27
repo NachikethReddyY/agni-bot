@@ -235,6 +235,16 @@ describe("routine execution", () => {
     expect(pauseNotifies()).toBe(2);
   });
 
+  test("a run that started before a resume does not re-pause from its stale streak", async () => {
+    const r = routine({ preflight: { kind: "none" } });
+    const database = setup({ ...r, failureStreak: 0 });
+    const fake = routerWith(() => { throw new Error("provider failure"); });
+    // Snapshot taken at streak 4; the store already holds 0 after a resume.
+    await executeRoutine({ db: database, router: fake.router, settings, emit: () => {} }, { ...r, failureStreak: 4 });
+    expect(getRoutine(database, r.id)).toMatchObject({ failureStreak: 1 });
+    expect(database.query("SELECT enabled FROM jobs WHERE id = ?").get(r.jobID)).toEqual({ enabled: 1 });
+  });
+
   test("an oversized state block keeps the prior state and records a warning", async () => {
     const r = routine({ preflight: { kind: "none" } });
     const database = setup(r);
