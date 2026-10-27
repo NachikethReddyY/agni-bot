@@ -11,7 +11,6 @@ import { verifyToken } from "../auth/tokens";
 import type { Config } from "../config";
 import type { Router } from "../models/router";
 import { dayTotals } from "../stores/usage";
-import { MAX_STEPS, MAX_TOKENS } from "../agent/task-loop";
 
 const headers = {
   "access-control-allow-origin": "*",
@@ -55,8 +54,6 @@ export function debugOverview(db: Database, router: Router, config: Config, limi
   return {
     serverTime: new Date().toISOString(),
     limits: {
-      maxSteps: MAX_STEPS,
-      maxTokens: MAX_TOKENS,
       turnTimeoutMs: config.turnTimeoutMs,
       firstTokenTimeoutMs: config.firstTokenTimeoutMs,
     },

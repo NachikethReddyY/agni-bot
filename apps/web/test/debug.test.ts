@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildFlow, diagnoseTurn, type DebugLimits, type DebugTurnDetail } from "../src/state/debug";
 
-const limits: DebugLimits = { maxSteps: 16, maxTokens: 16_000, turnTimeoutMs: 120_000, firstTokenTimeoutMs: 30_000 };
+const limits: DebugLimits = { turnTimeoutMs: 120_000, firstTokenTimeoutMs: 30_000 };
 
 function detail(overrides: Partial<DebugTurnDetail> = {}): DebugTurnDetail {
   return {
@@ -25,20 +25,19 @@ const call = (id: string, name: string, ok = true, extra: Record<string, unknown
 });
 
 describe("bot debugger diagnosis", () => {
-  it("flags the tool limit, failures, loops and slow tools", () => {
+  it("flags old budget stops, failures, loops and slow tools", () => {
     const tools = Array.from({ length: 16 }, (_, i) => call(`c${i}`, i < 3 ? "search_email" : `tool_${i}`, i !== 5, i === 7 ? { duration_ms: 15_000 } : {}));
     const findings = diagnoseTurn(detail({
-      turn: { ...detail().turn, stop_reason: "end" },
+      turn: { ...detail().turn, stop_reason: "budget" },
       tools,
       session: { state: "done", step_count: 16, token_count: 900, max_steps: 16, max_tokens: 16_000, summary: null, updated_at: "" },
       context: [{ role: "user", content: "go" }],
     }), limits);
     const titles = findings.map((finding) => finding.title);
-    expect(titles[0]).toBe("Hit the 16-tool limit");
+    expect(titles[0]).toBe("Hit the old tool/token limit after 16 tool calls");
     expect(titles).toContain("1 tool call failed");
     expect(titles).toContain("Repeated the same call 3×");
     expect(titles).toContain("Slow tool: tool_7 took 15s");
-    expect(titles).toContain("Ended without a written answer");
   });
 
   it("catches a tool that ran but handed back an error", () => {

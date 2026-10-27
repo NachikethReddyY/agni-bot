@@ -85,7 +85,7 @@ export function DebugView() {
 
   const turns = (overview?.turns ?? []).filter((turn) =>
     (agentFilter === "all" || turn.agent_id === agentFilter)
-    && (!problemsOnly || (overview && isProblem(turn, overview.limits)))
+    && (!problemsOnly || isProblem(turn))
     && (!search.trim() || `${turn.tool_names ?? ""} ${turn.id} ${turn.stop_reason ?? ""}`.toLowerCase().includes(search.trim().toLowerCase())),
   );
 
@@ -124,7 +124,7 @@ export function DebugView() {
           <div className="debug-turn-list">
             {turns.length === 0 ? <div className="debug-empty">{overview ? "No turns match." : "Loading…"}</div> : null}
             {overview && turns.map((turn) => (
-              <TurnRow key={turn.id} turn={turn} limits={overview.limits} name={agentName(turn.agent_id)} active={turn.id === selected} onPick={() => setSelected(turn.id)} />
+              <TurnRow key={turn.id} turn={turn} name={agentName(turn.agent_id)} active={turn.id === selected} onPick={() => setSelected(turn.id)} />
             ))}
           </div>
         </aside>
@@ -151,7 +151,7 @@ function TopStats({ overview }: { overview: DebugOverview }) {
       <Stat label="Providers" value={providers.length === 0 ? "none" : `${providers.filter((provider) => provider.available).length}/${providers.length} up`} bad={providers.every((provider) => !provider.available)} />
       <Stat label="Model streams" value={`${capacity.active}/${capacity.capacity}`} bad={capacity.active >= capacity.capacity} />
       <Stat label="Today" value={`${usageToday.turns} turns · ${compact(usageToday.inputTokens)} in · ${compact(usageToday.outputTokens)} out`} />
-      <Stat label="Limits per turn" value={`${limits.maxSteps} tools · ${compact(limits.maxTokens)} tokens · ${Math.round(limits.turnTimeoutMs / 1000)}s`} />
+      <Stat label="Limit per turn" value={`${Math.round(limits.turnTimeoutMs / 1000)}s, no tool or token cap`} />
     </div>
   );
 }
@@ -178,16 +178,16 @@ function RunningNow({ overview, agentName, onPick }: { overview: DebugOverview; 
           <span className={`debug-dot ${session.state === "running" ? "working" : "waiting"}`} />
           <span className="debug-running-name">{agentName(session.agent_id)}</span>
           <span className="machine muted">{session.state.replace("_", " ")}</span>
-          <Meter value={session.step_count} max={session.max_steps} label="tools" />
+          <span className="machine muted">{session.step_count} tools</span>
         </button>
       ))}
     </div>
   );
 }
 
-function TurnRow({ turn, limits, name, active, onPick }: { turn: DebugTurnRow; limits: DebugLimits; name: string; active: boolean; onPick: () => void }) {
+function TurnRow({ turn, name, active, onPick }: { turn: DebugTurnRow; name: string; active: boolean; onPick: () => void }) {
   const steps = stepsUsed(turn);
-  const problem = isProblem(turn, limits);
+  const problem = isProblem(turn);
   return (
     <button type="button" className={`debug-turn-row${active ? " active" : ""}`} onClick={onPick}>
       <div className="debug-row-line">
@@ -199,7 +199,7 @@ function TurnRow({ turn, limits, name, active, onPick }: { turn: DebugTurnRow; l
       <div className="debug-row-line machine muted">
         <span>{turn.stop_reason ?? "running"}</span>
         <span>· {seconds(turnDurationMs(turn))}</span>
-        <span className={steps >= limits.maxSteps ? "debug-bad-text" : ""}>· {steps}/{limits.maxSteps} tools</span>
+        <span>· {steps} tools</span>
         {turn.failed_count > 0 ? <span className="debug-bad-text">· {turn.failed_count} failed</span> : null}
       </div>
       {turn.tool_names ? <div className="machine tertiary debug-clip">{toolSummary(turn.tool_names)}</div> : null}
@@ -243,8 +243,8 @@ function TurnDetail({ detail, limits, tab, onTab }: { detail: DebugTurnDetail; l
       </div>
 
       <div className="debug-meters">
-        <MeterCard title="Tool calls (steps)" value={steps} max={session?.max_steps ?? limits.maxSteps} note={`${failed} failed`} />
-        <MeterCard title="Output tokens" value={session?.token_count ?? null} max={session?.max_tokens ?? limits.maxTokens} note={session ? "written by the bot this turn" : "not kept for this turn"} />
+        <MeterCard title="Tool calls (steps)" value={steps} note={`${failed} failed`} />
+        <MeterCard title="Output tokens" value={session?.token_count ?? null} note={session ? "written by the bot this turn" : "not kept for this turn"} />
         <MeterCard title="Time" value={Math.round(duration / 1000)} max={Math.round(limits.turnTimeoutMs / 1000)} unit="s" note={turn.ended_at ? "total turn time" : "still running"} />
         <MeterCard title="Last model call" value={turn.latency_ms === null ? null : Math.round(turn.latency_ms / 100) / 10} max={Math.round(limits.firstTokenTimeoutMs / 1000)} unit="s" note="vs first-token timeout" />
       </div>
@@ -304,7 +304,7 @@ function FlowView({ detail, duration, limits }: { detail: DebugTurnDetail; durat
                 {item.reasoning ? <details><summary>Reasoning</summary><pre className="debug-pre">{item.reasoning}</pre></details> : null}
                 {item.calls.map((call) => {
                   toolNumber += 1;
-                  return <ToolCallCard key={call.id} number={toolNumber} name={call.name} args={call.record?.args ?? call.arguments} record={call.record} result={call.record?.result ?? call.result ?? null} skipped={call.skipped} duration={duration} maxSteps={limits.maxSteps} />;
+                  return <ToolCallCard key={call.id} number={toolNumber} name={call.name} args={call.record?.args ?? call.arguments} record={call.record} result={call.record?.result ?? call.result ?? null} skipped={call.skipped} duration={duration} />;
                 })}
               </FlowNode>
             );
@@ -312,7 +312,7 @@ function FlowView({ detail, duration, limits }: { detail: DebugTurnDetail; durat
             toolNumber += 1;
             return (
               <FlowNode key={index} tone="model" label={`Tool call ${toolNumber}`}>
-                <ToolCallCard number={toolNumber} name={item.record.tool_name} args={item.record.args} record={item.record} result={item.record.result} skipped={false} duration={duration} maxSteps={limits.maxSteps} />
+                <ToolCallCard number={toolNumber} name={item.record.tool_name} args={item.record.args} record={item.record} result={item.record.result} skipped={false} duration={duration} />
               </FlowNode>
             );
           case "answer":
@@ -335,8 +335,8 @@ function FlowNode({ tone, label, children }: { tone: "user" | "model" | "answer"
   );
 }
 
-function ToolCallCard({ number, name, args, record, result, skipped, duration, maxSteps }: {
-  number: number; name: string; args: unknown; record?: DebugToolCall; result: string | null; skipped: boolean; duration: number; maxSteps: number;
+function ToolCallCard({ number, name, args, record, result, skipped, duration }: {
+  number: number; name: string; args: unknown; record?: DebugToolCall; result: string | null; skipped: boolean; duration: number;
 }) {
   const ok = skipped ? null : record ? record.ok : null;
   // Rows written before durations were recorded say 0: unknown, not instant.
@@ -347,7 +347,7 @@ function ToolCallCard({ number, name, args, record, result, skipped, duration, m
       <summary>
         <ChevronRight size={12} className="debug-chevron" />
         {skipped ? <CircleDot size={13} className="muted" /> : ok === false ? <XCircle size={13} className="debug-bad-text" /> : softError ? <AlertTriangle size={13} className="debug-warn-text" /> : ok ? <CheckCircle2 size={13} className="debug-ok-text" /> : <CircleDot size={13} className="muted" />}
-        <span className={`machine${number > maxSteps ? " debug-bad-text" : ""}`}>#{number}</span>
+        <span className="machine">#{number}</span>
         <span className="machine debug-tool-name">{name}</span>
         <span className="debug-clip muted machine">{argsPreview(args)}</span>
         <span className="spacer" />
@@ -415,7 +415,7 @@ function SystemPanel({ overview, agentName }: { overview: DebugOverview; agentNa
       <div className="debug-section-title">How a reply works</div>
       <div className="debug-card debug-explain">
         <div><b>Every reply</b> — chat and background jobs alike: the bot loops <i>think → call a tool → read the result</i> until it can answer. Each tool call is one step.</div>
-        <div><b>Limits</b> — {overview.limits.maxSteps} tool calls, {overview.limits.maxTokens.toLocaleString()} written tokens, {Math.round(overview.limits.turnTimeoutMs / 1000)}s per turn; a model gets {Math.round(overview.limits.firstTokenTimeoutMs / 1000)}s to start replying before the next provider is tried.</div>
+        <div><b>Limits</b> — no tool-call or token cap; {Math.round(overview.limits.turnTimeoutMs / 1000)}s per turn and at most 24 model calls (12 for a delegated bot); a model gets {Math.round(overview.limits.firstTokenTimeoutMs / 1000)}s to start replying before the next provider is tried.</div>
       </div>
 
       <div className="debug-section-title">Providers</div>
@@ -489,12 +489,12 @@ function Meter({ value, max, label }: { value: number; max: number; label: strin
   );
 }
 
-function MeterCard({ title, value, max, unit = "", note }: { title: string; value: number | null; max: number; unit?: string; note: string }) {
+function MeterCard({ title, value, max, unit = "", note }: { title: string; value: number | null; max?: number; unit?: string; note: string }) {
   return (
     <div className="debug-card debug-meter-card">
       <div className="debug-section-title">{title}</div>
-      <div className="debug-meter-value machine">{value === null ? "—" : `${value.toLocaleString()}${unit}`}<span className="muted"> / {max.toLocaleString()}{unit}</span></div>
-      <Meter value={value ?? 0} max={max} label={title} />
+      <div className="debug-meter-value machine">{value === null ? "—" : `${value.toLocaleString()}${unit}`}{max === undefined ? null : <span className="muted"> / {max.toLocaleString()}{unit}</span>}</div>
+      {max === undefined ? null : <Meter value={value ?? 0} max={max} label={title} />}
       <div className="machine tertiary">{note}</div>
     </div>
   );

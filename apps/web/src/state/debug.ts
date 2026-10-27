@@ -4,8 +4,6 @@
  */
 
 export interface DebugLimits {
-  maxSteps: number;
-  maxTokens: number;
   turnTimeoutMs: number;
   firstTokenTimeoutMs: number;
 }
@@ -138,15 +136,15 @@ export function stepsUsed(turn: Pick<DebugTurnRow, "step_count" | "tool_count">)
 }
 
 /** A row in the turn list deserves attention. */
-export function isProblem(turn: DebugTurnRow, limits: DebugLimits): boolean {
-  return (turn.stop_reason !== null && turn.stop_reason !== "end") || turn.failed_count > 0 || stepsUsed(turn) >= limits.maxSteps;
+export function isProblem(turn: DebugTurnRow): boolean {
+  return (turn.stop_reason !== null && turn.stop_reason !== "end") || turn.failed_count > 0;
 }
 
 export function stopReasonText(reason: string | null, limits: DebugLimits): string {
   switch (reason) {
     case null: return "Still running";
     case "end": return "Finished normally";
-    case "budget": return `Ran out of budget (${limits.maxSteps} tool calls or ${limits.maxTokens.toLocaleString()} output tokens)`;
+    case "budget": return "Ran out of budget (the old tool or token limit, since removed)";
     case "timeout": return `Timed out (limit ${Math.round(limits.turnTimeoutMs / 1000)}s)`;
     case "cancelled": return "Cancelled — you pressed stop, or sent a new message that took over";
     case "error": return "Failed with an error";
@@ -160,15 +158,10 @@ export function diagnoseTurn(detail: DebugTurnDetail, limits: DebugLimits, now =
   const { turn, tools, session, context } = detail;
   const findings: Finding[] = [];
   const steps = session?.step_count ?? tools.length;
-  const maxSteps = session?.max_steps ?? limits.maxSteps;
-  const maxTokens = session?.max_tokens ?? limits.maxTokens;
   const duration = turnDurationMs(turn, now);
 
-  if (steps >= maxSteps) {
-    findings.push({ severity: "error", title: `Hit the ${maxSteps}-tool limit`, detail: "The bot was cut off mid-task and could not write a proper final answer." });
-  }
-  if (session && session.token_count >= maxTokens) {
-    findings.push({ severity: "error", title: `Hit the ${maxTokens.toLocaleString()} output-token limit`, detail: "Only text the bot writes counts; the prompt does not." });
+  if (turn.stop_reason === "budget") {
+    findings.push({ severity: "error", title: `Hit the old tool/token limit after ${steps} tool calls`, detail: "This turn ran before the limits were removed; it was cut off mid-task." });
   }
   if (turn.stop_reason === "timeout") {
     findings.push({ severity: "error", title: `Timed out after ${Math.round(duration / 1000)}s`, detail: `The whole turn may run for ${Math.round(limits.turnTimeoutMs / 1000)}s. Slow models or slow tools use it up.` });

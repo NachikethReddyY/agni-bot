@@ -28,11 +28,11 @@ test("debug routes need a device token and join a turn into one flow", async () 
     const auth = { headers: { Authorization: `Bearer ${token}` } };
 
     const overview = await (await debugRequest(new Request("http://localhost/debug/overview", auth), db, router, config)).json() as {
-      limits: { maxSteps: number; turnTimeoutMs: number };
+      limits: { turnTimeoutMs: number };
       turns: Array<{ id: string; tool_count: number; failed_count: number; tool_names: string; step_count: number }>;
       sessions: Array<{ message_count: number }>;
     };
-    expect(overview.limits).toMatchObject({ maxSteps: 16, turnTimeoutMs: 120_000 });
+    expect(overview.limits).toMatchObject({ turnTimeoutMs: 120_000 });
     expect(overview.turns[0]).toMatchObject({ id: "trn_1", tool_count: 2, failed_count: 1, tool_names: "search_email,read_email", step_count: 2 });
     expect(overview.sessions[0]!.message_count).toBe(3);
 

@@ -50,7 +50,7 @@ struct InspectorView: View {
         Spacer(minLength: 0)
       }
       row("Model", model.agent?.model ?? "routed by the daemon")
-      row("Lane", "task — tools, up to 16 steps")
+      row("Lane", "task — tools, no step cap")
       row("Tools", (model.agent?.tools?.isEmpty == false) ? model.agent!.tools!.joined(separator: ", ") : "none in this lane")
       if let threadID = model.conversation.threadID {
         row("Thread", threadID)

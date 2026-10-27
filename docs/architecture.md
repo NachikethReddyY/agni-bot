@@ -113,7 +113,9 @@ Each task step sends the same system prompt
 and tool schemas first, then the compacted session and recent messages. That
 keeps the request prefix stable for provider-side caching.
 
-The loop has a 16-tool-call and 16k-token budget. It persists its message log
+The loop has no tool-call or output-token budget (removed 2026-10-27); the
+turn timeout and the chain step guardrail (24 model calls, 12 when delegated)
+bound it. It persists its message log
 and each tool result. An interrupted session restores saved tool results. Calls
 with an uncertain outcome come back as errors and are never replayed
 automatically. Approval decisions are stored in SQLite and resolve the active
