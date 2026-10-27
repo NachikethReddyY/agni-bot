@@ -45,6 +45,7 @@ Read in this order first:
 | `research-context-management.md` | CURRENT | Research brief for context management. |
 | `p2-plan.md` | STALE | Historical P2 plan. A status banner was added 2026-10-26; tools are now registered. |
 | `issues-to-fix.md` | PARTLY STALE | Issue list. Entries need checking against code before action. |
+| `routines-plan.md` | PLAN | Routines feature build plan (2026-10-27). Nothing built yet. |
 | `ui-design.md` | CURRENT | Web UI rules. |
 | `ui-mocks.html` | PARTLY STALE | Mocks. One bot is labelled "Agni Instant". "Instant" is a lane name, not a bot name. |
 | `gmail-plan.html`, `plugins-plan.html`, `google-oauth-setup.html` | PLAN | Plans and setup notes. Check the code before quoting them. |
