@@ -37,6 +37,7 @@ import { appendChannelMessage, getChannelSummary } from "../stores/channels";
 import { compactChannelHistory } from "./compactor";
 import { GuardrailError, enterDelegation, rootGuardrail, stepGuardrail, type GuardrailState } from "./guardrails";
 import type { MailAccountResolver } from "../plugins/credentials";
+import { domainAllowed } from "../routines/egress";
 
 export interface TaskTurnSettings {
   firstTokenTimeoutMs: number;
@@ -100,6 +101,12 @@ export interface TaskTurnRun {
     /** The channel the owner is watching. */
     parentChannelID: string | null;
   };
+  /** Restrict task tools to this list, intersected with the persona's tools. */
+  toolAllowlist?: string[];
+  /** Optional output token budget, capped at the standard task limit. */
+  maxTokens?: number;
+  /** Optional domain allowlist for web tools. */
+  allowedDomains?: string[];
 }
 export interface TaskTurnResult { turnID: string; text: string; stopReason: StopReason }
 
@@ -303,13 +310,16 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // separate messages; `run_privileged` is only meaningful next to `bash`.
   // `ask` puts a question to the owner — every agent may do that. A draft
   // only makes sense to an agent that can send the mail.
-  const effectiveTools = [...new Set([
-    ...memoryTools,
-    "say",
-    "ask",
-    ...(memoryTools.includes("bash") ? ["run_privileged"] : []),
-    ...(memoryTools.includes("mail_send") ? ["draft_email"] : []),
-  ])];
+  const effectiveTools = run.toolAllowlist
+    ? [...new Set(run.toolAllowlist.filter((name) => memoryTools.includes(name)))]
+    : [...new Set([
+      ...memoryTools,
+      "say",
+      "ask",
+      ...(memoryTools.includes("bash") ? ["run_privileged"] : []),
+      ...(memoryTools.includes("mail_send") ? ["draft_email"] : []),
+    ])];
+  const tokenLimit = run.maxTokens === undefined ? MAX_TOKENS : Math.min(MAX_TOKENS, Math.max(1, run.maxTokens));
   const dynamicHints = taskToolHints(registry, effectiveTools);
   if (dynamicHints.length > 0) {
     (globalThis as any).__AGNI_DYNAMIC_TOOL_HINTS__ = dynamicHints;
@@ -501,7 +511,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     });
   };
   try {
-    while (stepCount < MAX_STEPS && tokenCount < MAX_TOKENS) {
+    while (stepCount < MAX_STEPS && tokenCount < tokenLimit) {
       if (controller.signal.aborted) { stopReason = timedOut ? "timeout" : "cancelled"; break; }
       // Root turn/depth guardrail: refuse a chain that has spun past its budget
       // before spending another model call on it.
@@ -520,7 +530,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         firstTokenTimeoutMs: settings.firstTokenTimeoutMs,
         tools,
         toolChoice: tools.length ? "auto" : "none",
-        maxTokens: Math.max(1, Math.min(2_048, MAX_TOKENS - tokenCount)),
+        maxTokens: Math.max(1, Math.min(2_048, tokenLimit - tokenCount)),
         onDelta: (delta: string) => {
           activeStepText += delta;
           // Hold channel turns until the step is known to be the answer: a
@@ -577,7 +587,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
           continue;
         }
         recentCalls.set(signature, stepCount);
-        const callResult = await executeTool(db, threadID, turnID, call, effectiveTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail, peerInput);
+        const callResult = await executeTool(db, threadID, turnID, call, effectiveTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail, peerInput, run.allowedDomains);
         let content = callResult.content;
         if (looking && offRoadSteps === OFF_ROAD_NUDGE_AT && !offRoadNudged && !acted) {
           offRoadNudged = true;
@@ -630,15 +640,16 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         publish(text);
         break;
       }
-      if (stepCount >= MAX_STEPS || tokenCount >= MAX_TOKENS) break;
+      if (stepCount >= MAX_STEPS || tokenCount >= tokenLimit) break;
     }
     // Prune old duplicate signatures so the map doesn't grow unboundedly.
     for (const [sig, step] of recentCalls) {
       if (stepCount - step > DUPLICATE_WINDOW) recentCalls.delete(sig);
     }
-    if (!answerText && stopReason === "end" && (tokenCount >= MAX_TOKENS || stepCount >= MAX_STEPS)) {
+    if (!answerText && stopReason === "end" && (tokenCount >= tokenLimit || stepCount >= MAX_STEPS)) {
       const text = budgetExhaustedMessage(toolOutcomes);
       answerText = text;
+      if (run.maxTokens !== undefined && tokenCount >= tokenLimit) stopReason = "budget";
       emitToken(text);
       messages.push({ role: "assistant", content: text });
       publish(text);
@@ -845,7 +856,7 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
   registry: ReturnType<typeof buildTaskToolRegistry>, broker: ApprovalBroker, signal: AbortSignal,
   emit: (frame: ServerFrameBody) => void,
   setState: (state: string) => void,
-  persona: Persona, guardrail: GuardrailState, peerInput?: boolean,
+  persona: Persona, guardrail: GuardrailState, peerInput?: boolean, allowedDomains?: string[],
 ): Promise<{ content: string; awaiting: boolean }> {
   const tool = registry.get(call.function.name);
   let args: Record<string, unknown> = {};
@@ -868,6 +879,21 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
     storeResult(content, false, "tool_not_allowed");
     emit({ type: "tool.end", callID: call.id, ok: false, preview: `not available to ${persona.id}` });
     return { content, awaiting: false };
+  }
+  if (allowedDomains && (call.function.name === "web_fetch" || call.function.name === "web_search")) {
+    if (call.function.name === "web_fetch") {
+      if (typeof args.url !== "string" || !domainAllowed(args.url, allowedDomains)) {
+        const content = JSON.stringify({ error: "domain is not allowed" });
+        storeResult(content, false, "domain_not_allowed");
+        emit({ type: "tool.end", callID: call.id, ok: false, preview: "domain not allowed" });
+        return { content, awaiting: false };
+      }
+    } else if (allowedDomains.length === 0) {
+      const content = JSON.stringify({ error: "domain is not allowed" });
+      storeResult(content, false, "domain_not_allowed");
+      emit({ type: "tool.end", callID: call.id, ok: false, preview: "domain not allowed" });
+      return { content, awaiting: false };
+    }
   }
   if (broker.requiresApproval(tool.name, args)) {
     setState("awaiting_approval");
@@ -899,7 +925,14 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
       }),
       new Promise<never>((_, reject) => combined.addEventListener("abort", () => reject(new Error("tool timed out or was cancelled")), { once: true })),
     ]);
-    const content = truncate(JSON.stringify(result), MAX_TOOL_RESULT_CHARS);
+    let safeResult = result;
+    if (allowedDomains && call.function.name === "web_search" && typeof result === "object" && result !== null && Array.isArray((result as { results?: unknown }).results)) {
+      safeResult = { ...(result as Record<string, unknown>), results: (result as { results: unknown[] }).results.filter((item) => {
+        if (typeof item !== "object" || item === null || typeof (item as { url?: unknown }).url !== "string") return false;
+        return domainAllowed((item as { url: string }).url, allowedDomains);
+      }) };
+    }
+    const content = truncate(JSON.stringify(safeResult), MAX_TOOL_RESULT_CHARS);
     storeResult(content, true, null);
     emit({ type: "tool.end", callID: call.id, ok: true, preview: toolPreview(result) });
     return { content, awaiting: false };
