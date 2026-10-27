@@ -23,7 +23,8 @@ export function normalizeAllowedDomains(entries: string[]): string[] {
   const hosts = new Set<string>();
   for (const entry of entries) {
     const host = bareHost(entry);
-    if (!host || !/^[a-z0-9.-]+$/.test(host)) throw new Error(`not a bare domain: "${entry}"`);
+    // At least two labels: a bare "com" would allow every .com host.
+    if (!host || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host)) throw new Error(`not a bare domain: "${entry}"`);
     hosts.add(host);
   }
   return [...hosts];

@@ -35,5 +35,8 @@ describe("routine egress allowlist", () => {
     expect(() => normalizeAllowedDomains(["example.com/x"])).toThrow("not a bare domain");
     expect(() => normalizeAllowedDomains(["*.example.com"])).toThrow("not a bare domain");
     expect(() => normalizeAllowedDomains([""])).toThrow("not a bare domain");
+    expect(() => normalizeAllowedDomains(["com"])).toThrow("not a bare domain");
+    expect(() => normalizeAllowedDomains([".example.com"])).toThrow("not a bare domain");
+    expect(() => normalizeAllowedDomains(["a..example.com"])).toThrow("not a bare domain");
   });
 });
