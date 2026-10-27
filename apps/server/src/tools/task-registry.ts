@@ -188,7 +188,7 @@ export function buildTaskToolRegistry(db: Database, mailAccounts?: MailAccountRe
   register({
     name: "web_fetch", description: "Fetch a public web page and extract its title and summary. Uses Firecrawl for JS-rendered pages if configured.", kind: "static",
     schema: objectSchema({ url: { type: "string", format: "uri", maxLength: 2_048 }, maxChars: limitProp }, ["url"]), timeoutMs: 20_000,
-    handler: async (args) => webFetch(parseObject(args, (v) => ({ url: boundedString(v.url, 2_048), maxChars: v.maxChars === undefined ? undefined : optionalLimit(v.maxChars) }))),
+    handler: async (args, ctx) => webFetch(parseObject(args, (v) => ({ url: boundedString(v.url, 2_048), maxChars: v.maxChars === undefined ? undefined : optionalLimit(v.maxChars) })), ctx.hostAllowed),
   });
   register({
     name: "deep_research", description: "Deep research: search the web and fetch top results in parallel, returning compiled findings. Use for research questions needing multiple sources.", kind: "static",

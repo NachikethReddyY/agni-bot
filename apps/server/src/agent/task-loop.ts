@@ -922,6 +922,7 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
           currentAgentID: guardrail.currentAgentID,
           handoffSummary: guardrail.handoffSummary,
         },
+        hostAllowed: allowedDomains ? (url: URL) => domainAllowed(url.toString(), allowedDomains) : undefined,
       }),
       new Promise<never>((_, reject) => combined.addEventListener("abort", () => reject(new Error("tool timed out or was cancelled")), { once: true })),
     ]);
