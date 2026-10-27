@@ -5,6 +5,14 @@ import { assertPublicHost } from "../tools/fetch-url";
 const SQL_FORBIDDEN = /\b(PRAGMA|ATTACH|DETACH|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|VACUUM)\b/i;
 const MAX_BODY_BYTES = 1_000_000;
 
+/** Validate the deliberately narrow SQL preflight language. */
+export function assertReadOnlySelect(query: string): void {
+  const normalized = query.trim();
+  if (!/^SELECT\b/i.test(normalized) || normalized.includes(";") || SQL_FORBIDDEN.test(normalized)) {
+    throw new Error("preflight SQL must be a single read-only SELECT");
+  }
+}
+
 function sha256(value: string | Uint8Array): string {
   return new Bun.CryptoHasher("sha256").update(value).digest("hex");
 }
@@ -30,9 +38,7 @@ export async function runPreflight(
   }
 
   const query = p.query.trim();
-  if (!/^SELECT\b/i.test(query) || query.includes(";") || SQL_FORBIDDEN.test(query)) {
-    throw new Error("preflight SQL must be a single read-only SELECT");
-  }
+  assertReadOnlySelect(query);
   const path = db.filename;
   if (!path || path === ":memory:") throw new Error("read-only preflight requires a file-backed database");
   const readDB = new Database(path, { create: false, readonly: true });

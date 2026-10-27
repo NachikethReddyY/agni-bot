@@ -71,6 +71,8 @@ import type { PluginService } from "../plugins/service";
 import { pluginMailResolver } from "../plugins/credentials";
 import type { FrameLog } from "./frame-log";
 import { activateAppearanceProfile, deleteAppearanceProfile, listAppearanceProfiles, saveAppearanceProfile } from "../stores/appearance";
+import { getRoutineByJobID, listRuns } from "../stores/routines";
+import { deleteRoutineJob } from "../tools/routines-tool";
 
 export interface Session {
   id: string;
@@ -1291,7 +1293,10 @@ function handleJobDelete(
   if (!requireAuth(deps, session)) return;
   const job = getJobByPrefix(deps.db, frame.jobID);
   if (!job) return sendError(deps, session, "unknown_job", `no job ${frame.jobID}`);
-  if (!deleteJob(deps.db, job.id)) {
+  const deleted = job.kind === "routine"
+    ? deleteRoutineJob(deps.db, job.id)
+    : deleteJob(deps.db, job.id);
+  if (!deleted) {
     return sendError(deps, session, "job_running", `task ${job.id} is running and cannot be deleted yet`);
   }
   deps.reply({ type: "job.list.ok", jobs: jobSnapshot(deps.db, 50) });
@@ -1450,13 +1455,15 @@ function jobSnapshot(db: Database, limit: number): JobInfo[] {
   for (const row of [...listJobs(db, { limit }), ...listFinishedJobs(db, 10)]) {
     if (seen.has(row.id)) continue;
     seen.add(row.id);
-    jobs.push(jobInfo(row));
+    jobs.push(jobInfo(db, row));
   }
   return jobs;
 }
 
-function jobInfo(row: JobRow): JobInfo {
+function jobInfo(db: Database, row: JobRow): JobInfo {
   const payload = turnPayload(row);
+  const routine = row.kind === "routine" ? getRoutineByJobID(db, row.id) : null;
+  const recentRuns = routine ? listRuns(db, routine.id, 5) : [];
   return {
     id: row.id,
     kind: row.kind,
@@ -1468,6 +1475,16 @@ function jobInfo(row: JobRow): JobInfo {
     ...(payload.everyMs ? { everyMs: payload.everyMs } : {}),
     ...(payload.text ? { title: clip(payload.text, 120) } : {}),
     ...(payload.threadID ? { threadID: payload.threadID } : {}),
+    ...(routine ? {
+      title: routine.name,
+      ...(routine.threadID ? { threadID: routine.threadID } : {}),
+      routine: {
+        name: routine.name, cron: routine.cron, timezone: routine.timezone, misfire: routine.misfire,
+        preflight: routine.preflight.kind, maxTokens: routine.maxTokens, maxExecutionMs: routine.maxExecutionMs,
+        allowedDomains: routine.allowedDomains, successStreak: routine.successStreak, failureStreak: routine.failureStreak,
+        recentRuns: recentRuns.map((run) => ({ at: run.startedAt, outcome: run.outcome, tokens: run.tokens, ...(run.summary === null ? {} : { summary: run.summary }) })),
+      },
+    } : {}),
     ...(row.result ? { lastResult: row.result } : {}),
   };
 }
