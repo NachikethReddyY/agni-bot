@@ -11,12 +11,13 @@
   },
   "dependencies": {
     "@agni/protocol": "workspace:*",
+    "croner": "^11.0.0",
     "image-size": "^2.0.4",
     "pdfjs-dist": "^6.4.299",
     "zod": "^4"
   },
   "devDependencies": {
-    "@types/bun": "latest",
+    "@types/bun": "1.4.3",
     "typescript": "^7"
   }
 }

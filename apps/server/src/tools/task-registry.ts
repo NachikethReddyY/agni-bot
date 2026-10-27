@@ -17,6 +17,7 @@ import { runBash } from "./bash";
 import { skillsList, skillsLoad, skillsResource } from "./skills";
 import { createMailTools } from "./mail";
 import { createJobTools } from "./jobs-tool";
+import { createRoutineTools } from "./routines-tool";
 import type { MailAccountResolver } from "../plugins/credentials";
 import { shareThread } from "../share/document";
 import { scheduleTaskReminder } from "../jobs/task-reminders";
@@ -28,7 +29,7 @@ const stringProp = { type: "string", minLength: 1 };
 const limitProp = { type: "integer", minimum: 1, maximum: 20 };
 const pathProp = { type: "string", minLength: 1 };
 
-export const TASK_TOOL_NAMES = ["memory_search", "memory_write", "transcript_search", "links_search", "link_save", "tasks_list", "task_create", "task_update", "grep", "glob", "read_file", "write_file", "web_search", "web_fetch", "deep_research", "bash", "skills_list", "skills_load", "skills_resource", "mail_search", "mail_read", "mail_send", "remember_fact", "recall_fact", "forget_fact", "handoff", "share_thread", "job_schedule", "job_list", "job_cancel"];
+export const TASK_TOOL_NAMES = ["memory_search", "memory_write", "transcript_search", "links_search", "link_save", "tasks_list", "task_create", "task_update", "grep", "glob", "read_file", "write_file", "web_search", "web_fetch", "deep_research", "bash", "skills_list", "skills_load", "skills_resource", "mail_search", "mail_read", "mail_send", "remember_fact", "recall_fact", "forget_fact", "handoff", "share_thread", "job_schedule", "job_list", "job_cancel", "routine_create", "routine_list", "routine_pause", "routine_delete"];
 
 export function buildTaskToolRegistry(db: Database, mailAccounts?: MailAccountResolver): ToolRegistry {
   const registry = new ToolRegistry();
@@ -187,7 +188,7 @@ export function buildTaskToolRegistry(db: Database, mailAccounts?: MailAccountRe
   register({
     name: "web_fetch", description: "Fetch a public web page and extract its title and summary. Uses Firecrawl for JS-rendered pages if configured.", kind: "static",
     schema: objectSchema({ url: { type: "string", format: "uri", maxLength: 2_048 }, maxChars: limitProp }, ["url"]), timeoutMs: 20_000,
-    handler: async (args) => webFetch(parseObject(args, (v) => ({ url: boundedString(v.url, 2_048), maxChars: v.maxChars === undefined ? undefined : optionalLimit(v.maxChars) }))),
+    handler: async (args, ctx) => webFetch(parseObject(args, (v) => ({ url: boundedString(v.url, 2_048), maxChars: v.maxChars === undefined ? undefined : optionalLimit(v.maxChars) })), ctx.hostAllowed),
   });
   register({
     name: "deep_research", description: "Deep research: search the web and fetch top results in parallel, returning compiled findings. Use for research questions needing multiple sources.", kind: "static",
@@ -237,6 +238,9 @@ export function buildTaskToolRegistry(db: Database, mailAccounts?: MailAccountRe
   // Scheduling: the agent's own clock. Without it, "every weekday at 9:05"
   // had no tool and the model went looking for one in the source tree.
   for (const tool of createJobTools(db)) {
+    register(tool);
+  }
+  for (const tool of createRoutineTools(db)) {
     register(tool);
   }
   return registry;

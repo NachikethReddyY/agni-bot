@@ -4,3 +4,4 @@ packages:
   - "tools/*"
 minimumReleaseAgeExclude:
   - lucide-react@1.60.0
+  - croner@11.0.0

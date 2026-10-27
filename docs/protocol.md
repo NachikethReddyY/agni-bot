@@ -239,3 +239,20 @@ attachments. `POST /backgrounds` accepts one PNG, JPEG, or WebP image up to
 Bearer token. `DELETE /backgrounds/:id` refuses to remove an image referenced
 by a saved profile. Paths are generated server-side, bytes are content-sniffed,
 and the assets are never sent to a model. Theme JSON exports omit image bytes.
+
+### Routines (additive v2 extension)
+
+A `routine`-kind job in `job.list.ok` may carry an optional `routine` object
+on its `JobInfo`: `{name, cron, timezone, misfire: "skip"|"run_once",
+preflight: "http"|"sql"|"none", maxTokens, maxExecutionMs, allowedDomains,
+successStreak, failureStreak, recentRuns}`, where `recentRuns` holds at most
+the last five runs (`{at, outcome, tokens, summary?}`, `outcome`:
+`ran | skipped_no_delta | failed | timed_out | budget_exceeded`). This is an
+optional-field change: no new frames and no version bump, and the Swift
+client ignores unknown fields. Ordinary `turn` jobs never carry `routine`.
+
+One new client frame, `routine.domains.set` `{jobID, domains}`, replaces a
+routine's `allowedDomains` (at most 20 bare hosts, no scheme, slash or port).
+Malformed input returns `invalid_domains`. Only the owner's connection can send
+it; a bot's tools cannot, so a bot cannot widen its own egress. The reply is
+`job.list.ok`, as for `job.set`.
