@@ -31,8 +31,6 @@ export interface JobScheduleArgs {
   everyMinutes?: number;
   /** Which agent runs it. Defaults to the agent that scheduled it. */
   agentID?: string;
-  /** `task` (default) runs the plan→act→observe loop with tools. */
-  lane?: "instant" | "task";
   /** Raise a notification when a run ends. Default true. */
   notify?: boolean;
 }
@@ -44,7 +42,6 @@ export interface JobScheduleResult {
   /** Plain description of the schedule. */
   recurrence: string;
   agent: string;
-  lane: "instant" | "task";
   what: string;
 }
 
@@ -59,7 +56,6 @@ export interface ScheduledJobView {
   nextRun: string;
   recurrence: string;
   agent: string;
-  lane: string;
   what: string;
   lastResult: string | null;
 }
@@ -74,7 +70,6 @@ export function scheduleJob(db: Database, args: JobScheduleArgs, fallbackAgentID
   const payload: Record<string, unknown> = {
     text,
     agentID: args.agentID?.trim() || fallbackAgentID,
-    lane: args.lane ?? "task",
     notify: args.notify !== false,
   };
 
@@ -110,7 +105,6 @@ export function scheduleJob(db: Database, args: JobScheduleArgs, fallbackAgentID
     nextRun: runAt,
     recurrence,
     agent: String(payload.agentID),
-    lane: payload.lane as "instant" | "task",
     what: text.slice(0, 200),
   };
 }
@@ -130,7 +124,6 @@ export function listScheduledJobs(db: Database, limit = 20): JobListResult {
           ? `every ${Math.round(Number(payload.everyMs) / 60_000)} minute(s)`
           : "once",
       agent: String(payload.agentID ?? "ea"),
-      lane: String(payload.lane ?? "instant"),
       what: String(payload.text ?? "").slice(0, 200),
       lastResult: row.result,
     };
@@ -185,7 +178,6 @@ export function createJobTools(db: Database): ToolDefinition<unknown, unknown>[]
         days: { type: "array", maxItems: 7, items: { type: "string" }, description: "Weekdays for a dailyAt schedule" },
         everyMinutes: { type: "integer", minimum: 1, maximum: 10_080 },
         agent_id: stringProp,
-        lane: { type: "string", enum: ["instant", "task"] },
         notify: { type: "boolean" },
       }, ["text"]),
       timeoutMs: 3_000,
@@ -199,7 +191,6 @@ export function createJobTools(db: Database): ToolDefinition<unknown, unknown>[]
           ...(input.days === undefined ? {} : { days: (input.days as unknown[]).map((day) => String(day)) }),
           ...(input.everyMinutes === undefined ? {} : { everyMinutes: Number(input.everyMinutes) }),
           ...(input.agent_id === undefined ? {} : { agentID: String(input.agent_id) }),
-          ...(input.lane === undefined ? {} : { lane: String(input.lane) as "instant" | "task" }),
           ...(input.notify === undefined ? {} : { notify: Boolean(input.notify) }),
         }, ctx.chain?.currentAgentID ?? "ea");
       },

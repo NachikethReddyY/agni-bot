@@ -56,7 +56,6 @@ describe("scheduling tools", () => {
 
     expect(result.recurrence).toBe("mon, tue, wed, thu, fri at 09:05");
     expect(result.agent).toBe("friday");
-    expect(result.lane).toBe("task");
     // The row is in the database, so it survives a restart.
     const row = getJob(database, result.id);
     expect(row?.kind).toBe("turn");

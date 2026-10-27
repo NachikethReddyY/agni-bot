@@ -174,11 +174,11 @@ describe("task lane loop", () => {
     expect(db.query<{ state: string }, [string]>("SELECT state FROM agent_sessions WHERE thread_id = ?").get(thread.id)?.state).toBe("done");
   });
 
-  test("a turn that runs out of steps says what the tools actually did", async () => {
+  test("with no tool cap, a turn that never answers stops at the chain guardrail", async () => {
     db = openDatabase(":memory:");
     const thread = createThread(db, taskPersona.id);
-    // The model only ever calls a tool: the turn has to end on the step
-    // budget, and the answer has to name the work that happened.
+    // The model only ever calls a tool. There is no 16-call budget any more,
+    // so the backstop is the chain step ceiling (24 model calls).
     const fetchMock = (async () => streamResponse([
       { choices: [{ delta: { tool_calls: [{ index: 0, id: "call-loop", type: "function", function: { name: "tasks_list", arguments: "{\"status\":\"open\",\"limit\":5}" } }] } }] },
     ])) as unknown as typeof fetch;
@@ -188,10 +188,12 @@ describe("task lane loop", () => {
       emit: () => undefined, signal: new AbortController().signal,
     });
 
-    expect(result.text).toContain("hit the 16-tool limit");
-    expect(result.text).toContain("Done: tasks_list");
+    expect(result.stopReason).toBe("error");
+    expect(result.text).toContain("chain step ceiling reached (24/24)");
+    // It went past the old 16-call limit before the guardrail stopped it.
+    expect(db.query<{ step_count: number }, [string]>("SELECT step_count FROM agent_sessions WHERE thread_id = ?").get(thread.id)?.step_count).toBe(24);
     // The message is durable: it is what the thread shows after a reload.
-    expect(db.query<{ text: string }, [string]>("SELECT text FROM messages WHERE thread_id = ? AND role = 'assistant'").get(thread.id)?.text).toContain("Done: tasks_list");
+    expect(db.query<{ text: string }, [string]>("SELECT text FROM messages WHERE thread_id = ? AND role = 'assistant'").get(thread.id)?.text).toContain("chain step ceiling");
   });
 
   test("a turn that reads the app's own source is stopped, and told what it can do", async () => {

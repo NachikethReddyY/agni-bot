@@ -10,7 +10,7 @@
 import type { Database } from "bun:sqlite";
 import type { ServerFrameBody } from "@agni/protocol";
 import type { Router } from "../models/router";
-import type { TurnSettings } from "../agent/loop";
+import type { TaskTurnSettings } from "../agent/task-loop";
 import type { JobRunner } from "./runner";
 import { registerTurnJob } from "./turn";
 import { registerBriefJob } from "./brief";
@@ -23,7 +23,7 @@ import { registerRoutineJob } from "./routine";
 export interface AllJobsDeps {
   db: Database;
   router: Router;
-  settings: TurnSettings;
+  settings: TaskTurnSettings;
   firstTokenTimeoutMs: number;
   emit: (frame: ServerFrameBody) => void;
 }

@@ -1,11 +1,12 @@
 import { attachmentRequest } from "../attachments/http";
 import { backgroundRequest } from "../appearance/http";
+import { debugRequest } from "../debug/http";
 /**
  * HTTP + WebSocket entry. Binds to AGNI_HOST only (loopback in dev, the
  * Tailscale interface on bb-1) — nothing listens on the public internet.
  *
  * Routes: GET /health (JSON), GET /ws (WebSocket upgrade), GET /share/<token>
- * (a published thread export).
+ * (a published thread export), GET /debug/* (owner-only bot debugger data).
  */
 import type { Database } from "bun:sqlite";
 import { PROTOCOL_VERSION, encodeFrame, type ServerFrame, type ServerFrameBody } from "@agni/protocol";
@@ -104,6 +105,9 @@ export function startServer(config: Config, db: Database, router: Router, starte
       }
       if (url.pathname === "/backgrounds" || url.pathname.startsWith("/backgrounds/")) {
         return backgroundRequest(request, db, config.dbPath);
+      }
+      if (url.pathname.startsWith("/debug/")) {
+        return debugRequest(request, db, router, config);
       }
       if (url.pathname === "/health") {
         if (request.method === "OPTIONS") {

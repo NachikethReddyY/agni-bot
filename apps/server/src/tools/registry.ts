@@ -1,7 +1,6 @@
 /**
  * Tool registry. Every tool declares a schema and a timeout before it can be
- * registered; the instant lane never calls tools (S3) — the task lane (P2+)
- * executes them through this registry only.
+ * registered; the task lane executes them through this registry only.
  *
  * The current task and retrieval captures use validated deterministic paths;
  * model-invoked tools are not enabled until the separate task runner lands.

@@ -915,7 +915,6 @@ function handleTaskAnswer(deps: DispatchDeps, session: Session, frame: Extract<C
   const job = enqueueJob(deps.db, {
     kind: "turn",
     payload: {
-      lane: "task",
       agentID: task.owner_agent_id ?? undefined,
       threadID: childThreadID,
       text: answer,

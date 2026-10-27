@@ -50,7 +50,7 @@ struct InspectorView: View {
         Spacer(minLength: 0)
       }
       row("Model", model.agent?.model ?? "routed by the daemon")
-      row("Lane", "instant — one call, no tools")
+      row("Lane", "task — tools, no step cap")
       row("Tools", (model.agent?.tools?.isEmpty == false) ? model.agent!.tools!.joined(separator: ", ") : "none in this lane")
       if let threadID = model.conversation.threadID {
         row("Thread", threadID)
@@ -371,8 +371,8 @@ struct AddProviderView: View {
   var label = State(wrappedValue: "")
 
   private let options = [
-    ProviderOption(id: "groq", title: "Groq", note: "Fast · instant lane"),
-    ProviderOption(id: "cerebras", title: "Cerebras", note: "Fast · instant lane"),
+    ProviderOption(id: "groq", title: "Groq", note: "Fast"),
+    ProviderOption(id: "cerebras", title: "Cerebras", note: "Fast"),
     ProviderOption(id: "nim", title: "NVIDIA NIM", note: "Free credits · all lanes"),
     ProviderOption(id: "gemini", title: "Gemini", note: "Free tier · task and deep lanes"),
     ProviderOption(id: "openrouter", title: "OpenRouter", note: "Free models · deep lane"),

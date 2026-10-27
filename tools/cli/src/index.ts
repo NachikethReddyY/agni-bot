@@ -6,8 +6,8 @@
  *   agni threads [--n 20]          recent threads
  *   agni history --thread thr_x    durable message history
  *   agni ping                      check the server + provider health
- *   agni ask "question"            one instant-lane turn, streamed
- *   agni bench [--n 10]            P0 gate: instant-lane p50 ≤ 1.5 s
+ *   agni ask "question"            one turn, streamed
+ *   agni bench [--n 10]            P0 gate: p50 ≤ 1.5 s
  *
  * Connection: --url or AGNI_URL (default ws://127.0.0.1:8787/ws);
  * token: --token or AGNI_TOKEN (from `bun run pair`).
@@ -237,7 +237,7 @@ function usage(code: number): void {
   threads [--n 20]                       list recent threads
   history --thread thr_x [--n 50]        durable message history
   ping                                   check the server and provider health
-  ask "question" [--thread thr_x]        one instant-lane turn, streamed
+  ask "question" [--thread thr_x]        one turn, streamed
   bench [options]                        N turns; gates on p50 latency
 
 options: chat/history --thread, chat --agent; bench --n 10 --q "…" --fresh --target-ms 1500; --url ws://… --token agni_…`);

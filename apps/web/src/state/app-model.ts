@@ -105,6 +105,8 @@ export interface AppSnapshot {
   exportError: string | null;
 
   isInspectorPresented: boolean;
+  /** The full-screen bot debugger is open. */
+  isDebugPresented: boolean;
   /** The left pane is showing the task/reminder list instead of the roster. */
   isTasksPresented: boolean;
   isSettingsPresented: boolean;
@@ -239,6 +241,7 @@ export class AppModel {
   private exportError: string | null = null;
 
   private isInspectorPresented = false;
+  private isDebugPresented = false;
   private isTasksPresented = false;
   private isSettingsPresented = false;
   private isAgentSwitcherPresented = false;
@@ -336,6 +339,7 @@ export class AppModel {
       exportedLink: this.exportedLink,
       exportError: this.exportError,
       isInspectorPresented: this.isInspectorPresented,
+      isDebugPresented: this.isDebugPresented,
       isTasksPresented: this.isTasksPresented,
       isSettingsPresented: this.isSettingsPresented,
       isAgentSwitcherPresented: this.isAgentSwitcherPresented,
@@ -1196,6 +1200,16 @@ export class AppModel {
   toggleInspector(): void {
     this.isInspectorPresented = !this.isInspectorPresented;
     this.publish();
+  }
+
+  toggleDebug(): void {
+    this.isDebugPresented = !this.isDebugPresented;
+    this.publish();
+  }
+
+  /** Read the daemon's owner-only bot debugger data (GET /debug/*). */
+  async debugData<T>(path: string, signal?: AbortSignal): Promise<T> {
+    return await (await this.attachmentRequest(`/debug/${path}`, { signal })).json() as T;
   }
 
   /** Show the task/reminder list in place of the roster. */

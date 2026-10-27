@@ -276,8 +276,8 @@ export function renderPersonaPrompt(template: string, vars: { name: string; user
 }
 
 // The catalog is read from disk once per process, exactly as it was when it
-// lived in a module constant — resolving a persona must not add fs work to the
-// instant lane.
+// lived in a module constant — resolving a persona must not add fs work to
+// every turn.
 let skillsBlockCache: string | null = null;
 
 function skillsBlock(): string {

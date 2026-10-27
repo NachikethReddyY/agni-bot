@@ -1,6 +1,6 @@
 import { linkAttachments, messageAttachments, withAttachmentContent } from "../attachments/store";
-/** Bounded Plan → Act → Observe runner for the task lane. The instant lane
- * remains a separate, one-call path in agent/loop.ts. */
+/** Bounded Plan → Act → Observe runner for the task lane: every chat turn and
+ * every background job runs here. */
 import type { Database } from "bun:sqlite";
 import type { PeerIntent, ServerFrameBody, StopReason } from "@agni/protocol";
 import { peerEnvelope, stripPeerTags } from "./peer-message";
@@ -103,7 +103,7 @@ export interface TaskTurnRun {
   };
   /** Restrict task tools to this list, intersected with the persona's tools. */
   toolAllowlist?: string[];
-  /** Optional output token budget, capped at the standard task limit. */
+  /** Optional output-token budget for bounded background work such as routines. */
   maxTokens?: number;
   /** Optional domain allowlist for web tools. */
   allowedDomains?: string[];
@@ -111,16 +111,11 @@ export interface TaskTurnRun {
 export interface TaskTurnResult { turnID: string; text: string; stopReason: StopReason }
 
 /**
- * Two bounds on a task turn, and both have to be generous enough for the
- * turn to *finish and report*: a mailbox check is a search, a few reads and a
- * sentence, and a cut-off turn answers nothing at all.
- *   - MAX_STEPS: how many tool calls the turn may make.
- *   - MAX_TOKENS: how much the turn may generate (the prompt is re-sent on
- *     every step, so it does not count against this).
+ * No tool-call or output-token budget (owner decision, 2026-10-27). A turn is
+ * bounded by the turn timeout, the chain step guardrail, and the loop guards
+ * (duplicates, no progress, off-road).
  */
-const MAX_STEPS = 16;
-const MAX_TOKENS = 16_000;
-const MAX_PROMPT_CHARS = MAX_TOKENS * 2.5;
+const MAX_PROMPT_CHARS = 40_000;
 const MAX_TOOL_RESULT_CHARS = 4_000;
 const MAX_HISTORY_MESSAGES = 16;
 
@@ -319,7 +314,9 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
       ...(memoryTools.includes("bash") ? ["run_privileged"] : []),
       ...(memoryTools.includes("mail_send") ? ["draft_email"] : []),
     ])];
-  const tokenLimit = run.maxTokens === undefined ? MAX_TOKENS : Math.min(MAX_TOKENS, Math.max(1, run.maxTokens));
+  // Most turns have no generated-token ceiling. Scheduled routines may set an
+  // explicit per-run cap so their own cost bound survives the shared loop.
+  const tokenLimit = run.maxTokens === undefined ? null : Math.max(1, run.maxTokens);
   const dynamicHints = taskToolHints(registry, effectiveTools);
   if (dynamicHints.length > 0) {
     (globalThis as any).__AGNI_DYNAMIC_TOOL_HINTS__ = dynamicHints;
@@ -395,7 +392,8 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
      ON CONFLICT(thread_id) DO UPDATE SET turn_id=excluded.turn_id, state='running', message_log=excluded.message_log,
        summary=excluded.summary, step_count=excluded.step_count, token_count=excluded.token_count,
        max_steps=excluded.max_steps, max_tokens=excluded.max_tokens, updated_at=excluded.updated_at`,
-    [threadID, turnID, JSON.stringify(messages), summary, stepCount, tokenCount, MAX_STEPS, MAX_TOKENS, now, now],
+    // 0 = no limit; the columns predate removing the budgets.
+    [threadID, turnID, JSON.stringify(messages), summary, stepCount, tokenCount, 0, 0, now, now],
   );
 
   const controller = new AbortController();
@@ -465,9 +463,6 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // already been published as its own message.
   let answerText = "";
   let stopReason: StopReason = "end";
-  // What the tools actually did this turn. A turn that runs out of budget has
-  // to say what it managed — "I reached the limit" alone is not an answer.
-  const toolOutcomes: ToolOutcome[] = [];
   let usage: { provider: string; model: string; inputTokens?: number; outputTokens?: number; latencyMs: number } | undefined;
   // Duplicate-step guard: toolName + args signature -> last step it ran on.
   // Exact repeats within the same turn are skipped so the model can't spin.
@@ -511,7 +506,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     });
   };
   try {
-    while (stepCount < MAX_STEPS && tokenCount < tokenLimit) {
+    while (true) {
       if (controller.signal.aborted) { stopReason = timedOut ? "timeout" : "cancelled"; break; }
       // Root turn/depth guardrail: refuse a chain that has spun past its budget
       // before spending another model call on it.
@@ -530,7 +525,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         firstTokenTimeoutMs: settings.firstTokenTimeoutMs,
         tools,
         toolChoice: tools.length ? "auto" : "none",
-        maxTokens: Math.max(1, Math.min(2_048, tokenLimit - tokenCount)),
+        ...(tokenLimit === null ? {} : { maxTokens: Math.min(2_048, tokenLimit - tokenCount) }),
         onDelta: (delta: string) => {
           activeStepText += delta;
           // Hold channel turns until the step is known to be the answer: a
@@ -539,12 +534,16 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         },
       });
       activeStepText = "";
-      // The ceiling bounds what the turn *generates*. The prompt is re-sent on
-      // every step, so counting it again would end a three-step task (a prompt
-      // of 5k tokens) before it could finish — the step budget is the real
-      // bound on how long a turn may run.
+      // Counted for the record (the debugger shows it), not enforced.
       tokenCount += result.outputTokens ?? estimateTokens(result.text + JSON.stringify(result.toolCalls ?? []));
       usage = { provider: result.provider, model: result.model, inputTokens: result.inputTokens, outputTokens: result.outputTokens, latencyMs: result.latencyMs };
+      if (tokenLimit !== null && tokenCount >= tokenLimit) {
+        stopReason = "budget";
+        answerText = "This run reached its output-token limit before it could finish.";
+        messages.push({ role: "assistant", content: answerText });
+        publish(answerText);
+        break;
+      }
       if (!result.toolCalls?.length) {
         answerText = result.text;
         messages.push(assistantMessage(result.text, result.reasoning));
@@ -565,7 +564,6 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
       let stepProgressed = false;
       for (const call of result.toolCalls) {
         stepCount += 1;
-        if (stepCount > MAX_STEPS) break;
         // Is this step the model going off road — reading the app's own
         // source instead of doing the work? Counted before the duplicate
         // guard, so repeating the same `cat` counts as wandering too, and
@@ -595,12 +593,11 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         }
         messages.push({ role: "tool", toolCallID: call.id, content });
         if (call.function.name === "say") saidSomething = true;
-        const outcome = toolOutcome(call.function.name, callResult.content);
-        toolOutcomes.push(outcome);
-        if (outcome.ok) stepProgressed = true;
+        const ok = toolSucceeded(callResult.content);
+        if (ok) stepProgressed = true;
         // A tool that reaches the owner's world counts as work: mail, tasks,
         // the clock, the web, memory. Reading the app's own state does not.
-        if (outcome.ok && !WORKSPACE_TOOLS.has(call.function.name) && !INSIDE_TOOLS.has(call.function.name)) acted = true;
+        if (ok && !WORKSPACE_TOOLS.has(call.function.name) && !INSIDE_TOOLS.has(call.function.name)) acted = true;
         persistSession(db, threadID, turnID, callResult.awaiting ? "awaiting_approval" : "running", messages, summary, stepCount, tokenCount);
         if (callResult.awaiting) {
           // Approval denial is returned as a tool error and the model may explain it.
@@ -640,19 +637,10 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         publish(text);
         break;
       }
-      if (stepCount >= MAX_STEPS || tokenCount >= tokenLimit) break;
     }
     // Prune old duplicate signatures so the map doesn't grow unboundedly.
     for (const [sig, step] of recentCalls) {
       if (stepCount - step > DUPLICATE_WINDOW) recentCalls.delete(sig);
-    }
-    if (!answerText && stopReason === "end" && (tokenCount >= tokenLimit || stepCount >= MAX_STEPS)) {
-      const text = budgetExhaustedMessage(toolOutcomes);
-      answerText = text;
-      if (run.maxTokens !== undefined && tokenCount >= tokenLimit) stopReason = "budget";
-      emitToken(text);
-      messages.push({ role: "assistant", content: text });
-      publish(text);
     }
   } catch (error) {
     if (error instanceof GuardrailError) {
@@ -722,57 +710,13 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   return { turnID, text: answerText, stopReason };
 }
 
-/** What one tool call achieved, so a turn can report it in words. */
-interface ToolOutcome {
-  /** The tool name, e.g. "create_agent". */
-  name: string;
-  /** A readable label, e.g. "create_agent → F.R.I.D.A.Y.". */
-  label: string;
-  /** False when the tool reported an error. */
-  ok: boolean;
-  /** The first line of the tool's error, when it failed. */
-  error: string | null;
-}
-
-function toolOutcome(name: string, content: string): ToolOutcome {
-  let error: string | null = null;
-  let label = name;
+/** False when the tool reported an error; a result that is not JSON still counts. */
+function toolSucceeded(content: string): boolean {
   try {
-    const parsed = JSON.parse(content) as { error?: unknown; name?: unknown; id?: unknown };
-    if (typeof parsed.error === "string") error = parsed.error;
-    const subject = typeof parsed.name === "string" ? parsed.name : typeof parsed.id === "string" ? parsed.id : null;
-    if (subject) label = `${name} → ${subject}`;
+    return typeof (JSON.parse(content) as { error?: unknown }).error !== "string";
   } catch {
-    // A result that is not JSON still counts as a call that happened.
+    return true;
   }
-  return { name, label, ok: !error, error };
-}
-
-/**
- * A turn that runs out of budget still has to answer: the user asked for
- * something, and "I reached the limit" without a word about what actually
- * happened is not an answer. Say what was done and what was not.
- */
-function budgetExhaustedMessage(outcomes: ToolOutcome[]): string {
-  if (outcomes.length === 0) {
-    return `I hit the ${MAX_STEPS}-tool limit for this turn before finishing. Narrow the request, or send another message to continue.`;
-  }
-  const done = outcomes.filter((outcome) => outcome.ok);
-  const failed = outcomes.filter((outcome) => !outcome.ok);
-  const parts: string[] = [];
-  if (done.length > 0) parts.push(`Done: ${summarizeOutcomes(done)}.`);
-  if (failed.length > 0) {
-    const why = failed.map((outcome) => `${outcome.label} — ${(outcome.error ?? "failed").split(".")[0]}`);
-    parts.push(`Not done: ${why.join(", ")}.`);
-  }
-  return `I hit the ${MAX_STEPS}-tool limit for this turn before I could wrap up. ${parts.join(" ")} Send another message to continue.`;
-}
-
-/** "bash ×14, mail_search" — repeated calls collapse into a count. */
-function summarizeOutcomes(outcomes: ToolOutcome[]): string {
-  const counts = new Map<string, number>();
-  for (const outcome of outcomes) counts.set(outcome.label, (counts.get(outcome.label) ?? 0) + 1);
-  return [...counts].map(([label, count]) => (count > 1 ? `${label} ×${count}` : label)).join(", ");
 }
 
 /** The tool call's arguments, parsed leniently. */
@@ -867,12 +811,13 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
     return { content: JSON.stringify({ error: "This tool call was interrupted before completion and was not repeated." }), awaiting: false };
   }
   const rowID = newID("tcl");
+  const startedAt = Date.now();
   db.run("INSERT INTO tool_calls (id, thread_id, turn_id, call_id, tool_name, args, result, ok, error, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, 0, NULL, ?)", [rowID, threadID, turnID, call.id, call.function.name, JSON.stringify(args), nowISO()]);
   // Surface the tool call as an activity strip so the UI can render nested
   // work (delegated turns, deep research) without guessing from tokens.
   emit({ type: "tool.start", callID: call.id, name: call.function.name, preview: describePreview(call.function.name, args) });
   const storeResult = (content: string, ok: boolean, error: string | null): void => {
-    db.run("UPDATE tool_calls SET result = ?, ok = ?, error = ?, duration_ms = ? WHERE id = ?", [content, ok ? 1 : 0, error, 0, rowID]);
+    db.run("UPDATE tool_calls SET result = ?, ok = ?, error = ?, duration_ms = ? WHERE id = ?", [content, ok ? 1 : 0, error, Date.now() - startedAt, rowID]);
   };
   if (!tool || !allowlist.includes(call.function.name)) {
     const content = JSON.stringify({ error: `Tool is not available to this persona: ${call.function.name}` });

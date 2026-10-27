@@ -54,7 +54,7 @@ export interface RoutineRun {
 
 // Defaults and limits. Validated at the tool boundary.
 export const ROUTINE_DEFAULTS = {
-  maxTokens: 16_000, // the task loop's MAX_TOKENS; a larger value is silently capped
+  maxTokens: 16_000, // routine-specific cap; ordinary chat turns have no token ceiling
   maxExecutionMs: 120_000,
   allowedDomains: [] as string[], // empty = web tools refuse everything
   misfire: "run_once" as MisfirePolicy,

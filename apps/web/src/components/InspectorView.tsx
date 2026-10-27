@@ -36,7 +36,7 @@ export function InspectorView() {
           </div>
         </div>
         <Row label="Model" value={agent?.model ?? "routed by the daemon"} />
-        <Row label="Lane" value="instant — one call, no tools" />
+        <Row label="Lane" value="task — tools, no step cap" />
         <Row
           label="Tools"
           value={agent?.tools && agent.tools.length > 0 ? agent.tools.join(", ") : "none in this lane"}
