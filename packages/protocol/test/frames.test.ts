@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  JobInfoSchema,
   PROTOCOL_VERSION,
   decodeText,
   encodeFrame,
@@ -146,6 +147,60 @@ describe("server frames", () => {
     if (history.ok && history.frame.type === "thread.history.ok") {
       expect(history.frame.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     }
+  });
+});
+
+describe("routine info on job frames", () => {
+  const job = {
+    id: "job_1",
+    kind: "routine",
+    state: "queued",
+    runAt: "2026-10-27T06:30:00.000Z",
+    enabled: true,
+    attempts: 0,
+    title: "Morning digest",
+    threadID: "thr_1",
+  };
+  const routine = {
+    name: "Morning digest",
+    cron: "30 7 * * *",
+    timezone: "Europe/Berlin",
+    misfire: "run_once",
+    preflight: "http",
+    maxTokens: 16000,
+    maxExecutionMs: 120000,
+    allowedDomains: ["example.com"],
+    successStreak: 3,
+    failureStreak: 0,
+    recentRuns: [{ at: "2026-10-27T06:30:00.000Z", outcome: "ran", tokens: 512, summary: "digest sent" }],
+  };
+
+  test("accepts a JobInfo without routine", () => {
+    const result = JobInfoSchema.safeParse(job);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.routine).toBeUndefined();
+  });
+
+  test("accepts a JobInfo with routine", () => {
+    const result = JobInfoSchema.safeParse({ ...job, routine });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.routine?.name).toBe("Morning digest");
+      expect(result.data.routine?.recentRuns[0]?.outcome).toBe("ran");
+    }
+  });
+
+  test("rejects a routine with a bad preflight", () => {
+    expect(JobInfoSchema.safeParse({ ...job, routine: { ...routine, preflight: "ftp" } }).success).toBe(false);
+  });
+
+  test("rejects more than five recent runs", () => {
+    const runs = Array.from({ length: 6 }, (_, index) => ({ at: "2026-10-27T06:30:00.000Z", outcome: "ran", tokens: index }));
+    expect(JobInfoSchema.safeParse({ ...job, routine: { ...routine, recentRuns: runs } }).success).toBe(false);
+  });
+
+  test("job.list.ok parses with routine present and absent", () => {
+    expect(parseServerFrame({ type: "job.list.ok", seq: 1, jobs: [{ ...job, routine }, job] }).ok).toBe(true);
   });
 });
 

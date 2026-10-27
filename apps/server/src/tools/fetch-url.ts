@@ -74,7 +74,7 @@ async function readPage(response: Response): Promise<{ title: string|null; summa
   } finally { reader.cancel().catch(() => {}); }
 }
 
-async function assertPublicHost(host: string): Promise<void> {
+export async function assertPublicHost(host: string): Promise<void> {
   const name = host.replace(/^\[|\]$/g, "").toLowerCase();
   if (name === "localhost" || name.endsWith(".localhost") || name.endsWith(".local") || name.endsWith(".internal")) throw new Error("private host blocked");
   const addresses = isIP(name) ? [{ address: name }] : await lookup(name, { all: true, verbatim: true });
