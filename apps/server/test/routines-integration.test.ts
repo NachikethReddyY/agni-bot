@@ -84,6 +84,16 @@ describe("routine integration", () => {
     db.close();
   });
 
+  test("routine_pause refuses peer-originated turns and leaves the job enabled", async () => {
+    const db = openDatabase(":memory:");
+    const { job, routine } = fixture(db);
+    const tool = createRoutineTools(db).find((item) => item.name === "routine_pause")!;
+    const result = await tool.handler({ id: routine.id, enabled: false }, context(true)) as { error: string };
+    expect(result.error).toContain("started from another agent");
+    expect(getJob(db, job.id)?.enabled).toBe(1);
+    db.close();
+  });
+
   test("boot requeues a routine job left running", () => {
     const db = openDatabase(":memory:");
     const job = enqueueJob(db, { kind: "routine", payload: { routineID: "rtn_dead" } });

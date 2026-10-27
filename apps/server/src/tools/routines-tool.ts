@@ -108,6 +108,7 @@ export function createRoutineTools(db: Database): ToolDefinition<unknown, unknow
       name: "routine_pause", description: "Pause or resume one of this bot's routines.", kind: "static",
       schema: objectSchema({ id: stringProp, enabled: { type: "boolean" } }, ["id", "enabled"]), timeoutMs: 2_000,
       handler: async (args, ctx) => {
+        if (ctx.peerInput) return { error: "not done: this turn started from another agent's message" };
         const input = (args ?? {}) as Record<string, unknown>;
         const routine = callerRoutine(db, String(input.id ?? ""), ctx.chain?.currentAgentID ?? "ea");
         setJobEnabled(db, routine.jobID, Boolean(input.enabled));
