@@ -110,6 +110,8 @@ export class JobRunner {
       const outcome = (await handler(job, { emit: this.emit })) ?? {};
       if (outcome.nextRunAt) {
         requeueJob(this.db, job.id, outcome.nextRunAt);
+        // A clean recurring run starts a fresh retry budget for its next failure.
+        this.db.run("UPDATE jobs SET attempts = 0 WHERE id = ?", [job.id]);
         if (outcome.result !== undefined) {
           this.db.run("UPDATE jobs SET result = ? WHERE id = ?", [`${outcome.result} (recurring)`, job.id]);
         }

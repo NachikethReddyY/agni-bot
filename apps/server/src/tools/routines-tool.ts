@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { ToolDefinition } from "./registry";
 import { deleteJob, enqueueJob, getJob, setJobEnabled } from "../stores/jobs";
-import { deleteRoutineByJobID, getRoutine, insertRoutine, listRoutines, listRuns } from "../stores/routines";
+import { deleteRoutineByJobID, getRoutine, insertRoutine, listRoutines, listRuns, updateRoutineState } from "../stores/routines";
 import { assertReadOnlySelect } from "../routines/preflight";
 import { nextRun, validateCron } from "../routines/cron";
 import { ROUTINE_DEFAULTS } from "../routines/types";
@@ -12,6 +12,7 @@ const objectSchema = (properties: Record<string, unknown>, required: string[]): 
   type: "object", properties, required, additionalProperties: false,
 });
 const stringProp = { type: "string", minLength: 1 };
+const MAX_ROUTINES_PER_BOT = 20;
 
 function timezoneValid(timezone: string): boolean {
   try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }); return true; } catch { return false; }
@@ -62,6 +63,9 @@ function createRoutine(db: Database, args: Record<string, unknown>, agentID: str
   if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 16_000) throw new Error("maxTokens must be a positive integer no greater than 16000");
   if (!Number.isInteger(maxExecutionMs) || maxExecutionMs < 1 || maxExecutionMs > 600_000) throw new Error("maxExecutionMs must be a positive integer no greater than 600000");
 
+  if (listRoutines(db).filter((r) => r.agentID === agentID).length >= MAX_ROUTINES_PER_BOT) {
+    throw new Error(`routine limit reached: ${MAX_ROUTINES_PER_BOT} per bot`);
+  }
   const id = newID("rtn");
   const createdAt = nowISO();
   const runAt = nextRun(cron, timezone, new Date()).toISOString();
@@ -112,6 +116,7 @@ export function createRoutineTools(db: Database): ToolDefinition<unknown, unknow
         const input = (args ?? {}) as Record<string, unknown>;
         const routine = callerRoutine(db, String(input.id ?? ""), ctx.chain?.currentAgentID ?? "ea");
         setJobEnabled(db, routine.jobID, Boolean(input.enabled));
+        if (input.enabled) updateRoutineState(db, routine.id, { failureStreak: 0 });
         return { id: routine.id, enabled: Boolean(input.enabled) };
       },
     } as ToolDefinition<unknown, unknown>,

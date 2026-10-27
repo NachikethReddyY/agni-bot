@@ -4,10 +4,13 @@ import { assertPublicHost } from "../tools/fetch-url";
 
 const SQL_FORBIDDEN = /\b(PRAGMA|ATTACH|DETACH|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|VACUUM)\b/i;
 const MAX_BODY_BYTES = 1_000_000;
+const MAX_REDIRECTS = 5;
 
 /** Validate the deliberately narrow SQL preflight language. */
 export function assertReadOnlySelect(query: string): void {
   const normalized = query.trim();
+  // shortcut: WITH is refused so a recursive CTE cannot block the daemon; allow it again only with a row or time bound.
+  if (/\bWITH\b/i.test(normalized)) throw new Error("preflight SQL may not use WITH");
   if (!/^SELECT\b/i.test(normalized) || normalized.includes(";") || SQL_FORBIDDEN.test(normalized)) {
     throw new Error("preflight SQL must be a single read-only SELECT");
   }
@@ -28,10 +31,20 @@ export async function runPreflight(
   }
 
   if (p.kind === "http") {
-    const url = new URL(p.url);
-    if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("unsupported URL scheme");
-    await assertPublicHost(url.hostname);
-    const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+    // Redirects are followed by hand so every hop gets the same scheme and public-host checks.
+    const signal = AbortSignal.timeout(5_000);
+    let url = new URL(p.url);
+    let response: Response;
+    for (let hop = 0; ; hop++) {
+      if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("unsupported URL scheme");
+      await assertPublicHost(url.hostname);
+      response = await fetch(url, { signal, redirect: "manual" });
+      const location = response.headers.get("location");
+      if (response.status < 300 || response.status > 399 || !location) break;
+      await response.body?.cancel().catch(() => {});
+      if (hop === MAX_REDIRECTS) throw new Error("preflight followed too many redirects");
+      url = new URL(location, url);
+    }
     const etag = response.headers.get("etag");
     const hash = etag ?? await hashResponse(response);
     return { changed: hash !== lastHash, hash };

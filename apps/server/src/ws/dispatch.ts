@@ -71,7 +71,7 @@ import type { PluginService } from "../plugins/service";
 import { pluginMailResolver } from "../plugins/credentials";
 import type { FrameLog } from "./frame-log";
 import { activateAppearanceProfile, deleteAppearanceProfile, listAppearanceProfiles, saveAppearanceProfile } from "../stores/appearance";
-import { getRoutineByJobID, listRuns } from "../stores/routines";
+import { getRoutineByJobID, listRuns, updateRoutineState } from "../stores/routines";
 import { deleteRoutineJob } from "../tools/routines-tool";
 
 export interface Session {
@@ -1273,13 +1273,20 @@ function handleJobSet(
     case "pause":
       setJobEnabled(deps.db, job.id, false);
       break;
-    case "resume":
+    case "resume": {
       setJobEnabled(deps.db, job.id, true);
+      // A resumed routine starts its failure count over, or one more failure re-pauses it.
+      const routine = getRoutineByJobID(deps.db, job.id);
+      if (routine) updateRoutineState(deps.db, routine.id, { failureStreak: 0 });
       break;
-    case "run":
+    }
+    case "run": {
       // "Run now" resumes a paused job: a claim would skip it otherwise.
       wakeJob(deps.db, job.id);
+      const routine = getRoutineByJobID(deps.db, job.id);
+      if (routine) updateRoutineState(deps.db, routine.id, { failureStreak: 0 });
       break;
+    }
   }
   // The write answers with the fresh list, so toggles never drift from truth.
   deps.reply({ type: "job.list.ok", jobs: jobSnapshot(deps.db, 50) });

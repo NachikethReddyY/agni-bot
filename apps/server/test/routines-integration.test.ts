@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { openDatabase } from "../src/db";
 import { requeueStuckJobs, enqueueJob, getJob } from "../src/stores/jobs";
-import { insertRoutine, getRoutineByJobID, recordRun, listRuns } from "../src/stores/routines";
+import { insertRoutine, getRoutine, getRoutineByJobID, recordRun, listRuns } from "../src/stores/routines";
 import { newID, nowISO } from "../src/util/ids";
 import { createRoutineTools, deleteRoutineJob } from "../src/tools/routines-tool";
 import { registerAllJobs } from "../src/jobs/registry";
@@ -56,6 +56,7 @@ describe("routine integration", () => {
     }
     await expect(callCreate(db, { ...base, cron: "*/5 * * * *", timezone: "Mars/Olympus" })).rejects.toThrow("invalid timezone");
     await expect(callCreate(db, { ...base, cron: "*/5 * * * *", preflight: { kind: "sql", query: "DELETE FROM agents" } })).rejects.toThrow("single read-only SELECT");
+    await expect(callCreate(db, { ...base, cron: "*/5 * * * *", preflight: { kind: "sql", query: "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT count(*) FROM c" } })).rejects.toThrow("preflight SQL may not use WITH");
     const created = await callCreate(db, { ...base, cron: "*/5 * * * *" }) as Routine;
     expect(created.allowedDomains).toEqual([]);
     expect(created.maxTokens).toBe(16000);
@@ -74,6 +75,32 @@ describe("routine integration", () => {
     expect(listRuns(db, routine.id, 5)).toEqual([]);
     expect(getJob(db, job.id)?.state).toBe("queued");
     expect(new Date(getJob(db, job.id)!.run_at).getTime()).toBeGreaterThan(Date.now());
+    db.close();
+  });
+
+  test("a bot holds at most 20 routines", async () => {
+    const db = openDatabase(":memory:");
+    const base = { name: "Check", prompt: "Review it", cron: "*/5 * * * *", timezone: "UTC", preflight: { kind: "none" } };
+    for (let index = 0; index < 20; index++) await callCreate(db, { ...base, name: `Check ${index}` });
+    await expect(callCreate(db, base)).rejects.toThrow("routine limit reached: 20 per bot");
+    db.close();
+  });
+
+  test("job.set resume resets a routine's failure count", async () => {
+    const db = openDatabase(":memory:");
+    const { job, routine } = fixture(db, { failureStreak: 5 });
+    db.run("UPDATE jobs SET enabled = 0 WHERE id = ?", [job.id]);
+    const frameLog = new FrameLog(10);
+    const deps = {
+      db, router: {} as Router, frameLog, config: {} as never,
+      emit: (body: ServerFrameBody): ServerFrame => frameLog.next(body),
+      reply: (body: ServerFrameBody): ServerFrame => frameLog.next(body, { replay: false }),
+      send: () => undefined, close: () => undefined,
+    } as DispatchDeps;
+    const session = { id: "conn", authed: true, agentID: "ea", aborts: new Map() } as Session;
+    await dispatch(deps, session, JSON.stringify({ type: "job.set", jobID: job.id, action: "resume" }));
+    expect(getJob(db, job.id)?.enabled).toBe(1);
+    expect(getRoutine(db, routine.id)?.failureStreak).toBe(0);
     db.close();
   });
 

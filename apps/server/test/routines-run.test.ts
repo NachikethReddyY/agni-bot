@@ -8,6 +8,7 @@ import { executeRoutine, ROUTINE_TOOL_ALLOWLIST } from "../src/routines/run";
 import { buildRoutinePrompt } from "../src/routines/prompt";
 import type { Routine } from "../src/routines/types";
 import { insertRoutine, getRoutine } from "../src/stores/routines";
+import { createRoutineTools } from "../src/tools/routines-tool";
 import { createThread } from "../src/stores/threads";
 import { ensureConversation, backgroundSession } from "../src/stores/conversations";
 import { runTaskTurn } from "../src/agent/task-loop";
@@ -204,6 +205,45 @@ describe("routine execution", () => {
     }
     expect(database.query("SELECT enabled FROM jobs WHERE id = ?").get(r.jobID)).toEqual({ enabled: 0 });
     expect(frames.some((frame) => frame.type === "notify" && frame.body.includes("paused after 5 failures"))).toBe(true);
+  });
+
+  test("auto-pause fires again after a resume resets the failure count", async () => {
+    const r = routine({ preflight: { kind: "none" } });
+    const database = setup(r);
+    const fake = routerWith(() => { throw new Error("provider failure"); });
+    const frames: any[] = [];
+    const failOnce = () => executeRoutine({ db: database, router: fake.router, settings, emit: (frame) => frames.push(frame) }, getRoutine(database, r.id)!);
+    const pauseNotifies = () => frames.filter((frame) => frame.type === "notify" && frame.body.includes("paused after 5 failures")).length;
+    const enabled = () => database.query("SELECT enabled FROM jobs WHERE id = ?").get(r.jobID);
+
+    for (let i = 0; i < 5; i++) await failOnce();
+    expect(enabled()).toEqual({ enabled: 0 });
+    expect(pauseNotifies()).toBe(1);
+
+    // Resume through the routine_pause tool, which resets the failure count.
+    const pause = createRoutineTools(database).find((tool) => tool.name === "routine_pause")!;
+    await pause.handler({ id: r.id, enabled: true }, { peerInput: false, chain: { currentAgentID: "ea" } } as any);
+    expect(enabled()).toEqual({ enabled: 1 });
+    expect(getRoutine(database, r.id)?.failureStreak).toBe(0);
+
+    for (let i = 0; i < 5; i++) await failOnce();
+    expect(enabled()).toEqual({ enabled: 0 });
+    expect(pauseNotifies()).toBe(2);
+
+    // A failure while already paused does not notify again.
+    await failOnce();
+    expect(pauseNotifies()).toBe(2);
+  });
+
+  test("an oversized state block keeps the prior state and records a warning", async () => {
+    const r = routine({ preflight: { kind: "none" } });
+    const database = setup(r);
+    const oversized = JSON.stringify({ stateContext: { blob: "x".repeat(5_000) } });
+    const fake = routerWith(() => ({ text: `Done.\n\`\`\`json\n${oversized}\n\`\`\``, outputTokens: 4, provider: "fake", model: "fake", latencyMs: 1 }));
+    const run = await executeRoutine({ db: database, router: fake.router, settings, emit: () => {} }, r);
+    expect(run.outcome).toBe("ran");
+    expect(run.error).toContain("Warning");
+    expect(getRoutine(database, r.id)?.stateContext).toEqual({ seen: 1 });
   });
 
   test("prompt separates saved state from instructions and allowlist is read-only", () => {

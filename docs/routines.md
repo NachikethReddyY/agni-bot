@@ -31,12 +31,19 @@ A routine cannot be created from a turn that started from another bot's message.
 | `maxTokens` | 16,000 | 1 to 16,000 (the task loop's own cap) |
 | `maxExecutionMs` | 120,000 | 1 to 600,000 |
 | `allowedDomains` | empty | web tools refuse every host; `routine_create` always leaves it empty |
-| Preflight | `none` | `sql` must be one read-only `SELECT`, with no `;` |
+| Preflight | `none` | `sql` must be one read-only `SELECT`, with no `;` and no `WITH` |
 
 A routine run can use only the read-only tools: memory and transcript search,
 links, tasks, grep, glob, read_file, web search and fetch, mail search and read,
 recall_fact, and skills. It cannot send mail, run bash, write files, hand off to
 another bot, or change jobs or routines.
+
+## Known limits
+
+- The SQL preflight rejects `WITH`, so it cannot run recursive queries.
+- A bot may hold at most 20 routines.
+- A state block over 4 KB is refused. The prior state is kept and the run records a warning.
+- An `http` preflight checks every redirect hop: http or https only, and a public host. It follows at most 5 redirects.
 
 ## Not built
 

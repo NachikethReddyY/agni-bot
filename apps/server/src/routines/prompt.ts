@@ -1,5 +1,7 @@
 import type { Routine } from "./types";
 
+const MAX_STATE_CHARS = 4096;
+
 /** Build a prompt that keeps saved state visibly separate from instructions. */
 export function buildRoutinePrompt(routine: Routine): string {
   const state = JSON.stringify(routine.stateContext ?? null, null, 2);
@@ -21,7 +23,10 @@ export function parseRoutineState(text: string): { found: true; value: unknown }
     try {
       const parsed: unknown = JSON.parse(match[1]!.trim());
       if (typeof parsed === "object" && parsed !== null && "stateContext" in parsed) {
-        return { found: true, value: (parsed as { stateContext: unknown }).stateContext };
+        const value = (parsed as { stateContext: unknown }).stateContext;
+        // Oversized state is refused, so the prior state is kept and the warning shows.
+        if (JSON.stringify(value).length > MAX_STATE_CHARS) return { found: false };
+        return { found: true, value };
       }
     } catch { /* Keep looking for a valid state block. */ }
   }

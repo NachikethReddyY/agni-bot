@@ -6,7 +6,7 @@ import { resolvePersona } from "../agent/personas";
 import { rootGuardrail } from "../agent/guardrails";
 import { backgroundSession, ensureConversation, getConversation } from "../stores/conversations";
 import { getThread } from "../stores/threads";
-import { setJobEnabled } from "../stores/jobs";
+import { getJob, setJobEnabled } from "../stores/jobs";
 import { newID, nowISO } from "../util/ids";
 import { runPreflight } from "./preflight";
 import { buildRoutinePrompt, parseRoutineState } from "./prompt";
@@ -47,8 +47,11 @@ function updateStreak(deps: RoutineRunDeps, routine: Routine, succeeded: boolean
 }
 
 function maybePause(deps: RoutineRunDeps, routine: Routine, failureStreak: number): void {
-  if (failureStreak !== ROUTINE_LIMITS.autoPauseAfterFailures) return;
+  if (failureStreak < ROUTINE_LIMITS.autoPauseAfterFailures) return;
+  // Notify only on the enabled -> paused transition, not on every failure while paused.
+  const wasEnabled = getJob(deps.db, routine.jobID)?.enabled === 1;
   setJobEnabled(deps.db, routine.jobID, false);
+  if (!wasEnabled) return;
   deps.emit({ type: "notify", title: `Routine ${routine.name} paused`, body: `Routine ${routine.name} paused after ${ROUTINE_LIMITS.autoPauseAfterFailures} failures`, sound: false, ...(routine.threadID ? { threadID: routine.threadID } : {}) });
 }
 

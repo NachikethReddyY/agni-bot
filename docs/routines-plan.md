@@ -1,7 +1,9 @@
 # Routines: build plan (for Haiku)
 
-Status: PLAN. Nothing here is built. Written 2026-10-27 from a read of the
-code, so every "exists" claim below was checked. Read `AGENTS.md` first.
+Status: BUILT on feat/agnibot-routines, not merged.
+
+Written 2026-10-27 from a read of the code, so every "exists" claim below was
+checked. Read `AGENTS.md` first.
 
 A **Routine** is a recurring background job owned by a bot. Each run first
 does a zero-token change check; only if something changed does it wake the bot
