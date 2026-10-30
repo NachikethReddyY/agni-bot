@@ -61,7 +61,17 @@ import { bypassesBatch, classifyTurn } from "../agent/gate";
 import { scheduleTagger, turnsSinceTag } from "../jobs/tagger";
 import type { TurnJobPayload } from "../jobs/turn";
 import { newID, nowISO } from "../util/ids";
-import { putAgentMemory, listAgentMemories, type AgentMemoryRow } from "../stores/agent-memories";
+import {
+  deleteAgentMemory,
+  getAgentMemory,
+  listAgentMemories,
+  memoryVisibleTo,
+  putAgentMemory,
+  rewriteAgentMemory,
+  setMemoryPinned,
+  type AgentMemoryRow,
+} from "../stores/agent-memories";
+import { getConflict, listConflicts, resolveConflict } from "../stores/conflicts";
 import { appendChannelMessage, ensureDMChannel, getChannel } from "../stores/channels";
 import { canonicalURL, saveLink, searchLinks } from "../stores/links";
 import { buildShareDocument, publishShare, shareBaseURL } from "../share/document";
@@ -205,6 +215,12 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleTaskActivity(deps, session, frame);
     case "memory.list":
       return handleMemoryList(deps, session, frame);
+    case "memory.update":
+    case "memory.pin":
+    case "memory.forget":
+    case "memory.conflicts.list":
+    case "memory.conflict.resolve":
+      return handleMemoryEdit(deps, session, frame);
     case "task.update":
       return handleTaskUpdate(deps, session, frame);
     case "task.answer":
@@ -905,21 +921,92 @@ function handleMemoryList(deps: DispatchDeps, session: Session, frame: Extract<C
     callerAgentID: session.agentID,
     limit: frame.limit ?? 100,
   });
-  deps.reply({
-    type: "memory.list.ok",
-    memories: rows.map((row) => ({
-      id: row.id,
-      text: row.content,
-      scope: row.scope,
-      visibility: row.visibility,
-      source: row.source,
-      confidence: row.confidence,
-      salience: row.salience,
-      updatedAt: row.updated_at,
-      lastUsedAt: row.last_used_at,
-      useCount: row.use_count,
-    })),
-  });
+  deps.reply({ type: "memory.list.ok", memories: rows.map(memoryItem) });
+}
+
+function memoryItem(row: AgentMemoryRow) {
+  return {
+    id: row.id,
+    text: row.content,
+    scope: row.scope,
+    visibility: row.visibility,
+    source: row.source,
+    confidence: row.confidence,
+    salience: row.salience,
+    updatedAt: row.updated_at,
+    lastUsedAt: row.last_used_at,
+    useCount: row.use_count,
+  };
+}
+
+type MemoryEditFrame = Extract<ClientFrame, { type: "memory.update" | "memory.pin" | "memory.forget" | "memory.conflicts.list" | "memory.conflict.resolve" }>;
+
+/**
+ * Editable memory (Phase 1). Every edit goes through the same caller-filter
+ * as `memory.list`: a row the view would not show is `unknown_memory`.
+ */
+function handleMemoryEdit(deps: DispatchDeps, session: Session, frame: MemoryEditFrame): void {
+  if (!requireAuth(deps, session)) return;
+  const caller = session.agentID;
+  const visible = (id: string): AgentMemoryRow | null => {
+    const row = getAgentMemory(deps.db, id);
+    return row && memoryVisibleTo(row, caller) ? row : null;
+  };
+  const unknown = (id: string): void => sendError(deps, session, "unknown_memory", `no memory ${id}`);
+  switch (frame.type) {
+    case "memory.update": {
+      if (!visible(frame.id)) return unknown(frame.id);
+      const row = rewriteAgentMemory(deps.db, frame.id, frame.text);
+      if (!row) return unknown(frame.id);
+      deps.reply({ type: "memory.update.ok", memory: memoryItem(row) });
+      return;
+    }
+    case "memory.pin": {
+      if (!visible(frame.id)) return unknown(frame.id);
+      const row = setMemoryPinned(deps.db, frame.id, frame.pinned);
+      if (!row) return unknown(frame.id);
+      deps.reply({ type: "memory.pin.ok", memory: memoryItem(row) });
+      return;
+    }
+    case "memory.forget": {
+      if (!visible(frame.id)) return unknown(frame.id);
+      deps.reply({ type: "memory.forget.ok", id: frame.id, deleted: deleteAgentMemory(deps.db, frame.id) });
+      return;
+    }
+    case "memory.conflicts.list": {
+      // Only conflicts whose live side this caller can see.
+      const conflicts = listConflicts(deps.db, { limit: frame.limit ?? 50 })
+        .filter((conflict) => visible(conflict.memory_id))
+        .map((conflict) => ({
+          id: conflict.id,
+          memoryId: conflict.memory_id,
+          previousId: conflict.previous_id,
+          content: conflict.content,
+          previousContent: conflict.previous_content,
+          createdAt: conflict.created_at,
+        }));
+      deps.reply({ type: "memory.conflicts.list.ok", conflicts });
+      return;
+    }
+    case "memory.conflict.resolve": {
+      const conflict = getConflict(deps.db, frame.id);
+      if (!conflict || conflict.resolved) return sendError(deps, session, "unknown_conflict", `no open conflict ${frame.id}`);
+      if (frame.keepId !== conflict.memory_id && frame.keepId !== conflict.previous_id) {
+        return sendError(deps, session, "bad_frame", "keepId must be the conflict's memoryId or previousId");
+      }
+      // The live side must still be live and visible; a later write made the
+      // conflict stale, and the owner should look at the current list instead.
+      if (!visible(conflict.memory_id)) return unknown(conflict.memory_id);
+      const kept = frame.keepId === conflict.memory_id
+        ? getAgentMemory(deps.db, conflict.memory_id)
+        // Keeping the old value: it supersedes the newer one, as an owner edit.
+        : rewriteAgentMemory(deps.db, conflict.memory_id, conflict.previous_content);
+      if (!kept) return unknown(conflict.memory_id);
+      resolveConflict(deps.db, conflict.id);
+      deps.reply({ type: "memory.conflict.resolve.ok", id: conflict.id, memory: memoryItem(kept) });
+      return;
+    }
+  }
 }
 
 function handleTaskUpdate(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame,{type:"task.update"}>): void {

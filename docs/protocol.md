@@ -261,3 +261,22 @@ routine's `allowedDomains` (at most 20 bare hosts, no scheme, slash or port).
 Malformed input returns `invalid_domains`. Only the owner's connection can send
 it; a bot's tools cannot, so a bot cannot widen its own egress. The reply is
 `job.list.ok`, as for `job.set`.
+
+### Editable memory (additive v2 extension)
+
+The memory view can change what a bot remembers, not only read it. Every
+frame below acts only on a row the caller would see in `memory.list` (the
+same scope and visibility filter retrieval uses); any other id answers
+`unknown_memory`. All are additive: no version bump.
+
+| client → server | Fields | Effect |
+| --- | --- | --- |
+| `memory.list` | `{scope?, limit?}` | Lists memories (`global_user` by default, or `agent`). Answer: `memory.list.ok {memories}`. |
+| `memory.update` | `{id, text}` | Replaces the text. The old text is kept as a superseded version; the new one is owner-stated (`source: user`). Answer: `memory.update.ok {memory}`. |
+| `memory.pin` | `{id, pinned}` | Pinned memories (salience 1.0) lead the owner profile in every prompt; unpinning sets salience 0.5. Answer: `memory.pin.ok {memory}`. |
+| `memory.forget` | `{id}` | Hard-deletes the memory and its whole version chain. Answer: `memory.forget.ok {id, deleted}`. |
+| `memory.conflicts.list` | `{limit?}` | Unresolved conflicts: a fact that replaced an older, different one. Answer: `memory.conflicts.list.ok {conflicts: [{id, memoryId, previousId, content, previousContent, createdAt}]}`. |
+| `memory.conflict.resolve` | `{id, keepId}` | `keepId` is the conflict's `memoryId` (keep the new value) or `previousId` (restore the old value, as an owner edit). Answer: `memory.conflict.resolve.ok {id, memory}` with the memory now live. |
+
+Errors: `unknown_memory` (not visible, or no longer live), `unknown_conflict`
+(no open conflict with that id), `bad_frame` (`keepId` is neither side).

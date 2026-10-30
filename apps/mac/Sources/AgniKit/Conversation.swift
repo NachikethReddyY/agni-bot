@@ -338,7 +338,8 @@ public struct Conversation: Sendable, Equatable {
   public mutating func apply(_ frame: ServerFrame) -> [ConversationEffect] {
     switch frame {
     case .helloOK, .conversationOK, .conversationHistoryOK, .threadExportOK, .threadListOK, .threadHistoryOK,
-      .jobListOK, .taskListOK, .taskUpdateOK, .memoryListOK, .providerAddOK, .providerModelsOK,
+      .jobListOK, .taskListOK, .taskUpdateOK, .memoryListOK, .memoryUpdateOK, .memoryPinOK, .memoryForgetOK,
+      .memoryConflictsListOK, .memoryConflictResolveOK, .providerAddOK, .providerModelsOK,
       .pluginListOK, .pluginConnectOK, .pluginState, .appearanceListOK, .appearanceUpdated, .unknown:
       return []
 
