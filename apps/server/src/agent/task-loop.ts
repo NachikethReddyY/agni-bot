@@ -326,11 +326,11 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // Agent-to-agent guardrails: root turn is depth 1; a delegated child turn
   // inherits the parent's state via run.guardrail. Facts ride in the prefix.
   let guardrail = run.guardrail ?? rootGuardrail(persona.id);
-  const facts = run.facts === false ? [] : recallFact(db, { limit: 6, callerAgentID: persona.id }).facts.map((row) => row.fact);
+  // Sorted so an update to one fact does not reshuffle the cached prefix.
+  const facts = run.facts === false ? [] : recallFact(db, { limit: 6, callerAgentID: persona.id }).facts.map((row) => row.fact).sort();
   const channelSummary = run.channelID ? getChannelSummary(db, run.channelID)?.summary : null;
-  // ASM-002: a short, always-present note of the current topic. It rides in
-  // the (semi-static) anchor slot, not the dynamic tail, so it does not break
-  // the cached prefix.
+  // ASM-002: a short, always-present note of the current topic. It holds the
+  // latest question, so the compiler places it after the per-block slots.
   const anchor = deriveAnchor({
     carrySummary: [run.carrySummary, channelSummary].filter(Boolean).join("\n\n") || null,
     history: priorHistory,
@@ -938,7 +938,7 @@ function persistSession(db: Database, threadID: string, turnID: string, state: s
   db.run("UPDATE agent_sessions SET state=?, message_log=?, summary=?, step_count=?, token_count=?, updated_at=? WHERE thread_id=? AND turn_id=?", [state, JSON.stringify(messages), summary, steps, tokens, nowISO(), threadID, turnID]);
 }
 
-function compact(messages: ChatMessage[], previousSummary: string | null): { messages: ChatMessage[]; summary: string | null } {
+export function compact(messages: ChatMessage[], previousSummary: string | null): { messages: ChatMessage[]; summary: string | null } {
   let normalized = messages.map((message) => ({
     ...message,
     content: truncate(message.content, message.role === "tool" ? MAX_TOOL_RESULT_CHARS : 12_000),
@@ -951,7 +951,9 @@ function compact(messages: ChatMessage[], previousSummary: string | null): { mes
   const firstUser = normalized.findIndex((message, index) => index >= keepFrom && message.role === "user");
   const cut = firstUser >= 0 ? firstUser : keepFrom;
   const dropped = normalized.slice(0, cut).filter((message) => message.role === "user" || message.role === "assistant").map((message) => `${message.role}: ${message.content}`).join("\n");
-  const summary = truncate([previousSummary, dropped].filter(Boolean).join("\n"), 8_000);
+  // Keep the newest dropped text; cutting the end would freeze this on the oldest turns.
+  const merged = [previousSummary, dropped].filter(Boolean).join("\n");
+  const summary = merged.length > 8_000 ? `…${merged.slice(-7_999)}` : merged;
   normalized = normalized.slice(cut);
   while (size() > MAX_PROMPT_CHARS && normalized.length > 1) {
     const nextUser = normalized.findIndex((message, index) => index > 0 && message.role === "user");

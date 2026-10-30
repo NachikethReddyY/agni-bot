@@ -7,7 +7,7 @@ import { openDatabase } from "../src/db";
 import { HealthTracker } from "../src/models/health";
 import type { ProviderConfig } from "../src/models/providers";
 import { Router } from "../src/models/router";
-import { runTaskTurn } from "../src/agent/task-loop";
+import { compact, runTaskTurn } from "../src/agent/task-loop";
 import { resolveApprovalWaiter } from "../src/agent/approval-broker";
 import type { ResolvedPersona } from "../src/agent/personas";
 import { createThread, createTurn } from "../src/stores/threads";
@@ -358,5 +358,20 @@ describe("task lane loop", () => {
     expect(result.text).toContain("no model providers configured");
     expect(emitted.find((frame) => frame.type === "error")).toMatchObject({ code: "no_provider" });
     expect(db.query<{ text: string }, [string]>("SELECT text FROM messages WHERE thread_id = ? AND role = 'assistant'").get(thread.id)?.text).toContain("This turn failed:");
+  });
+});
+
+describe("compact", () => {
+  test("the carried summary keeps the newest dropped turn, not the oldest", () => {
+    let summary: string | null = null;
+    for (let round = 0; round < 3; round += 1) {
+      const messages = Array.from({ length: 12 }, (_, index) => ({
+        role: (index % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+        content: `round ${round} turn ${index} ${"x".repeat(5_000)}`,
+      }));
+      ({ summary } = compact(messages, summary));
+    }
+    expect(summary!.length).toBeLessThanOrEqual(8_000);
+    expect(summary).toContain("round 2 turn 3");
   });
 });

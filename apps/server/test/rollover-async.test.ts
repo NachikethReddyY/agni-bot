@@ -19,6 +19,7 @@ import {
   rolloverIfNeeded,
   SESSION_ROLLOVER_CHARS,
   shouldRotate,
+  summarizeBlock,
   tailOf,
 } from "../src/agent/rollover";
 import { ensureConversation, getConversation, openSession, updateSummary } from "../src/stores/conversations";
@@ -117,6 +118,25 @@ describe("the background summary", () => {
     const stored = getConversation(db, conversation.id);
     expect(stored?.summary).toContain("Use SQLite");
     expect(stored?.summary_version).toBeGreaterThan(0);
+  });
+
+  test("a long block is summarized from its newest turns", async () => {
+    db = openDatabase(":memory:");
+    const conversation = ensureConversation(db, "ea");
+    const block = openSession(db, conversation, "manual", null);
+    for (let index = 0; index < 30; index += 1) {
+      appendMessage(db, { threadID: block.id, role: "user", text: `filler ${index} ${"x".repeat(800)}` });
+    }
+    appendMessage(db, { threadID: block.id, role: "user", text: "the newest decision is Postgres" });
+    let prompt = "";
+    const router = {
+      route: async (request: { messages: Array<{ content: string }> }) => {
+        prompt = request.messages.map((message) => message.content).join("\n");
+        return { text: '{"decisions":["Postgres"]}' };
+      },
+    } as unknown as Router;
+    await summarizeBlock({ db, router, firstTokenTimeoutMs: 1000 }, conversation, block);
+    expect(prompt).toContain("the newest decision is Postgres");
   });
 
   test("a second rotation before the first summary keeps the newer one", async () => {

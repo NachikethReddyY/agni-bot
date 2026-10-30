@@ -297,7 +297,7 @@ export async function summarizeBlock(
   const transcript = messages
     .map((message, index) => `${index}: ${message.role}: ${message.text}`)
     .join("\n")
-    .slice(0, 12_000);
+    .slice(-12_000); // keep the newest turns; the oldest are what the carry already covers
   try {
     const result = await deps.router.route({
       messages: [

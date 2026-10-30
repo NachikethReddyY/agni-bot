@@ -27,6 +27,12 @@ import { looksDeictic } from "./gate";
 export const DEFAULT_MIN_SCORE = 0.15;
 
 /**
+ * The floor for a vector hit, on its 0..1 relevance ((cosine + 1) / 2).
+ * 0.75 is a cosine of 0.5; an unrelated item sits near 0.5 (TUNABLE).
+ */
+export const VECTOR_MIN_RELEVANCE = 0.75;
+
+/**
  * ASM-003: rewrite a message that refers to earlier context.
  *
  * "explain this" means nothing to a search index. The anchor says what the
@@ -124,8 +130,14 @@ export async function retrieveFacts(
     callerAgentID: options.callerAgentID,
     limit,
   });
+  // The floor is applied per list, before fusion: an RRF score tops out near
+  // 0.033 and can never clear a floor calibrated for the text scores.
+  const passed = new Set([
+    ...textHits.filter((hit) => hit.score >= floor),
+    ...vectorHits.filter((hit) => hit.relevance >= VECTOR_MIN_RELEVANCE),
+  ].map((hit) => hit.row.id));
   const fused = fuseHits(textHits, vectorHits);
-  const kept = fused.filter((hit) => hit.score >= floor);
+  const kept = fused.filter((hit) => passed.has(hit.row.id));
   if (kept.length === 0) return { hits: [], belowThreshold: fused.length > 0, usedVectors: true };
   // A recall moves the ranking inputs.
   markMemoryUsed(db, kept.map((hit) => hit.row.id));
