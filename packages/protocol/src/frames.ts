@@ -234,6 +234,19 @@ export const MemoryItemSchema = z.object({
 });
 export type MemoryItem = z.infer<typeof MemoryItemSchema>;
 
+/** A fact that replaced an older, different one, waiting for the owner. */
+export const MemoryConflictSchema = z.object({
+  id: z.string(),
+  /** The memory that won (the live one). */
+  memoryId: z.string(),
+  /** The memory it replaced (closed). */
+  previousId: z.string(),
+  content: z.string(),
+  previousContent: z.string(),
+  createdAt: z.string(),
+});
+export type MemoryConflict = z.infer<typeof MemoryConflictSchema>;
+
 export const TaskInfoSchema = z.object({
   id: z.string().min(1), title: z.string(), dueAt: z.string().nullable(),
   priority: z.enum(["low", "normal", "high", "urgent"]), status: TaskStatusSchema,
@@ -453,6 +466,18 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
    * retrieval could use — and nothing more.
    */
   z.object({ type: z.literal("memory.list"), scope: z.enum(["global_user", "agent"]).optional(), limit: z.number().int().positive().max(200).optional() }),
+  // Editable memory (Phase 1, additive v2). Each acts on a row the caller
+  // can see in `memory.list`; anything else is `unknown_memory`.
+  /** Replace a memory's text. The old text is kept as a superseded version. */
+  z.object({ type: z.literal("memory.update"), id: z.string().min(1), text: z.string().trim().min(1).max(8_000) }),
+  /** Pin (always in the profile) or unpin a memory. */
+  z.object({ type: z.literal("memory.pin"), id: z.string().min(1), pinned: z.boolean() }),
+  /** Forget a memory and its whole version chain (hard delete). */
+  z.object({ type: z.literal("memory.forget"), id: z.string().min(1) }),
+  /** The unresolved conflicts: a fact that replaced an older, different one. */
+  z.object({ type: z.literal("memory.conflicts.list"), limit: z.number().int().positive().max(200).optional() }),
+  /** Settle a conflict by keeping one side: the newer memory or the previous one. */
+  z.object({ type: z.literal("memory.conflict.resolve"), id: z.string().min(1), keepId: z.string().min(1) }),
   z.object({ type: z.literal("task.update"), taskID: z.string().min(1), action: z.enum(["done", "reopen", "snooze", "cancel", "edit"]), until: z.string().datetime().optional(), title: z.string().min(1).max(500).optional(), description: z.string().max(10000).nullable().optional(), dueAt: z.string().datetime().nullable().optional(), reminderAt: z.string().datetime().nullable().optional(), deadlineAt: z.string().datetime().nullable().optional(), labels: z.array(z.string().max(64)).max(20).optional(), workflowStatus: TaskWorkflowStatusSchema.optional(), progressNote: z.string().max(1000).nullable().optional(), repeatRule: z.enum(["none", "daily", "weekly", "monthly"]).optional(), priority: z.enum(["low", "normal", "high", "urgent"]).optional(), listID: z.string().optional() }),
   /**
    * Answer a question a delegated task asked. Its own frame, not a `msg.send`:
@@ -757,6 +782,12 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("task.list.create.ok"), seq, lists: z.array(TaskListInfoSchema) }),
   z.object({ type: z.literal("task.activity.ok"), seq, taskID: z.string(), activity: z.array(TaskActivityInfoSchema) }),
   z.object({ type: z.literal("memory.list.ok"), seq, memories: z.array(MemoryItemSchema) }),
+  // Editable memory answers (Phase 1, additive v2).
+  z.object({ type: z.literal("memory.update.ok"), seq, memory: MemoryItemSchema }),
+  z.object({ type: z.literal("memory.pin.ok"), seq, memory: MemoryItemSchema }),
+  z.object({ type: z.literal("memory.forget.ok"), seq, id: z.string(), deleted: z.boolean() }),
+  z.object({ type: z.literal("memory.conflicts.list.ok"), seq, conflicts: z.array(MemoryConflictSchema) }),
+  z.object({ type: z.literal("memory.conflict.resolve.ok"), seq, id: z.string(), memory: MemoryItemSchema }),
   z.object({ type: z.literal("task.update.ok"), seq, task: TaskInfoSchema }),
   /** A delegated task changed state; clients refresh their task list. */
   z.object({ type: z.literal("task.updated"), seq, task: TaskInfoSchema }),

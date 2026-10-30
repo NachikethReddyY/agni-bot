@@ -171,6 +171,44 @@ public struct MemoryItem: Sendable, Equatable, Decodable, Identifiable {
   public var useCount: Int
 }
 
+// Editable memory (Phase 1, additive v2).
+
+/// Answer to `memory.update` and `memory.pin`: the memory as it now stands.
+public struct MemoryItemOK: Sendable, Equatable, Decodable {
+  public var seq: Int
+  public var memory: MemoryItem
+}
+
+/// Answer to `memory.forget`.
+public struct MemoryForgetOK: Sendable, Equatable, Decodable {
+  public var seq: Int
+  public var id: String
+  public var deleted: Bool
+}
+
+/// A fact that replaced an older, different one, waiting for the owner.
+public struct MemoryConflict: Sendable, Equatable, Decodable, Identifiable {
+  public var id: String
+  public var memoryId: String
+  public var previousId: String
+  public var content: String
+  public var previousContent: String
+  public var createdAt: String
+}
+
+/// Answer to `memory.conflicts.list`.
+public struct MemoryConflictsListOK: Sendable, Equatable, Decodable {
+  public var seq: Int
+  public var conflicts: [MemoryConflict]
+}
+
+/// Answer to `memory.conflict.resolve`: the conflict, and the memory kept.
+public struct MemoryConflictResolveOK: Sendable, Equatable, Decodable {
+  public var seq: Int
+  public var id: String
+  public var memory: MemoryItem
+}
+
 public struct TaskInfo: Sendable, Equatable, Decodable, Identifiable {
   public var id: String
   public var title: String
@@ -328,6 +366,12 @@ public enum ClientFrame: Sendable, Equatable {
   case taskList(status: String?, limit: Int?)
   /// Ask what the agent can remember.
   case memoryList(scope: String?, limit: Int?)
+  // Editable memory (Phase 1, additive v2).
+  case memoryUpdate(id: String, text: String)
+  case memoryPin(id: String, pinned: Bool)
+  case memoryForget(id: String)
+  case memoryConflictsList(limit: Int?)
+  case memoryConflictResolve(id: String, keepId: String)
   case taskUpdate(taskID: String, action: String, until: String?)
   case providerAdd(providerID: String, apiKey: String, model: String?, baseUrl: String?, label: String?)
   case providerModelSet(providerID: String, model: String)
@@ -362,6 +406,11 @@ public enum ClientFrame: Sendable, Equatable {
     case .jobDelete: "job.delete"
     case .taskList: "task.list"
     case .memoryList: "memory.list"
+    case .memoryUpdate: "memory.update"
+    case .memoryPin: "memory.pin"
+    case .memoryForget: "memory.forget"
+    case .memoryConflictsList: "memory.conflicts.list"
+    case .memoryConflictResolve: "memory.conflict.resolve"
     case .taskUpdate: "task.update"
     case .providerAdd: "provider.add"
     case .providerModelSet: "provider.model.set"
@@ -434,6 +483,19 @@ public enum ClientFrame: Sendable, Equatable {
     case .memoryList(let scope, let limit):
       if let scope { object["scope"] = scope }
       if let limit { object["limit"] = limit }
+    case .memoryUpdate(let id, let text):
+      object["id"] = id
+      object["text"] = text
+    case .memoryPin(let id, let pinned):
+      object["id"] = id
+      object["pinned"] = pinned
+    case .memoryForget(let id):
+      object["id"] = id
+    case .memoryConflictsList(let limit):
+      if let limit { object["limit"] = limit }
+    case .memoryConflictResolve(let id, let keepId):
+      object["id"] = id
+      object["keepId"] = keepId
     case .taskUpdate(let taskID, let action, let until):
       object["taskID"] = taskID
       object["action"] = action
@@ -541,6 +603,16 @@ public enum ClientFrame: Sendable, Equatable {
       self = .taskList(status: object["status"] as? String, limit: object["limit"] as? Int)
     case "memory.list":
       self = .memoryList(scope: object["scope"] as? String, limit: object["limit"] as? Int)
+    case "memory.update":
+      self = .memoryUpdate(id: try Require.string(object, "id"), text: try Require.string(object, "text"))
+    case "memory.pin":
+      self = .memoryPin(id: try Require.string(object, "id"), pinned: try Require.bool(object, "pinned"))
+    case "memory.forget":
+      self = .memoryForget(id: try Require.string(object, "id"))
+    case "memory.conflicts.list":
+      self = .memoryConflictsList(limit: object["limit"] as? Int)
+    case "memory.conflict.resolve":
+      self = .memoryConflictResolve(id: try Require.string(object, "id"), keepId: try Require.string(object, "keepId"))
     case "task.update":
       self = .taskUpdate(taskID: try Require.string(object, "taskID"), action: try Require.string(object, "action"), until: object["until"] as? String)
     case "provider.add":
@@ -612,6 +684,12 @@ public enum ServerFrame: Sendable, Equatable {
   case taskListOK(TaskListOK)
   /// The memory view: what the agent can remember.
   case memoryListOK(MemoryListOK)
+  // Editable memory answers (Phase 1, additive v2).
+  case memoryUpdateOK(MemoryItemOK)
+  case memoryPinOK(MemoryItemOK)
+  case memoryForgetOK(MemoryForgetOK)
+  case memoryConflictsListOK(MemoryConflictsListOK)
+  case memoryConflictResolveOK(MemoryConflictResolveOK)
   case taskUpdateOK(TaskUpdateOK)
   case providerAddOK(ProviderAddOK)
   case providerModelsOK(ProviderModelsOK)
@@ -652,6 +730,11 @@ public enum ServerFrame: Sendable, Equatable {
     case .jobListOK(let f): f.seq
     case .taskListOK(let f): f.seq
     case .memoryListOK(let f): f.seq
+    case .memoryUpdateOK(let f): f.seq
+    case .memoryPinOK(let f): f.seq
+    case .memoryForgetOK(let f): f.seq
+    case .memoryConflictsListOK(let f): f.seq
+    case .memoryConflictResolveOK(let f): f.seq
     case .taskUpdateOK(let f): f.seq
     case .providerAddOK(let f): f.seq
     case .providerModelsOK(let f): f.seq
@@ -692,6 +775,11 @@ public enum ServerFrame: Sendable, Equatable {
     case .jobListOK: "job.list.ok"
     case .taskListOK: "task.list.ok"
     case .memoryListOK: "memory.list.ok"
+    case .memoryUpdateOK: "memory.update.ok"
+    case .memoryPinOK: "memory.pin.ok"
+    case .memoryForgetOK: "memory.forget.ok"
+    case .memoryConflictsListOK: "memory.conflicts.list.ok"
+    case .memoryConflictResolveOK: "memory.conflict.resolve.ok"
     case .taskUpdateOK: "task.update.ok"
     case .providerAddOK: "provider.add.ok"
     case .providerModelsOK: "provider.models.ok"
@@ -985,6 +1073,11 @@ public enum ServerFrame: Sendable, Equatable {
     case "job.list.ok": self = .jobListOK(try Decode.frame(JobListOK.self, object))
     case "task.list.ok": self = .taskListOK(try Decode.frame(TaskListOK.self, object))
     case "memory.list.ok": self = .memoryListOK(try Decode.frame(MemoryListOK.self, object))
+    case "memory.update.ok": self = .memoryUpdateOK(try Decode.frame(MemoryItemOK.self, object))
+    case "memory.pin.ok": self = .memoryPinOK(try Decode.frame(MemoryItemOK.self, object))
+    case "memory.forget.ok": self = .memoryForgetOK(try Decode.frame(MemoryForgetOK.self, object))
+    case "memory.conflicts.list.ok": self = .memoryConflictsListOK(try Decode.frame(MemoryConflictsListOK.self, object))
+    case "memory.conflict.resolve.ok": self = .memoryConflictResolveOK(try Decode.frame(MemoryConflictResolveOK.self, object))
     case "task.update.ok": self = .taskUpdateOK(try Decode.frame(TaskUpdateOK.self, object))
     case "provider.add.ok": self = .providerAddOK(try Decode.frame(ProviderAddOK.self, object))
     case "provider.models.ok": self = .providerModelsOK(try Decode.frame(ProviderModelsOK.self, object))

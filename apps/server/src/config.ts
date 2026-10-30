@@ -104,6 +104,6 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): C
     pluginsPath: env.AGNI_PLUGINS_PATH?.trim() || homePath("plugins.json"),
     userFirstName: env.AGNI_USER_FIRST_NAME?.trim() || undefined,
     slotBudgets: slotBudgets(env),
-    minRecallScore: float(env, "AGNI_MIN_RECALL_SCORE", 0.15),
+    minRecallScore: float(env, "AGNI_MIN_RECALL_SCORE", 0.2),
   };
 }

@@ -378,6 +378,11 @@ export class Conversation {
       case "task.activity.ok":
       case "task.update.ok":
       case "memory.list.ok":
+      case "memory.update.ok":
+      case "memory.pin.ok":
+      case "memory.forget.ok":
+      case "memory.conflicts.list.ok":
+      case "memory.conflict.resolve.ok":
       case "provider.add.ok":
       case "provider.models.ok":
       case "provider.auth.started":

@@ -677,6 +677,40 @@ describe("websocket end-to-end", () => {
     const texts = listed.memories.map((memory) => memory.text);
     expect(texts).toContain("The shared note.");
     expect(texts).not.toContain("The private note.");
+
+    // Editable memory: an edit, a pin, a forget, and another bot's private
+    // row is out of reach.
+    client!.send({ type: "memory.update", id: "mem_shared", text: "The shared note, edited." });
+    const updated = await client!.next("memory.update.ok");
+    expect(updated.memory.text).toBe("The shared note, edited.");
+    client!.send({ type: "memory.pin", id: updated.memory.id, pinned: true });
+    expect((await client!.next("memory.pin.ok")).memory.salience).toBe(1);
+    client!.send({ type: "memory.forget", id: "mem_private" });
+    expect((await client!.next("error")).code).toBe("unknown_memory");
+    client!.send({ type: "memory.forget", id: updated.memory.id });
+    expect((await client!.next("memory.forget.ok")).deleted).toBe(true);
+  });
+
+  test("a memory conflict can be listed and resolved by keeping the old value", async () => {
+    await startTestServer();
+    const { applyTaggerItems } = await import("../src/agent/tagger");
+    const item = {
+      kind: "fact" as const, key: "home-city", scope: "user" as const, visibility: "shared" as const, source: "user" as const,
+      salience: 0.6, confidence: 0.9, entities: [], ttl: null, source_turn_ids: [],
+    };
+    applyTaggerItems(db!, { items: [{ ...item, text: "The owner lives in NYC." }], agentID: "ea" });
+    applyTaggerItems(db!, { items: [{ ...item, text: "The owner lives in SF." }], agentID: "ea" });
+
+    client!.send({ type: "memory.conflicts.list" });
+    const { conflicts } = await client!.next("memory.conflicts.list.ok");
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]!.previousContent).toBe("The owner lives in NYC.");
+
+    client!.send({ type: "memory.conflict.resolve", id: conflicts[0]!.id, keepId: conflicts[0]!.previousId });
+    const resolved = await client!.next("memory.conflict.resolve.ok");
+    expect(resolved.memory.text).toBe("The owner lives in NYC.");
+    client!.send({ type: "memory.conflicts.list" });
+    expect((await client!.next("memory.conflicts.list.ok")).conflicts).toHaveLength(0);
   });
 
   test("bind.direct answers with the agent's conversation and channel", async () => {
