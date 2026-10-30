@@ -49,6 +49,8 @@ export interface TaskTurnSettings {
    * them from there, so a connected mailbox is actually usable.
    */
   mailAccounts?: MailAccountResolver;
+  /** plugins.json, for the Calendar and Drive OAuth tokens. */
+  pluginsPath?: string;
   /**
    * ASM-004: the confidence floor for automatic retrieval. Below it,
    * nothing is injected.
@@ -320,11 +322,12 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   run.emit({ type: "agent.presence", agentId: persona.id, state: "working" });
 
   let summary: string | null = existing?.summary ?? null;
-  const registry = buildTaskToolRegistry(db, settings.mailAccounts);
+  const registry = buildTaskToolRegistry(db, settings.mailAccounts, settings.pluginsPath);
+  const mcpNames = registry.list().map((tool) => tool.name).filter((name) => name.startsWith("mcp_"));
   // DEL-007: a read-only agent still reads user memory but cannot write it.
   const memoryTools = persona.memoryScope === "read"
-    ? persona.tools.filter((tool) => !MEMORY_WRITE_TOOLS.has(tool))
-    : persona.tools;
+    ? persona.tools.filter((tool) => !MEMORY_WRITE_TOOLS.has(tool)).flatMap((tool) => (tool === "mcp_*" ? mcpNames : [tool]))
+    : persona.tools.flatMap((tool) => (tool === "mcp_*" ? mcpNames : [tool]));
   // Universal tools: `say` gives every agent a way to post progress as
   // separate messages; `run_privileged` is only meaningful next to `bash`.
   // `ask` puts a question to the owner — every agent may do that. A draft
