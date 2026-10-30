@@ -58,6 +58,12 @@ export interface RouteOptions {
   toolChoice?: "auto" | "required" | "none" | { type: "function"; function: { name: string } };
   /** Bound each model response in the task lane. */
   maxTokens?: number;
+  /**
+   * A bot's own model (`agents.model`): `provider`, `provider:model`, or a
+   * configured model id. Tried first when that provider is usable; otherwise
+   * the normal list runs as if it were unset.
+   */
+  preferredModel?: string | null;
 }
 
 export interface RouteResult {
@@ -174,7 +180,7 @@ export class Router {
 
     const errors: string[] = [];
     let attempts = 0;
-    for (const provider of candidates) {
+    for (const provider of preferFirst(candidates, options.preferredModel)) {
       let lastError: ProviderError | null = null;
       for (let retry = 0; retry < PROVIDER_RETRIES; retry++) {
         attempts += 1;
@@ -296,4 +302,16 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     const timer = setTimeout(done, ms);
     signal?.addEventListener("abort", done, { once: true });
   });
+}
+
+/** Move the preferred provider (with its model, when one is named) to the front. */
+export function preferFirst(candidates: ProviderConfig[], preferred: string | null | undefined): ProviderConfig[] {
+  const want = preferred?.trim();
+  if (!want) return candidates;
+  const index = candidates.findIndex((provider) =>
+    want === provider.id || want.startsWith(`${provider.id}:`) || want === provider.model);
+  if (index < 0) return candidates;
+  const match = candidates[index]!;
+  const model = want.startsWith(`${match.id}:`) ? want.slice(match.id.length + 1) || match.model : match.model;
+  return [{ ...match, model }, ...candidates.filter((_, at) => at !== index)];
 }

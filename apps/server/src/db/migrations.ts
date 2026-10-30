@@ -1034,7 +1034,7 @@ export const MIGRATIONS: Migration[] = [
     `,
   },
   {
-    id: 50,
+    id: 46,
     name: "push_subscriptions",
     sql: `
       -- Web Push subscriptions, one per browser endpoint. Server-side only.
@@ -1048,7 +1048,7 @@ export const MIGRATIONS: Migration[] = [
     `,
   },
   {
-    id: 51,
+    id: 47,
     name: "agent_proactivity",
     sql: `
       -- Quiet hours and a daily cap on unprompted pushes, per bot.
@@ -1064,6 +1064,32 @@ export const MIGRATIONS: Migration[] = [
         count INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (agent_id, day)
       );
+    `,
+  },
+  {
+    id: 48,
+    name: "task_notes",
+    sql: `
+      -- Phase 4: a shared scratchpad per delegated task. Bots working the
+      -- task append notes; the delegating bot reads them through task_status,
+      -- filtered by the writer's visibility like every other cross-bot read.
+      CREATE TABLE task_notes (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_task_notes_task ON task_notes(task_id, created_at);
+    `,
+  },
+  {
+    id: 49,
+    name: "agent_critic",
+    sql: `
+      -- Phase 4: opt-in critic. When set, this bot's outbound email drafts
+      -- are reviewed by the named bot before the owner's approval card.
+      ALTER TABLE agents ADD COLUMN critic_agent_id TEXT;
     `,
   },
 ];

@@ -394,6 +394,10 @@ export class Conversation {
       case "appearance.updated":
       case "push.vapid":
       case "agent.proactivity":
+      // Group channels are a roster concern; a group's messages arrive as msg.new.
+      case "channel.created":
+      case "channel.list.ok":
+      case "channel.history.ok":
         return [];
 
       case "presence":

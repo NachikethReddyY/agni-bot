@@ -340,7 +340,8 @@ public struct Conversation: Sendable, Equatable {
     case .helloOK, .conversationOK, .conversationHistoryOK, .threadExportOK, .threadListOK, .threadHistoryOK,
       .jobListOK, .taskListOK, .taskUpdateOK, .memoryListOK, .memoryUpdateOK, .memoryPinOK, .memoryForgetOK,
       .memoryConflictsListOK, .memoryConflictResolveOK, .providerAddOK, .providerModelsOK,
-      .pluginListOK, .pluginConnectOK, .pluginState, .appearanceListOK, .appearanceUpdated, .unknown:
+      .pluginListOK, .pluginConnectOK, .pluginState, .appearanceListOK, .appearanceUpdated,
+      .channelCreated, .channelListOK, .channelHistoryOK, .unknown:
       return []
 
     case .presence(let presence):

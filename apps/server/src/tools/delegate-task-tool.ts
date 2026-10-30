@@ -25,13 +25,15 @@ import { enqueueJob } from "../stores/jobs";
 import { readFacts } from "./expand-tool";
 import { checkPeerRequest, fingerprintPeerRequest } from "../stores/peer-chains";
 import { appendChannelMessage } from "../stores/channels";
+import { MAX_DEPTH } from "../agent/guardrails";
+import { listTaskNotes } from "../stores/task-notes";
 
 const objectSchema = (properties: Record<string, unknown>, required: string[]): Record<string, unknown> => ({
   type: "object", properties, required, additionalProperties: false,
 });
 const stringProp = { type: "string", minLength: 1 };
-/** H23: a turn at this depth may not delegate further (root = 1, so two hops at most). */
-export const MAX_DELEGATION_DEPTH = 3;
+/** H23: a turn at this depth may not delegate further; the same cap as `handoff`. */
+export const MAX_DELEGATION_DEPTH = MAX_DEPTH;
 
 export interface DelegateTaskToolDeps {
   db: Database;
@@ -218,6 +220,9 @@ function taskView(task: TaskRow, deps: DelegateTaskToolDeps): Record<string, unk
   const owner = task.owner_agent_id ?? "";
   const visibility = owner ? resolvePersona(deps.db, owner)?.visibility ?? DEFAULT_VISIBILITY : DEFAULT_VISIBILITY;
   const result = redactStoredForCaller(task.result, owner, deps.currentAgentID, visibility);
+  // The task's scratchpad crosses to the caller through the same filter.
+  const noteText = listTaskNotes(deps.db, task.id).map((note) => `- ${note.text}`).join("\n");
+  const notes = redactStoredForCaller(noteText, owner, deps.currentAgentID, visibility);
   return {
     taskID: task.id,
     agentID: task.owner_agent_id,
@@ -229,6 +234,7 @@ function taskView(task: TaskRow, deps: DelegateTaskToolDeps): Record<string, unk
     // DEL-004: the full result lives in an artifact. The reference is only
     // useful to a caller that may read it.
     artifactRef: result.redacted ? null : task.artifact_id,
+    ...(notes.value ? { notes: notes.value } : {}),
     question: task.pending_question,
     questionID: task.pending_question_id,
     terminal: task.delegate_state === "done" || task.delegate_state === "failed",

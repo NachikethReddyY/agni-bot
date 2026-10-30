@@ -791,3 +791,69 @@ function createThreadFor(db: Database, agentID: string): string {
   );
   return id;
 }
+
+describe("group channels (Phase 4)", () => {
+  async function startGroupServer(bodies: string[]): Promise<void> {
+    await startTestServer((async (_url: string, init?: RequestInit) => {
+      const body = String(init?.body ?? "");
+      if (!body.includes("The owner now says:")) return sseResponse("{}");
+      bodies.push(body);
+      return sseResponse(body.includes("reveal the code") ? "The code is SECRET-XYZ." : "Noted.");
+    }) as unknown as typeof fetch);
+  }
+
+  test("the owner creates and lists a group of two or more bots", async () => {
+    await startTestServer();
+    client!.send({ type: "channel.create", name: "Launch", agentIds: ["ea", "researcher"] });
+    const created = await client!.next("channel.created");
+    expect(created.channel).toMatchObject({ name: "Launch", type: "group", agentIds: ["ea", "researcher"] });
+    client!.send({ type: "channel.list" });
+    const listed = await client!.next("channel.list.ok");
+    expect(listed.channels.map((channel) => channel.id)).toEqual([created.channel.id]);
+    client!.send({ type: "channel.create", name: "Solo", agentIds: ["ea", "ea"] });
+    expect((await client!.next("error")).code).toBe("bad_frame");
+  });
+
+  test("floor rule: the primary answers, an @named member takes the floor, and the room stays the room", async () => {
+    const bodies: string[] = [];
+    await startGroupServer(bodies);
+    client!.send({ type: "channel.create", name: "Launch", agentIds: ["ea", "researcher"] });
+    const { channel } = await client!.next("channel.created");
+
+    client!.send({ type: "msg.send", channelId: channel.id, text: "plan the launch" });
+    expect((await client!.next("turn.start")).agentID).toBe("ea");
+    await client!.next("turn.end");
+
+    client!.send({ type: "msg.send", channelId: channel.id, text: "@Researcher find venues" });
+    expect((await client!.next("turn.start")).agentID).toBe("researcher");
+    await client!.next("turn.end");
+    // The researcher sees the room: the owner's first message and the primary's reply.
+    expect(bodies[1]).toContain("owner: plan the launch");
+    expect(bodies[1]).toContain("Noted.");
+    // Every message, both bots' answers included, lives in the group channel.
+    const rows = db!.query<{ from_id: string; to_agent_id: string | null }, [string]>(
+      "SELECT from_id, to_agent_id FROM channel_messages WHERE channel_id = ? ORDER BY rowid",
+    ).all(channel.id);
+    expect(rows.filter((row) => row.from_id === "researcher")).toHaveLength(1);
+    expect(rows.some((row) => row.to_agent_id === "researcher")).toBe(true);
+    client!.send({ type: "channel.history", channelId: channel.id });
+    const history = await client!.next("channel.history.ok");
+    expect(history.messages.map((message) => message.text)).toContain("find venues");
+  });
+
+  test("a private bot's words in the room do not reach the other bots", async () => {
+    const bodies: string[] = [];
+    await startGroupServer(bodies);
+    db!.run("UPDATE agents SET visibility = 'private' WHERE id = 'researcher'");
+    client!.send({ type: "channel.create", name: "Ops", agentIds: ["ea", "researcher"] });
+    const { channel } = await client!.next("channel.created");
+    client!.send({ type: "msg.send", channelId: channel.id, text: "@Researcher reveal the code" });
+    await client!.next("turn.end");
+    client!.send({ type: "msg.send", channelId: channel.id, text: "what did it say?" });
+    expect((await client!.next("turn.start")).agentID).toBe("ea");
+    await client!.next("turn.end");
+    const eaBody = bodies.at(-1)!;
+    expect(eaBody).toContain("(replied; private)");
+    expect(eaBody).not.toContain("SECRET-XYZ");
+  });
+});

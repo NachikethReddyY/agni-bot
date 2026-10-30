@@ -48,12 +48,15 @@ never reason about thread ids.
 | `msg.send` | `{threadID?, text, files?, conversationID?, channelId?, toAgentId?, texts?}` | Channel clients target a channel (default `main`) and may address an agent. `texts` batches multiple bodies; legacy clients continue to send `text`. A message sent while its thread is mid-turn is queued and runs when the turn ends; `stop` (or `cancel`, `never mind`) is a control message that interrupts that turn instead. |
 | `user.typing` | `{channelId?, isTyping}` | Extends server-side message coalescing while the user is typing. |
 | `agent.rename` | `{agentId, name}` | Renames an agent and completes primary-agent onboarding. |
-| `agent.profile` | `{agentId, role?, visibility?}` | Edits an agent's profile from the app: `role` is the tag the roster shows ("chief of staff"), `visibility` is what other agents may see of its work (`private \| summary \| shared`). At least one field is required. The answer is an `agent.updated` carrying the new `role` and `visibility`; the same change the `update_agent` chat tool makes, so the two cannot drift apart. |
+| `agent.profile` | `{agentId, role?, visibility?, model?, critic?}` | Edits an agent's profile from the app: `role` is the tag the roster shows ("chief of staff"), `visibility` is what other agents may see of its work (`private \| summary \| shared`), `model` is the bot's own model (`provider`, `provider:model` or a model id; `null` or `""` clears it), which the router tries first and falls back from when that provider is unavailable. `critic` (opt-in) names another bot that reviews this bot's email drafts before the approval card; its notes ride on the card. `null` or `""` turns it off. At least one field is required. The answer is an `agent.updated` carrying the new `role` and `visibility`; the same change the `update_agent` chat tool makes, so the two cannot drift apart. |
 | `agent.create` | `{name, prompt, role?, id?, color?}` | Creates an agent from the app's roster — the "+" button. `prompt` is its system prompt, `role` its tag. The same creation the `create_agent` chat tool performs, so a bot made here and a bot made in chat are the same kind of thing; the roster comes back in an `agents.update`. |
 | `push.subscribe` | `{subscription: {endpoint, keys: {p256dh, auth}}}` | Stores this device's Web Push subscription (replacing any for the same endpoint). The server pushes a `notify` there only when no authed socket is connected. APNs for the Mac app is not built. |
 | `push.unsubscribe` | `{endpoint}` | Drops that subscription. |
 | `push.vapid.get` | `{}` | Asks for the VAPID public key; answer: `push.vapid`. |
 | `agent.proactivity` | `{agentId, quietStart?, quietEnd?, maxPerDay?}` | Per-bot quiet hours (`"HH:MM"`, server time zone; both or neither, `null` clears) and a cap on unprompted pushes per local day (`null` removes it). Held messages still land in the transcript; only the push and sound are held. Always answered with the current values as `agent.proactivity`, so an empty set reads them. |
+| `channel.create` | `{name, agentIds}` | Phase 4. Creates a group channel: the owner and 2–8 bots. The first id is the primary bot. Answered (to every client) by `channel.created`. |
+| `channel.list` | `{}` | Phase 4. The group channels; answered by `channel.list.ok`. |
+| `channel.history` | `{channelId, limit?}` | Phase 4. A group channel's messages, last N chronological (default 200, max 500); answered by `channel.history.ok`. |
 | `form.answer` | `{requestID, answer}` | The owner answered a question the agent asked — the option they chose, or their own words if they typed instead of choosing. The answer lands on the `forms` row and the turn waiting on it carries on with it. |
 | `msg.cancel` | `{turnID}` | Interrupts the turn: providers abort, partial output is kept. |
 | `approve.reply` | `{requestID, decision}` | `decision`: `once \| always \| reject`. |
@@ -158,6 +161,9 @@ accountLabel?, error?, connectedAt?}`.
 | `agent.updated` | `{agentId, displayName, onboarded, role?, visibility?}` | Agent rename/onboarding state changed. `role` and `visibility` are present when the change touched them (an `agent.profile` edit). |
 | `push.vapid` | `{publicKey}` | Answer to `push.vapid.get`: the base64url VAPID public key for `pushManager.subscribe`. |
 | `agent.proactivity` | `{agentId, quietStart, quietEnd, maxPerDay}` | A bot's proactivity settings (answer to the client frame of the same name). |
+| `channel.created` | `{channel: ChannelInfo}` | Phase 4. A group channel exists. `ChannelInfo` is `{id, name, type: "group", agentIds, createdAt}`; `agentIds[0]` is the primary bot. |
+| `channel.list.ok` | `{channels: ChannelInfo[]}` | Phase 4. Answer to `channel.list`. |
+| `channel.history.ok` | `{channelId, messages: MessageInfo[]}` | Phase 4. Answer to `channel.history`. |
 | `error` | `{code, message, retryAfter?}` | See codes below. |
 
 A task turn speaks in messages, not one growing reply: each completed assistant
@@ -286,3 +292,20 @@ same scope and visibility filter retrieval uses); any other id answers
 
 Errors: `unknown_memory` (not visible, or no longer live), `unknown_conflict`
 (no open conflict with that id), `bad_frame` (`keepId` is neither side).
+
+## Group channels (Phase 4)
+
+A group channel holds the owner and two or more bots. Send into it with
+`msg.send {channelId}`. Floor rule: a message that starts with a member
+bot's `@name` goes to that bot; anything else goes to the primary bot
+(`agentIds[0]`), which may hand off. A mention of a bot outside the group
+does not move the message out of the room. Every message and every reply
+is a `msg.new` on the group's `channelId`.
+
+Each bot answers from its own conversation, so its memory stays its own.
+It sees the room as a short block of recent group messages in its model
+input; every other bot's line passes through the visibility filter, so a
+`private` bot shows as "(replied; private)" and a `summary` bot as one
+line. The group has no shared summary and is not compacted, and the tagger
+batches each bot's exchanges separately. These frames are additive and
+optional: `PROTOCOL_VERSION` stays 2.

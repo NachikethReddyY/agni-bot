@@ -40,7 +40,6 @@ export interface HandoffToolDeps {
   channelID?: string;
   currentAgentID: string;
   conversationID?: string;
-  carrySummary?: string | null;
   guardrail: GuardrailState;
 }
 
@@ -167,7 +166,6 @@ export function registerHandoffTool(registry: ToolRegistry, deps: HandoffToolDep
         signal: deps.signal,
         threadID: deps.threadID,
         conversationID: deps.conversationID,
-        carrySummary: deps.carrySummary,
         guardrail: deps.guardrail,
       };
       const result = await handoff(handoffDeps, request);

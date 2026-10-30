@@ -139,6 +139,17 @@ export const MessageInfoSchema = z.object({
 });
 export type MessageInfo = z.infer<typeof MessageInfoSchema>;
 
+/** Phase 4: a group channel — the owner and two or more bots in one room. */
+export const ChannelInfoSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  type: z.literal("group"),
+  /** Member bots; the first is the primary, who answers unless another is @named. */
+  agentIds: z.array(z.string()).min(2),
+  createdAt: z.string(),
+});
+export type ChannelInfo = z.infer<typeof ChannelInfoSchema>;
+
 /** Why a session block boundary exists. */
 export const SESSION_REASONS = ["manual", "context", "background"] as const;
 export const SessionReasonSchema = z.enum(SESSION_REASONS);
@@ -576,6 +587,17 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
     agentId: z.string().min(1),
     role: z.string().max(160).optional(),
     visibility: z.enum(["private", "summary", "shared"]).optional(),
+    /**
+     * The bot's own model: `provider`, `provider:model`, or a model id. The
+     * router tries it first and falls back to the normal list. Null or ""
+     * clears it.
+     */
+    model: z.string().max(200).nullable().optional(),
+    /**
+     * Opt-in critic: the bot that reviews this bot's email drafts before the
+     * owner's approval card. Null or "" turns it off.
+     */
+    critic: z.string().max(64).nullable().optional(),
   }),
   /**
    * Create an agent from the app — the "+" in the roster. The same creation
@@ -625,6 +647,17 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
     /** Max unprompted pushes per local day; null removes the cap. */
     maxPerDay: z.number().int().min(0).max(1_000).nullable().optional(),
   }),
+  // --- Phase 4: group channels -------------------------------------------
+  /** Create a group channel with two or more bots; answered by `channel.created`. */
+  z.object({
+    type: z.literal("channel.create"),
+    name: z.string().trim().min(1).max(64),
+    agentIds: z.array(z.string().min(1)).min(2).max(8),
+  }),
+  /** List the group channels; answered by `channel.list.ok`. */
+  z.object({ type: z.literal("channel.list") }),
+  /** A group channel's messages, last N chronological (default 200, max 500). */
+  z.object({ type: z.literal("channel.history"), channelId: z.string().min(1), limit: z.number().int().positive().max(500).optional() }),
 ]);
 export type ClientFrame = z.infer<typeof ClientFrameSchema>;
 export type ClientFrameType = ClientFrame["type"];
@@ -900,6 +933,11 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     quietEnd: z.string().nullable(),
     maxPerDay: z.number().int().nullable(),
   }),
+  // --- Phase 4: group channels -------------------------------------------
+  /** A group channel was created; sent to every client. */
+  z.object({ type: z.literal("channel.created"), seq, channel: ChannelInfoSchema }),
+  z.object({ type: z.literal("channel.list.ok"), seq, channels: z.array(ChannelInfoSchema) }),
+  z.object({ type: z.literal("channel.history.ok"), seq, channelId: z.string(), messages: z.array(MessageInfoSchema) }),
 ]);
 export type ServerFrame = z.infer<typeof ServerFrameSchema>;
 export type ServerFrameType = ServerFrame["type"];

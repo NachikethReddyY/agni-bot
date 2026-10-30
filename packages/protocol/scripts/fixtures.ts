@@ -51,6 +51,9 @@ const CLIENT_FRAMES: ClientFrame[] = [
   { type: "plugin.disconnect", connectionID: "plc_01hq" },
   { type: "user.typing", channelId: "ch_01hq", isTyping: true },
   { type: "agent.rename", agentId: "agni", name: "Agni Prime" },
+  { type: "channel.create", name: "Launch", agentIds: ["ea", "researcher"] },
+  { type: "channel.list" },
+  { type: "channel.history", channelId: "chn_01hq", limit: 50 },
 ];
 
 /** A representative plugins snapshot: one connected agent row, one disconnected owner row. */
@@ -235,6 +238,9 @@ const SERVER_FRAMES: ServerFrame[] = [
     createdAt: "2026-10-17T10:00:00.000Z",
   },
   { type: "agent.updated", seq: 71, agentId: "agni", displayName: "Agni Prime", onboarded: true },
+  { type: "channel.created", seq: 72, channel: { id: "chn_01hq", name: "Launch", type: "group", agentIds: ["ea", "researcher"], createdAt: "2026-10-31T09:00:00.000Z" } },
+  { type: "channel.list.ok", seq: 73, channels: [{ id: "chn_01hq", name: "Launch", type: "group", agentIds: ["ea", "researcher"], createdAt: "2026-10-31T09:00:00.000Z" }] },
+  { type: "channel.history.ok", seq: 74, channelId: "chn_01hq", messages: [{ id: "chm_01hq", role: "user", text: "plan the launch", createdAt: "2026-10-31T09:01:00.000Z" }] },
 ];
 
 /** Every frame must survive its own schema before it is a fixture. */

@@ -16,6 +16,11 @@ import type { FormBroker } from "../agent/form-broker";
 export interface AskToolDeps {
   db: Database;
   broker: FormBroker;
+  /**
+   * Phase 4 critic pass: a second bot reviews the draft before the owner's
+   * card. Returns what the owner sees and what the drafting bot may see.
+   */
+  review?: (email: { to: string; subject: string; body: string }, signal: AbortSignal) => Promise<{ owner: string; drafter: string | null } | null>;
 }
 
 const objectSchema = (properties: Record<string, unknown>, required: string[]): Record<string, unknown> => ({
@@ -100,23 +105,27 @@ export function registerDraftEmailTool(registry: ToolRegistry, deps: AskToolDeps
       if (!subject) throw new Error("subject is required");
       if (!body) throw new Error("body is required");
       const from = String(input.from ?? "").trim();
+      // A failed review never blocks the draft: the owner still decides.
+      const review = deps.review ? await deps.review({ to, subject, body }, ctx.signal).catch(() => null) : null;
       const answer = await deps.broker.request(
         {
           threadID: ctx.threadID,
           turnID: ctx.turnID,
           kind: "email",
-          question: "Send this email?",
+          question: review ? `Send this email?\n\n${review.owner}` : "Send this email?",
           email: { from: from || undefined, to, subject, body },
         },
         ctx.signal,
       );
-      if (answer === null) return { decided: false, note: "the owner did not decide" };
+      const reviewNote = review?.drafter ? { review: review.drafter } : {};
+      if (answer === null) return { decided: false, note: "the owner did not decide", ...reviewNote };
       const decision = answer.trim().toLowerCase();
       const send = decision.startsWith("send") || decision === "yes";
       return {
         decided: true,
         decision: send ? "send" : "discard",
         answer,
+        ...reviewNote,
         ...(send ? {} : { note: "the owner discarded the draft — do not send it" }),
       };
     },
