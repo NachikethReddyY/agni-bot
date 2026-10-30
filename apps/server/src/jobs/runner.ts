@@ -1,7 +1,10 @@
 /**
  * Background job runner. The daemon owns one runner; it claims due jobs from
- * SQLite and executes them sequentially, so background work is visible,
- * bounded, and survives restarts (claims and retries live in the table).
+ * SQLite and executes them on a small pool (`concurrency`, default 1 here and
+ * 2 in the daemon), so background work is visible, bounded, and survives
+ * restarts (claims and retries live in the table). Only kinds in
+ * PARALLEL_KINDS may overlap with themselves; every other kind is a singleton
+ * (memory consolidate, rollover, backup, ...) and never runs twice at once.
  *
  * Failure honesty: a handler that throws is retried up to `maxAttempts` with
  * exponential backoff and jitter, then parked as `failed` and announced with
@@ -37,6 +40,9 @@ export interface JobRegisterOptions {
 
 const MAX_RETRY_DELAY_MS = 3_600_000;
 
+/** Kinds whose jobs are independent of each other; all others run one at a time. */
+export const PARALLEL_KINDS: ReadonlySet<string> = new Set(["turn", "routine", "task.reminder"]);
+
 export interface JobContext {
   emit: (frame: ServerFrameBody) => void;
 }
@@ -46,6 +52,8 @@ export interface JobRunnerOptions {
   maxAttempts?: number;
   retryDelayMs?: number;
   maxPerTick?: number;
+  /** How many jobs may run at once (AGNI_JOB_CONCURRENCY). Default 1. */
+  concurrency?: number;
 }
 
 export class JobRunner {
@@ -55,9 +63,11 @@ export class JobRunner {
   private readonly maxAttempts: number;
   private readonly retryDelayMs: number;
   private readonly maxPerTick: number;
+  private readonly concurrency: number;
+  private readonly runningSingletons = new Set<string>();
+  private workers = 0;
 
   private timer: ReturnType<typeof setInterval> | undefined;
-  private ticking = false;
   private stopped = false;
 
   constructor(
@@ -69,6 +79,7 @@ export class JobRunner {
     this.maxAttempts = options.maxAttempts ?? 3;
     this.retryDelayMs = options.retryDelayMs ?? 30_000;
     this.maxPerTick = options.maxPerTick ?? 3;
+    this.concurrency = Math.max(1, options.concurrency ?? 1);
   }
 
   register(kind: string, handler: JobHandler, options: JobRegisterOptions = {}): void {
@@ -98,20 +109,34 @@ export class JobRunner {
     }
   }
 
-  /** Run every due job (bounded per tick). Public so tests can drive it. */
+  /**
+   * Fill the free pool slots with workers; each claims due jobs (bounded per
+   * tick) until none is due. A long job keeps only its own slot busy, so the
+   * next tick still starts workers for reminders. Public so tests can drive it.
+   */
   async tick(): Promise<number> {
-    if (this.ticking) return 0;
-    this.ticking = true;
+    const free = this.concurrency - this.workers;
+    const loops: Promise<number>[] = [];
+    for (let i = 0; i < free; i += 1) {
+      this.workers += 1;
+      loops.push(this.work().finally(() => { this.workers -= 1; }));
+    }
+    return (await Promise.all(loops)).reduce((a, b) => a + b, 0);
+  }
+
+  private async work(): Promise<number> {
     let ran = 0;
-    try {
-      while (ran < this.maxPerTick) {
-        const job = claimDueJob(this.db);
-        if (!job) break;
-        ran += 1;
+    while (ran < this.maxPerTick) {
+      const job = claimDueJob(this.db, undefined, [...this.runningSingletons]);
+      if (!job) break;
+      ran += 1;
+      const singleton = !PARALLEL_KINDS.has(job.kind);
+      if (singleton) this.runningSingletons.add(job.kind);
+      try {
         await this.execute(job);
+      } finally {
+        if (singleton) this.runningSingletons.delete(job.kind);
       }
-    } finally {
-      this.ticking = false;
     }
     return ran;
   }

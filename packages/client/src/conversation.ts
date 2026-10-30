@@ -387,6 +387,8 @@ export class Conversation {
       case "plugin.state":
       case "appearance.list.ok":
       case "appearance.updated":
+      case "push.vapid":
+      case "agent.proactivity":
         return [];
 
       case "presence":

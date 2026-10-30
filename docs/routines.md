@@ -49,3 +49,20 @@ another bot, or change jobs or routines.
 
 Crystallization, webhook triggers, Telegram, Discord and Slack delivery, shell
 preflight, USD budgets, and a kernel sandbox.
+
+## Event triggers and templates (Phase 2)
+
+- A `mail` preflight (`{kind:"mail", account:"agent"|"owner"}`) is the new-mail
+  trigger: pair it with a short cron (5 minutes is the minimum). Each tick does
+  one IMAP `UNSEEN` search; the model runs only when an unseen message newer
+  than the last run exists. Mail is polled, not IDLE.
+- A reply that starts with `NOTHING_TO_REPORT` records the run but sends no
+  notify.
+- "Check my apps" is seeded paused for `ea` (09, 12, 15, 18 local). Resume it
+  with `routine_pause`. It uses `mail_search`, `mail_read` and, if present,
+  `calendar_list_events`.
+- Background jobs run on a pool of `AGNI_JOB_CONCURRENCY` (default 2); only
+  `turn`, `routine` and `task.reminder` may overlap with themselves.
+- Web Push needs the daemon reachable over https (for example `tailscale
+  serve`) or localhost. The VAPID key is `~/.agni/push-vapid.json` (mode 600).
+  APNs for the Mac app is not built (needs an Apple key).

@@ -2,6 +2,9 @@ import { Database } from "bun:sqlite";
 import type { Preflight } from "./types";
 import { isIP } from "node:net";
 import { requestPinned, resolvePublicHost } from "../tools/fetch-url";
+import { ImapClient } from "../mail/imap";
+import { resolveMailConfig } from "../tools/mail";
+import type { MailAccountResolver } from "../plugins/credentials";
 
 const SQL_FORBIDDEN = /\b(PRAGMA|ATTACH|DETACH|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|VACUUM)\b/i;
 const MAX_BODY_BYTES = 1_000_000;
@@ -25,7 +28,23 @@ export async function runPreflight(
   p: Preflight,
   db: Database,
   lastHash: string | null,
+  mailAccounts?: MailAccountResolver,
 ): Promise<{ changed: boolean; hash: string }> {
+  if (p.kind === "mail") {
+    // Event trigger: one cheap UNSEEN search; the hash is the newest unseen UID.
+    const cfg = resolveMailConfig(p.account, mailAccounts);
+    if (!cfg) throw new Error(`mail preflight: the ${p.account} mailbox is not connected`);
+    const client = new ImapClient();
+    try {
+      await client.connect({ host: cfg.imapHost!, port: cfg.imapPort!, user: cfg.user, pass: cfg.pass });
+      await client.select("INBOX");
+      const uids = await client.search("UNSEEN");
+      const newest = uids.length ? String(Math.max(...uids)) : null;
+      return newest === null ? { changed: false, hash: lastHash ?? "" } : { changed: newest !== lastHash, hash: newest };
+    } finally {
+      await client.close().catch(() => {});
+    }
+  }
   if (p.kind === "none") {
     const hash = sha256(`${Date.now()}:${crypto.randomUUID()}`);
     return { changed: true, hash };

@@ -75,6 +75,8 @@ import { activateAppearanceProfile, deleteAppearanceProfile, listAppearanceProfi
 import { getRoutineByJobID, listRuns, updateRoutineState } from "../stores/routines";
 import { normalizeAllowedDomains } from "../routines/egress";
 import { deleteRoutineJob } from "../tools/routines-tool";
+import { removeSubscription, saveSubscription, type PushService } from "../push/web-push";
+import { getProactivity, setProactivity } from "../stores/proactivity";
 
 export interface Session {
   id: string;
@@ -134,6 +136,8 @@ export interface DispatchDeps {
   /** Plugin connections (catalog, connect flows, OAuth callbacks). */
   plugins?: PluginService;
   chatgpt?: ChatGPTAuth;
+  /** Web Push (VAPID key, delivery). */
+  push?: PushService;
 }
 
 export async function dispatch(deps: DispatchDeps, session: Session, raw: string): Promise<void> {
@@ -257,6 +261,21 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleAgentProfile(deps, session, frame);
     case "agent.create":
       return handleAgentCreate(deps, session, frame);
+    case "push.subscribe":
+      if (!requireAuth(deps, session)) return;
+      saveSubscription(deps.db, session.device!.id, frame.subscription);
+      return;
+    case "push.unsubscribe":
+      if (!requireAuth(deps, session)) return;
+      removeSubscription(deps.db, frame.endpoint);
+      return;
+    case "push.vapid.get":
+      if (!requireAuth(deps, session)) return;
+      if (!deps.push) return sendError(deps, session, "internal", "push is not available");
+      deps.reply({ type: "push.vapid", publicKey: deps.push.publicKey() });
+      return;
+    case "agent.proactivity":
+      return handleAgentProactivity(deps, session, frame);
   }
 }
 
@@ -1728,6 +1747,23 @@ function handleAgentProfile(
     });
   } catch (error) {
     sendError(deps, session, "bad_frame", error instanceof Error ? error.message : "could not update the agent");
+  }
+}
+
+function handleAgentProactivity(
+  deps: DispatchDeps,
+  session: Session,
+  frame: Extract<ClientFrame, { type: "agent.proactivity" }>,
+): void {
+  if (!requireAuth(deps, session)) return;
+  try {
+    const { agentId, ...patch } = frame;
+    const current = patch.quietStart === undefined && patch.quietEnd === undefined && patch.maxPerDay === undefined
+      ? getProactivity(deps.db, agentId)
+      : setProactivity(deps.db, agentId, { quietStart: patch.quietStart, quietEnd: patch.quietEnd, maxPerDay: patch.maxPerDay });
+    deps.reply({ type: "agent.proactivity", agentId, ...current });
+  } catch (error) {
+    sendError(deps, session, "bad_frame", error instanceof Error ? error.message : "could not set proactivity");
   }
 }
 

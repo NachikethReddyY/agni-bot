@@ -14,10 +14,12 @@
     "croner": "^11.0.0",
     "image-size": "^2.0.4",
     "pdfjs-dist": "^6.4.299",
+    "web-push": "^3.6.7",
     "zod": "^4"
   },
   "devDependencies": {
     "@types/bun": "1.4.3",
+    "@types/web-push": "^3.6.4",
     "typescript": "^7"
   }
 }
