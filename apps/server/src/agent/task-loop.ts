@@ -85,6 +85,8 @@ export interface TaskTurnRun {
    * system note ("Vision messaged you: …"), not the owner speaking.
    */
   inputRole?: "user" | "system";
+  /** A retried job: reuse the input row it already wrote instead of appending it again (H20). */
+  reuseInput?: boolean;
   /** The text written to the durable log (defaults to the request text). */
   inputText?: string;
   /**
@@ -281,8 +283,18 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
       .filter((message) => message.role === "user" || message.role === "assistant")
       .map((message) => ({ role: message.role as "user" | "assistant", content: message.text, attachmentIDs: messageAttachments(db, message.id).map((file) => file.id) }));
   }
-  const inputMessage = appendMessage(db, { threadID, turnID, role: run.inputRole ?? "user", text: run.inputText ?? run.text });
-  if (run.attachmentIDs?.length) linkAttachments(db, inputMessage.id, run.attachmentIDs);
+  const inputRole = run.inputRole ?? "user";
+  const inputText = run.inputText ?? run.text;
+  // The failed attempt may have left its own assistant output after the input (e.g. "This turn failed"),
+  // so the input row is the last `inputRole` row, provided everything after it is that same turn's.
+  const tail = run.reuseInput && !recovering ? recentMessages(db, threadID, 8) : [];
+  const at = tail.findLastIndex((message) => message.role === inputRole);
+  const previous = at >= 0 && tail.slice(at).every((message) => message.turn_id === tail[at]!.turn_id) ? tail[at] : undefined;
+  const reused = previous?.role === inputRole && previous.text === inputText;
+  // The reused row and its turn's output are history; the model gets the input below instead.
+  if (reused) messages.splice(Math.max(0, messages.length - tail.slice(at).filter((m) => m.role === "user" || m.role === "assistant").length));
+  const inputMessage = reused ? previous : appendMessage(db, { threadID, turnID, role: inputRole, text: inputText });
+  if (!reused && run.attachmentIDs?.length) linkAttachments(db, inputMessage.id, run.attachmentIDs);
   titleThreadFromFirstMessage(db, threadID, run.text);
   // Peer-originated input (a brief, a handoff, a completion wake) must not shape
   // the system prefix. The topic anchor and the retrieval rewrite therefore read

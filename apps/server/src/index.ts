@@ -28,7 +28,7 @@ import {
   stopDaemon,
   tailLog,
 } from "./daemon";
-import { openDatabase } from "./db";
+import { openDatabase, openDatabaseForCLI } from "./db";
 import { seedAgentPromptTemplates, setOwnerName, loadRuntimeAgents } from "./agent/personas";
 import { setSlotBudgets } from "./context/compiler";
 import { JobRunner } from "./jobs/runner";
@@ -249,7 +249,7 @@ function printHealth(health: HealthReport | undefined, config: Config): void {
 async function jobCommand(args: string[]): Promise<void> {
   const [sub = "list", ...rest] = args;
   const config = loadConfig();
-  const db = openDatabase(config.dbPath);
+  const db = cliDatabase(config.dbPath);
 
   try {
     if (sub === "add") return jobAdd(db, rest);
@@ -400,7 +400,7 @@ function safePayload(payload: string | null): string {
 async function pair(args: string[]): Promise<void> {
   const name = flag(args, "--name") ?? args.find((arg) => !arg.startsWith("--")) ?? hostname();
   const config = loadConfig();
-  const db = openDatabase(config.dbPath);
+  const db = cliDatabase(config.dbPath);
   const { device, token } = await mintToken(db, name);
   console.log(`device: ${device.name} (${device.id})`);
   console.log(`token:  ${token}`);
@@ -420,7 +420,7 @@ function migrate(): void {
 
 function devices(): void {
   const config = loadConfig();
-  const db = openDatabase(config.dbPath);
+  const db = cliDatabase(config.dbPath);
   const rows = listDevices(db);
   if (rows.length === 0) console.log("no devices paired — run `bun run pair`");
   for (const device of rows) {
@@ -438,7 +438,7 @@ function revoke(args: string[]): void {
     process.exit(1);
   }
   const config = loadConfig();
-  const db = openDatabase(config.dbPath);
+  const db = cliDatabase(config.dbPath);
   const device = revokeDevice(db, target);
   if (!device) {
     console.error(`no device matching "${target}"`);
@@ -447,6 +447,16 @@ function revoke(args: string[]): void {
   }
   console.log(`revoked ${device.id} ("${device.name}")`);
   db.close();
+}
+
+/** CLI commands never migrate a database the daemon may hold open (M35). */
+function cliDatabase(path: string): ReturnType<typeof openDatabase> {
+  try {
+    return openDatabaseForCLI(path);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }
 
 // --- argument helpers --------------------------------------------------------

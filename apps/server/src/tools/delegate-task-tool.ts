@@ -30,6 +30,8 @@ const objectSchema = (properties: Record<string, unknown>, required: string[]): 
   type: "object", properties, required, additionalProperties: false,
 });
 const stringProp = { type: "string", minLength: 1 };
+/** H23: a turn at this depth may not delegate further (root = 1, so two hops at most). */
+export const MAX_DELEGATION_DEPTH = 3;
 
 export interface DelegateTaskToolDeps {
   db: Database;
@@ -87,6 +89,10 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
       }
       const goal = String(args.goal ?? "").trim();
       if (!goal) throw new Error("delegate_task requires a goal");
+      const depth = ctx.chain?.depth ?? 1;
+      if (depth >= MAX_DELEGATION_DEPTH) {
+        throw new Error(`delegation depth limit reached (depth ${depth} of ${MAX_DELEGATION_DEPTH}); do the work yourself or report back to the owner`);
+      }
 
       const factIDs = Array.isArray(args.factIDs) ? args.factIDs.map(String).slice(0, 20) : undefined;
       const brief: DelegationBrief = {
@@ -165,6 +171,7 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
           },
           notify: true,
           delegationTaskID: task.id,
+          depth: depth + 1,
         },
       });
       setDelegationJob(deps.db, task.id, job.id);

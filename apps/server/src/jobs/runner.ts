@@ -4,8 +4,9 @@
  * bounded, and survives restarts (claims and retries live in the table).
  *
  * Failure honesty: a handler that throws is retried up to `maxAttempts` with
- * a delay, then parked as `failed` and announced with a `notify` frame.
- * Nothing is silently dropped.
+ * exponential backoff and jitter, then parked as `failed` and announced with
+ * a `notify` frame. A recurring kind skips to its next scheduled run instead
+ * of dying. Nothing is silently dropped.
  */
 import type { Database } from "bun:sqlite";
 import type { ServerFrameBody } from "@agni/protocol";
@@ -21,6 +22,21 @@ export interface JobOutcome {
 
 export type JobHandler = (job: JobRow, ctx: JobContext) => Promise<JobOutcome | void>;
 
+/** Throw to fail this run without a retry (e.g. a retry would replay side effects). */
+export class JobGiveUp extends Error {
+  /** quiet: the handler already told the owner, so the runner does not notify. */
+  constructor(message: string, readonly quiet = false) {
+    super(message);
+  }
+}
+
+export interface JobRegisterOptions {
+  /** For recurring kinds: the next scheduled run after a failed one, or null for none. */
+  nextRun?: (job: JobRow) => string | null;
+}
+
+const MAX_RETRY_DELAY_MS = 3_600_000;
+
 export interface JobContext {
   emit: (frame: ServerFrameBody) => void;
 }
@@ -34,6 +50,7 @@ export interface JobRunnerOptions {
 
 export class JobRunner {
   private readonly handlers = new Map<string, JobHandler>();
+  private readonly nextRuns = new Map<string, (job: JobRow) => string | null>();
   private readonly pollMs: number;
   private readonly maxAttempts: number;
   private readonly retryDelayMs: number;
@@ -54,9 +71,10 @@ export class JobRunner {
     this.maxPerTick = options.maxPerTick ?? 3;
   }
 
-  register(kind: string, handler: JobHandler): void {
+  register(kind: string, handler: JobHandler, options: JobRegisterOptions = {}): void {
     if (this.handlers.has(kind)) throw new Error(`job kind already registered: ${kind}`);
     this.handlers.set(kind, handler);
+    if (options.nextRun) this.nextRuns.set(kind, options.nextRun);
   }
 
   /** Kinds this runner can execute — everything else is parked as failed. */
@@ -122,17 +140,38 @@ export class JobRunner {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (job.attempts >= this.maxAttempts) {
-        finishJob(this.db, job.id, "failed", message);
-        log.error(`job ${job.id} (${job.kind}) failed after ${job.attempts} attempts: ${message}`);
-        this.notify("Job failed", `${job.kind}: ${truncate(message, 140)}`);
+      const quiet = error instanceof JobGiveUp && error.quiet;
+      if (error instanceof JobGiveUp || job.attempts >= this.maxAttempts) {
+        let next: string | null = null;
+        try {
+          next = this.nextRuns.get(job.kind)?.(job) ?? null;
+        } catch {
+          // A broken schedule cannot be skipped to; park the job below.
+        }
+        if (next) {
+          // M38: a recurring job outlives a bad run: skip to its next slot.
+          requeueJob(this.db, job.id, next);
+          this.db.run("UPDATE jobs SET attempts = 0, result = ? WHERE id = ?", [`run failed: ${message}; next run ${next}`, job.id]);
+          log.error(`job ${job.id} (${job.kind}) gave up on this run: ${message} — next run ${next}`);
+          if (!quiet) this.notify("Job failed", `${job.kind}: ${truncate(message, 120)} (will run again ${next})`);
+        } else {
+          finishJob(this.db, job.id, "failed", message);
+          log.error(`job ${job.id} (${job.kind}) failed after ${job.attempts} attempts: ${message}`);
+          if (!quiet) this.notify("Job failed", `${job.kind}: ${truncate(message, 140)}`);
+        }
       } else {
-        const runAt = new Date(Date.now() + this.retryDelayMs).toISOString();
+        const runAt = new Date(Date.now() + this.backoffMs(job.attempts)).toISOString();
         requeueJob(this.db, job.id, runAt);
         this.db.run("UPDATE jobs SET result = ? WHERE id = ?", [`attempt ${job.attempts} failed: ${message}`, job.id]);
         log.warn(`job ${job.id} (${job.kind}) attempt ${job.attempts} failed: ${message} — retrying at ${runAt}`);
       }
     }
+  }
+
+  /** Exponential backoff from `retryDelayMs`, capped at an hour, with jitter in [half, full]. */
+  backoffMs(attempt: number): number {
+    const full = Math.min(this.retryDelayMs * 2 ** Math.max(0, attempt - 1), MAX_RETRY_DELAY_MS);
+    return Math.round(full / 2 + Math.random() * (full / 2));
   }
 
   private notify(title: string, body: string): void {

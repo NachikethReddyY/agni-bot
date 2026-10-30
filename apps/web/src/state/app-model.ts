@@ -267,6 +267,11 @@ export class AppModel {
   private started = false;
 
   private readonly settingsStore: SettingsStore;
+  private unsent = new Map<string, { frame: ClientFrame; resolve: () => void }>();
+  private tokenQueue: IncomingFrame[] = [];
+  private tokenIsFrame = false;
+  private tokenTimer: ReturnType<typeof setTimeout> | number | null = null;
+  private settingsTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly notifier: NotificationBridge;
   private readonly healthFetch: (url: string) => Promise<HealthReport>;
   private readonly makeTransport: (() => FrameTransport) | undefined;
@@ -280,7 +285,10 @@ export class AppModel {
     this.healthPollMs = env.healthPollMs ?? 20_000;
     this.settings = this.settingsStore.load();
     this.applyLocationRoute(false);
-    if (typeof window !== "undefined") window.addEventListener("popstate", this.onLocationChange);
+    if (typeof window !== "undefined") {
+      window.addEventListener("popstate", this.onLocationChange);
+      window.addEventListener("pagehide", this.flushSettings);
+    }
     const stored = SecretStore.load();
     if (stored) {
       this.token = stored.token;
@@ -926,14 +934,39 @@ export class AppModel {
     void connection.send({ type: "msg.cancel", turnID }).catch(() => undefined);
   }
 
-  answer(approval: ApprovalRow, decision: string): void {
-    this.conversation.resolveApproval(approval.id, decision);
-    this.publish();
+  /**
+   * Send an answer and resolve the card only once the send succeeded. A failed
+   * send keeps the card pending and queues the frame for the next reconnect
+   * (`keep`; secrets are never kept, their value must not outlive the form).
+   */
+  private reply(requestID: string, frame: ClientFrame, resolve: () => void, keep = true): void {
     const connection = this.connection;
-    if (!connection) return;
-    void connection
-      .send({ type: "approve.reply", requestID: approval.id, decision: decision as "once" | "always" | "reject" })
-      .catch(() => undefined);
+    const failed = (): void => {
+      if (keep) this.unsent.set(requestID, { frame, resolve });
+      this.showToast(notice("failure", "Not sent", "Reconnecting — your answer is still pending."));
+      this.publish();
+    };
+    if (!connection || !isReady(this.connectionState)) return failed();
+    connection.send(frame).then(
+      () => {
+        this.unsent.delete(requestID);
+        resolve();
+        this.publish();
+      },
+      failed,
+    );
+  }
+
+  private flushUnsent(): void {
+    for (const [id, { frame, resolve }] of [...this.unsent]) this.reply(id, frame, resolve);
+  }
+
+  answer(approval: ApprovalRow, decision: string): void {
+    this.reply(
+      approval.id,
+      { type: "approve.reply", requestID: approval.id, decision: decision as "once" | "always" | "reject" },
+      () => this.conversation.resolveApproval(approval.id, decision),
+    );
   }
 
   /**
@@ -941,33 +974,20 @@ export class AppModel {
    * so the turn waiting on it can carry on.
    */
   answerForm(form: FormRow, answer: string): void {
-    this.conversation.resolveForm(form.id, answer);
-    this.publish();
-    const connection = this.connection;
-    if (!connection) return;
-    void connection
-      .send({ type: "form.answer", requestID: form.id, answer })
-      .catch(() => undefined);
+    this.reply(form.id, { type: "form.answer", requestID: form.id, answer }, () =>
+      this.conversation.resolveForm(form.id, answer),
+    );
   }
 
-  /**
-   * Send a one-time secret. The value is never put into app state or the
-   * transcript; the row disappears before the frame leaves.
-   */
+  /** Send a one-time secret. The value is never kept in app state or the transcript. */
   submitSecret(secret: SecretRow, value: string): void {
-    this.conversation.resolveSecret(secret.id);
-    this.publish();
-    const connection = this.connection;
-    if (!connection) return;
-    void connection.send({ type: "secret.reply", requestID: secret.id, value }).catch(() => undefined);
+    this.reply(secret.id, { type: "secret.reply", requestID: secret.id, value }, () =>
+      this.conversation.resolveSecret(secret.id), false);
   }
 
   cancelSecret(secret: SecretRow): void {
-    this.conversation.resolveSecret(secret.id);
-    this.publish();
-    const connection = this.connection;
-    if (!connection) return;
-    void connection.send({ type: "secret.cancel", requestID: secret.id }).catch(() => undefined);
+    this.reply(secret.id, { type: "secret.cancel", requestID: secret.id }, () =>
+      this.conversation.resolveSecret(secret.id));
   }
 
   selectAgent(agent: AgentInfo, updateRoute = true): void {
@@ -1405,6 +1425,7 @@ export class AppModel {
             this.refreshAppearance();
             this.startHealthPolling();
             if (!wasReady) this.openConversation(this.conversation.agentID);
+            this.flushUnsent();
             break;
           }
           case "refused":
@@ -1450,8 +1471,7 @@ export class AppModel {
 
       case "lastSeq":
         this.settings = { ...this.settings, lastSeq: event.seq };
-        this.settingsStore.save(this.settings);
-        this.publish();
+        this.saveSettingsSoon();
         return;
     }
   }
@@ -1460,9 +1480,48 @@ export class AppModel {
     return this.conversation.agentID === "ea" ? "main" : `dm:${this.conversation.agentID}`;
   }
 
+  private saveSettingsSoon(): void {
+    if (this.settingsTimer !== null) return;
+    this.settingsTimer = setTimeout(() => this.flushSettings(), 1000);
+  }
+
+  /** Also called on pagehide so a reload resumes from the real lastSeq. */
+  flushSettings = (): void => {
+    if (this.settingsTimer === null) return;
+    clearTimeout(this.settingsTimer);
+    this.settingsTimer = null;
+    this.settingsStore.save(this.settings);
+  };
+
+  /** Apply every queued token in one pass: one publish per frame of animation. */
+  flushTokens = (): void => {
+    if (this.tokenTimer !== null) {
+      if (this.tokenIsFrame) cancelAnimationFrame(this.tokenTimer as number);
+      else clearTimeout(this.tokenTimer as ReturnType<typeof setTimeout>);
+      this.tokenTimer = null;
+    }
+    const queue = this.tokenQueue;
+    if (queue.length === 0) return;
+    this.tokenQueue = [];
+    for (const frame of queue) this.run(this.conversation.apply(frame));
+    this.publish();
+  };
+
   private handleFrame(frame: IncomingFrame): void {
     // A frame type this build does not know is data, not an instruction.
     if (!isKnownFrame(frame)) return;
+
+    if (frame.type === "token") {
+      this.tokenQueue.push(frame);
+      if (this.tokenTimer === null) {
+        this.tokenIsFrame = typeof requestAnimationFrame === "function";
+        this.tokenTimer = this.tokenIsFrame
+          ? requestAnimationFrame(this.flushTokens)
+          : setTimeout(this.flushTokens, 16);
+      }
+      return;
+    }
+    this.flushTokens(); // keep order: tokens before whatever arrived after them
 
     // AppModel owns channel routing; the reducer owns the transcript.
     if (frame.type === "status.update") {

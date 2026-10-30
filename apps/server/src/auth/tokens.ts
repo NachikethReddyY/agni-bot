@@ -63,6 +63,12 @@ export function revokeDevice(db: Database, idOrPrefix: string): Device | null {
   return row;
 }
 
+/** True when the device is gone or revoked: an open session must not outlive its token. */
+export function isDeviceRevoked(db: Database, deviceID: string): boolean {
+  const row = db.query<{ revoked_at: string | null }, [string]>("SELECT revoked_at FROM devices WHERE id = ?").get(deviceID);
+  return !row || row.revoked_at !== null;
+}
+
 export function listDevices(db: Database): Device[] {
   return db
     .query<Device, []>(

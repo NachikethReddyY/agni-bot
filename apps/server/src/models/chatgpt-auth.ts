@@ -1,4 +1,4 @@
-/** Official Sign in with ChatGPT for a locally hosted, open-source Agni. */
+/** Optional Sign in with ChatGPT, off by default (AGNI_CHATGPT=1). OpenAI eligibility under its terms is unconfirmed; owner decision pending. */
 import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { chmod, mkdir, rename, unlink, writeFile } from "node:fs/promises";
@@ -10,6 +10,12 @@ import type { ChatGPTConnection } from "@agni/protocol";
 import { ProviderError } from "./client";
 import type { ProviderConfig } from "./providers";
 import { chatGPTPage } from "./chatgpt-page";
+import { log } from "../log";
+
+/** The single switch: the router, login entry point and listing all honour it. */
+export function chatGPTEnabled(): boolean { return process.env.AGNI_CHATGPT === "1"; }
+const DISABLED = "ChatGPT sign-in is disabled (set AGNI_CHATGPT=1)";
+const UNREADABLE = "Saved ChatGPT accounts could not be read and were left unchanged. Move chatgpt/accounts.json aside and restart Agni.";
 
 const AUTH = "https://auth.openai.com";
 const RESOURCE = "https://api.openai.com/v1";
@@ -57,6 +63,8 @@ export class ChatGPTAuth {
   private writes: Promise<void> = Promise.resolve();
   private keys?: { expires: number; keys: SigningKey[] };
   private stopped = false;
+  /** Set when the file exists but cannot be parsed; it is then never overwritten. */
+  private unreadable = false;
 
   constructor(private readonly options: {
     filePath: string | null;
@@ -68,8 +76,12 @@ export class ChatGPTAuth {
     if (options.filePath) {
       try { store = storeSchema.parse(JSON.parse(readFileSync(options.filePath, "utf8"))); }
       catch (error) {
-        // A corrupt store must not be overwritten, losing account registrations.
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new ChatGPTAuthError("Could not read the protected ChatGPT account file.");
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          // Start with no accounts, but leave the file alone so nothing is lost.
+          this.unreadable = true;
+          this.message = UNREADABLE;
+          log.warn(`ChatGPT account file ignored (${(error as Error).name}); it was not modified.`);
+        }
       }
     }
     this.store = store ?? { version: 1, hostID: `urn:uuid:${randomUUID()}`, activeID: null, accounts: [] };
@@ -80,6 +92,8 @@ export class ChatGPTAuth {
   private active(): Account | undefined { return this.store.accounts.find((a) => a.id === this.store.activeID); }
 
   state(): ChatGPTConnection {
+    // Flag off: never report "connected", since the router ignores ChatGPT.
+    if (!chatGPTEnabled()) return { status: "disconnected", accounts: [], activeAccountID: null, model: "", models: [], showWelcome: false, message: DISABLED };
     const account = this.active();
     return {
       status: this.pending ? "pending" : account?.needsLogin ? "reauth_required" : account?.tokens && account.model ? "connected" : this.message ? "error" : "disconnected",
@@ -99,6 +113,7 @@ export class ChatGPTAuth {
   }
 
   async start(owner: string, accountID?: string): Promise<{ loginID: string; authorizeURL: string; expiresAt: string }> {
+    if (!chatGPTEnabled()) throw new ChatGPTAuthError(DISABLED);
     if (this.stopped) throw new ChatGPTAuthError("The server is shutting down.");
     if (this.pending) throw new ChatGPTAuthError("A ChatGPT sign-in is already open. Finish or cancel it first.");
     const account = accountID ? this.store.accounts.find((a) => a.id === accountID) : undefined;
@@ -372,6 +387,7 @@ export class ChatGPTAuth {
   }
   private save(): Promise<void> {
     if (!this.options.filePath) return Promise.resolve();
+    if (this.unreadable) return Promise.reject(new ChatGPTAuthError(UNREADABLE));
     const path = this.options.filePath;
     const contents = JSON.stringify(this.store);
     const write = this.writes.catch(() => {}).then(async () => {

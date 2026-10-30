@@ -970,4 +970,40 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX routine_runs_routine_started ON routine_runs(routine_id, started_at);
     `,
   },
+  {
+    id: 42,
+    name: "queued_owner_messages",
+    sql: `
+      -- H22: an owner message is written here on receipt, before any ack, and
+      -- deleted once its turn has started. Rows left at boot are replayed.
+      CREATE TABLE queued_messages (
+        id TEXT PRIMARY KEY,
+        frame TEXT NOT NULL,
+        text TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        device_name TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    id: 43,
+    name: "fts_update_triggers_column_filter",
+    sql: `
+      -- M40: only a change to an indexed column rewrites the FTS row, so
+      -- markMemoryUsed (use_count, last_used_at) no longer touches the index.
+      DROP TRIGGER agent_memories_fts_au;
+      CREATE TRIGGER agent_memories_fts_au AFTER UPDATE OF content, tags, key_slug ON agent_memories BEGIN
+        INSERT INTO agent_memories_fts(agent_memories_fts, rowid, content, tags, key_slug)
+        VALUES ('delete', old.rowid, old.content, old.tags, old.key_slug);
+        INSERT INTO agent_memories_fts(rowid, content, tags, key_slug)
+        VALUES (new.rowid, new.content, new.tags, new.key_slug);
+      END;
+      DROP TRIGGER channel_messages_fts_au;
+      CREATE TRIGGER channel_messages_fts_au AFTER UPDATE OF text ON channel_messages BEGIN
+        INSERT INTO channel_messages_fts(channel_messages_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+        INSERT INTO channel_messages_fts(rowid, text) VALUES (new.rowid, new.text);
+      END;
+    `,
+  },
 ];

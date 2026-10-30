@@ -1,5 +1,11 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import http from "node:http";
+import https from "node:https";
+import { Readable } from "node:stream";
+
+/** Resolver seam so tests can stub DNS. */
+export const resolver = { lookup };
 
 const FETCH_TIMEOUT_MS = 5_000;
 const MAX_REDIRECT_HOPS = 2;
@@ -38,12 +44,45 @@ function parsePublicURL(raw: string): URL {
 }
 
 async function fetchOne(url: URL): Promise<Response> {
-  await assertPublicHost(url.hostname);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    return await fetch(url, { signal: controller.signal, redirect: "manual", headers: { accept: "text/html,text/plain;q=0.8" } });
-  } finally { clearTimeout(timer); }
+  const addresses = await resolvePublicHost(url.hostname);
+  // IP literals cannot be rebound, so the plain fetch is safe for them.
+  if (isIP(url.hostname.replace(/^\[|\]$/g, ""))) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      return await fetch(url, { signal: controller.signal, redirect: "manual", headers: { accept: "text/html,text/plain;q=0.8" } });
+    } finally { clearTimeout(timer); }
+  }
+  return requestPinned(url, addresses);
+}
+
+/**
+ * GET `url` connecting only to the already-checked addresses (DNS-rebinding
+ * defence): the lookup hook never consults DNS again, while TLS still
+ * verifies the hostname. Redirects are returned, not followed.
+ */
+export function requestPinned(url: URL, addresses: string[]): Promise<Response> {
+  const pinned = addresses.map((address) => ({ address, family: isIP(address) }));
+  const lookupPinned = (_host: string, opts: { all?: boolean }, cb: (...args: unknown[]) => void) =>
+    opts?.all ? cb(null, pinned) : cb(null, pinned[0]!.address, pinned[0]!.family);
+  const mod = url.protocol === "https:" ? https : http;
+  return new Promise((resolve, reject) => {
+    const req = mod.request(url, {
+      method: "GET",
+      headers: { accept: "text/html,text/plain;q=0.8" },
+      lookup: lookupPinned as never,
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    }, (res) => {
+      const headers = new Headers();
+      for (const [k, v] of Object.entries(res.headers)) if (v !== undefined) headers.set(k, Array.isArray(v) ? v.join(", ") : v);
+      const status = res.statusCode ?? 502;
+      const nullBody = status < 200 || status === 204 || status === 205 || status === 304;
+      if (nullBody) res.resume();
+      resolve(new Response(nullBody ? null : (Readable.toWeb(res) as unknown as ReadableStream), { status, headers }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
 }
 
 async function readPage(response: Response): Promise<{ title: string|null; summary: string|null }> {
@@ -77,13 +116,16 @@ async function readPage(response: Response): Promise<{ title: string|null; summa
 }
 
 export async function assertPublicHost(host: string): Promise<void> {
+  await resolvePublicHost(host);
+}
+
+/** Resolve once, reject private results, and return the checked addresses to pin. */
+export async function resolvePublicHost(host: string): Promise<string[]> {
   const name = host.replace(/^\[|\]$/g, "").toLowerCase();
   if (name === "localhost" || name.endsWith(".localhost") || name.endsWith(".local") || name.endsWith(".internal")) throw new Error("private host blocked");
-  // shortcut: Bun fetch cannot pin the connection to the checked IP, so a
-  // rebinding resolver can still answer differently at connect time; upgrade by
-  // connecting to the resolved IP (node:http lookup hook) with Host/SNI set.
-  const addresses = isIP(name) ? [{ address: name }] : await lookup(name, { all: true, verbatim: true });
+  const addresses = isIP(name) ? [{ address: name }] : await resolver.lookup(name, { all: true, verbatim: true });
   if (!addresses.length || addresses.some(({ address }) => isPrivateAddress(address))) throw new Error("private or reserved address blocked");
+  return addresses.map(({ address }) => address);
 }
 
 /** True for loopback, private, link-local, multicast, reserved or unparseable addresses. */

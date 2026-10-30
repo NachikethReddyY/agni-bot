@@ -8,7 +8,7 @@ import { ProviderError, streamChat, type ChatMessage, type ChatResult, type Tool
 import type { ProviderConfig } from "./providers";
 import type { HealthTracker } from "./health";
 import { log } from "../log";
-import type { ChatGPTAuth } from "./chatgpt-auth";
+import { chatGPTEnabled, type ChatGPTAuth } from "./chatgpt-auth";
 import { streamChatGPT } from "./chatgpt-responses";
 
 export class RouterError extends Error {
@@ -93,6 +93,8 @@ export class Router {
   private chatgpt?: ChatGPTAuth;
 
   setChatGPT(connection: ChatGPTAuth): void { this.chatgpt = connection; }
+  /** ChatGPT is selectable only when AGNI_CHATGPT=1; otherwise bots fall back to free providers. */
+  private get chatGPT(): ChatGPTAuth | undefined { return chatGPTEnabled() ? this.chatgpt : undefined; }
   connectionReady(providerID: string): void { this.health.markSuccess(providerID); }
 
   constructor(
@@ -113,7 +115,7 @@ export class Router {
   }
 
   async listModels(providerID: string): Promise<string[]> {
-    if (providerID === "chatgpt" && this.chatgpt) return (await this.chatgpt.models()).map((model) => model.id);
+    if (providerID === "chatgpt" && this.chatGPT) return (await this.chatGPT.models()).map((model) => model.id);
     const provider = this.providers.find((candidate) => candidate.id === providerID);
     if (!provider) throw new Error("Provider is not configured on the daemon.");
     const response = await this.fetchFn(`${provider.baseUrl.replace(/\/$/, "")}/models`, {
@@ -131,7 +133,7 @@ export class Router {
   candidates(): ProviderConfig[] {
     // Choosing ChatGPT is an explicit billing choice. Never silently fall back
     // to API-key billing when its grant, usage allowance, or connection fails.
-    const chatgpt = this.chatgpt?.provider();
+    const chatgpt = this.chatGPT?.provider();
     if (chatgpt) return [chatgpt];
     const healthy = this.providers.filter((provider) => this.health.isAvailable(provider.id));
     const cooling = this.providers.filter((provider) => !this.health.isAvailable(provider.id));
@@ -256,7 +258,7 @@ export class Router {
   }
 
   status(): ProviderStatus[] {
-    const chatgpt = this.chatgpt?.provider();
+    const chatgpt = this.chatGPT?.provider();
     return [...(chatgpt ? [chatgpt] : []), ...this.providers].map((provider) => {
       const snapshot = this.health.snapshot([provider.id])[0];
       return {

@@ -55,8 +55,8 @@ export const ROLLOVER_MIN_TURNS = 3;
 /** How long a block may sit idle before a topic shift is a new block. */
 export const ROLLOVER_IDLE_MS = 30 * 60_000;
 
-/** Hard cap on the carried summary the next block opens with. */
-export const CARRY_SUMMARY_CHARS = 900;
+/** Hard cap on the carried summary the next block opens with (~1k tokens; H30). */
+export const CARRY_SUMMARY_CHARS = 4000;
 
 /** How many turns of the old block the new one opens with (ROL-006). */
 export const OPENED_TAIL_TURNS = 6;
@@ -79,6 +79,8 @@ const SUMMARY_SYSTEM_PROMPT = [
   '{"decisions":[],"open_loops":[],"entities":[],"tone":"","source_turn_range":{"from":0,"to":0}}',
   "decisions: what was decided. open_loops: what is still owed. entities: people, projects, files.",
   "tone: one short phrase. source_turn_range: the turn numbers you were given.",
+  "If a running summary is given, merge it with the new session: keep every durable decision, fact and",
+  "open loop from it that still holds (drop only what is resolved or superseded), then add the new ones.",
   "Nothing else — no preamble, no prose outside the JSON.",
 ].join(" ");
 
@@ -313,7 +315,7 @@ export async function summarizeBlock(
       firstTokenTimeoutMs: deps.firstTokenTimeoutMs,
       onDelta: () => {},
       toolChoice: "none",
-      maxTokens: 600,
+      maxTokens: 1500,
     });
     const structured = parseStructuredSummary(result.text);
     // A model that answers in prose still gets a summary: the structured
@@ -359,12 +361,16 @@ export function renderSummary(summary: StructuredSummary): string {
   return parts.join(". ");
 }
 
-/** Carry is a seam, not storage: keep it short, no matter what the model said. */
-function clampCarry(text: string): string | null {
+/** Carry is a seam, not storage: bounded, no matter what the model said. Keeps head and tail. */
+export function clampCarry(text: string): string | null {
   if (!text) return null;
   const cleaned = text.replace(/\s+/g, " ").trim();
   if (!cleaned) return null;
-  return cleaned.length > CARRY_SUMMARY_CHARS ? `${cleaned.slice(0, CARRY_SUMMARY_CHARS)}…` : cleaned;
+  if (cleaned.length <= CARRY_SUMMARY_CHARS) return cleaned;
+  const marker = " [… middle omitted …] ";
+  const room = CARRY_SUMMARY_CHARS - marker.length;
+  const head = Math.ceil(room / 2);
+  return `${cleaned.slice(0, head)}${marker}${cleaned.slice(cleaned.length - (room - head))}`;
 }
 
 /** Rotate by conversation id when the caller already holds the id. */

@@ -19,12 +19,18 @@ Fixed, with tests: **C1–C6**, fix-first list 1–10, H1, H3, H4, H5, H6, H7,
 H9, H10, H11, H13–H19, H21, H24–H29, H31, H33, M5, M7, M13, M19, M23, M30,
 M39; Low: `job_list`/`job_cancel` ownership, SMTP waits for `354`.
 
-Partial: H2 (redirect hops re-checked; Bun `fetch` can't pin the IP —
-`shortcut:` comment in `fetch-url.ts`), H8 (`run_privileged` now always
-needs an approval card; the macOS dialog text is unchanged).
+Round 2 (web and server only; the Mac app is deferred): H2 (fetches pin
+the checked IPs), H8 (osascript `with prompt`, compound commands
+refused), H12 (ChatGPT sign-in off unless `AGNI_CHATGPT=1`), H20, H22,
+H23, H30, H32 (server and web), H36, M1, M3, M31, M32, M35, M36, M38,
+M40, M41, M43, M44, M50, M58, `approve.reply` waking on 0 rows, and the
+TasksView blob URL leak.
 
-Open: H12 (owner decision), H20, H22, H23, H30, H32, H34–H37, the rest of
-Medium/Low, and sections 5–6.
+Partial: H37 (token batching, debounced `lastSeq`, memoised markdown;
+`MessageRowView` is not memoised because rows are mutated in place).
+
+Open: H34, H35, and the Mac side of H32/M57 (Mac app deferred), the
+rest of Medium/Low, and sections 5–6.
 
 ---
 

@@ -17,7 +17,8 @@ import { PluginService } from "../plugins/service";
 import type { Router, ProviderStatus } from "../models/router";
 import { dayTotals, type DayTotals } from "../stores/usage";
 import { readShareFile } from "../share/document";
-import { dispatch, errorFrame, newSession, type Session } from "./dispatch";
+import { dispatch, errorFrame, newSession, resumeQueuedMessages, type DispatchDeps, type Session } from "./dispatch";
+import { isDeviceRevoked } from "../auth/tokens";
 import { FrameLog } from "./frame-log";
 import { dirname, resolve } from "node:path";
 import { ChatGPTAuth } from "../models/chatgpt-auth";
@@ -74,13 +75,29 @@ export function startServer(config: Config, db: Database, router: Router, starte
 
   const sessions = new Map<Bun.ServerWebSocket<Session>, Session>();
 
+  /** A live frame for one connection: held while it waits for its resync replay (H32). */
+  const deliver = (socket: Bun.ServerWebSocket<Session>, frame: ServerFrame): void => {
+    if (socket.data.held) socket.data.held.push(frame);
+    else socket.send(encodeFrame(frame));
+  };
+
   const emit = (body: ServerFrameBody): ServerFrame => {
     const frame = frameLog.next(body);
     for (const [socket, session] of sessions) {
-      if (session.authed) socket.send(encodeFrame(frame));
+      if (session.authed) deliver(socket, frame);
     }
     return frame;
   };
+
+  // M1: `revoke` runs in another process, so the daemon looks for revoked
+  // devices among its open sessions and closes them.
+  const revocationSweep = setInterval(() => {
+    for (const [socket, session] of sessions) {
+      if (!session.authed || !session.device || !isDeviceRevoked(db, session.device.id)) continue;
+      session.authed = false;
+      socket.close(4003, "revoked");
+    }
+  }, REVOCATION_SWEEP_MS);
 
   const plugins = new PluginService({ config, db, emit, pluginsPath: config.pluginsPath });
   plugins.autoConnect();
@@ -167,7 +184,7 @@ export function startServer(config: Config, db: Database, router: Router, starte
               chatgpt,
               reply: (body) => {
                 const frame = frameLog.next(body, { replay: false });
-                socket.send(encodeFrame(frame));
+                deliver(socket, frame);
                 return frame;
               },
               send: (frame) => socket.send(encodeFrame(frame)),
@@ -185,6 +202,7 @@ export function startServer(config: Config, db: Database, router: Router, starte
       close(socket) {
         const session = socket.data;
         if (session.helloTimer !== undefined) clearTimeout(session.helloTimer);
+        if (session.holdTimer !== undefined) clearTimeout(session.holdTimer);
         for (const controller of session.aborts.values()) controller.abort();
         session.aborts.clear();
         sessions.delete(socket);
@@ -193,18 +211,32 @@ export function startServer(config: Config, db: Database, router: Router, starte
     },
   });
 
+  // H22: owner messages a previous process accepted but never started. They
+  // have no connection; their answers reach every client through `emit`.
+  const bootDeps: DispatchDeps = {
+    config, db, router, frameLog, emit, plugins, chatgpt,
+    reply: (body) => frameLog.next(body, { replay: false }),
+    send: () => undefined,
+    close: () => undefined,
+  };
+  const resumed = resumeQueuedMessages(bootDeps);
+  if (resumed > 0) log.warn(`resumed ${resumed} owner message(s) a previous process left queued`);
+
   return {
     port: server.port ?? config.port,
     url: `ws://${config.host}:${server.port ?? config.port}/ws`,
     plugins,
     emit,
     stop() {
+      clearInterval(revocationSweep);
       chatgpt.stop();
       server.stop(true);
       frameLog.flush();
     },
   };
 }
+
+const REVOCATION_SWEEP_MS = 2_000;
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
