@@ -231,7 +231,9 @@ export class Router {
           if (!isRequestError(providerError)) {
             this.health.markFailure(provider.id, this.cooldownFor(providerError), providerError.message);
           }
-          if (!isRetryable(providerError) || retry === PROVIDER_RETRIES - 1) {
+          // A 429 won't clear in a retry's time: fail over now (it is already cooling) unless this is the last candidate.
+          const skipRetry = providerError.status === 429 && provider !== candidates[candidates.length - 1];
+          if (!isRetryable(providerError) || skipRetry || retry === PROVIDER_RETRIES - 1) {
             log.info(`provider ${provider.id} attempt ${retry + 1} failed (${providerError.message}) — failing over`);
             break;
           }

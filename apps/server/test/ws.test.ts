@@ -183,7 +183,6 @@ async function startTestServer(fetchMock?: typeof fetch): Promise<void> {
     frameLogCapacity: 100,
     jobPollMs: 1000,
     maxConcurrentTurns: 4,
-    messageBatchMs: 50,
     pluginsPath: "",
   };
   server = startServer(config, db, router);
@@ -213,6 +212,38 @@ describe("websocket end-to-end", () => {
     ).get(userMessage.id);
     expect(stored?.text).toBe("say hi");
     expect(stored?.from_id).toBe(userMessage.fromId);
+  });
+
+  test("a lone message dispatches without the batch debounce", async () => {
+    await startTestServer();
+    client!.send({ type: "agent.rename", agentId: "ea", name: "Agni" });
+    await client!.next("agent.updated");
+    client!.send({ type: "msg.send", channelId: "main", text: "hi" });
+    await client!.next("turn.start");
+    await client!.next("turn.end");
+    expect(client!.seen().some((frame) => frame.type === "status.update" && String(frame.text).startsWith("Got it"))).toBe(false);
+  });
+
+  test("a burst sent during a turn merges into one follow-up turn", async () => {
+    const bodies: string[] = [];
+    await startTestServer((async (_url: string, init?: RequestInit) => {
+      bodies.push(String(init?.body ?? ""));
+      // Slow enough that the rest of the burst arrives while this turn runs.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return sseResponse("ok");
+    }) as unknown as typeof fetch);
+    client!.send({ type: "agent.rename", agentId: "ea", name: "Agni" });
+    await client!.next("agent.updated");
+    client!.send({ type: "msg.send", channelId: "main", text: "first part" });
+    client!.send({ type: "msg.send", channelId: "main", text: "second part" });
+    client!.send({ type: "msg.send", channelId: "main", text: "third part" });
+    await client!.next("turn.end");
+    await client!.next("turn.end");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const userTurns = bodies.filter((body) => body.includes("part"));
+    expect(userTurns.length).toBe(2);
+    expect(userTurns[1]).toContain("second part\\n\\nthird part");
+    expect(client!.seen().filter((frame) => frame.type === "turn.end").length).toBe(0);
   });
 
   test("a secret request crosses the socket and never reaches the transcript", async () => {

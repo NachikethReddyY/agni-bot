@@ -536,7 +536,7 @@ export class Conversation {
         const id = Conversation.assistantID(frame.turnID);
         const message = this.messages.find((candidate) => candidate.id === id);
         if (message) {
-          message.text += frame.delta;
+          message.text = frame.reset ? frame.delta : message.text + frame.delta;
         } else {
           // Replayed deltas without their turn.start: rebuild the bubble.
           this.inFlightTurnID = frame.turnID;

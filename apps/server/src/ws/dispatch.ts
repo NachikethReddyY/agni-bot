@@ -356,27 +356,6 @@ function handleResync(deps: DispatchDeps, session: Session, frame: Extract<Clien
   releaseHeld(deps, session, frames);
 }
 
-interface PendingMessageBatch {
-  texts: string[];
-  frame: Extract<ClientFrame, { type: "msg.send" }>;
-  session: Session;
-  /** The latest frame's deps: flushing replies on the connection that sent last. */
-  deps: DispatchDeps;
-  firstAt: number;
-  typing: boolean;
-  /** Durable `queued_messages` rows behind this batch (H22). */
-  rowIDs: string[];
-  timer: ReturnType<typeof setTimeout>;
-}
-
-/** Keyed by the database, like `threadQueues`: `DispatchDeps` is rebuilt per frame. */
-const messageBatches = new WeakMap<Database, Map<string, PendingMessageBatch>>();
-
-function batchKey(frame: Extract<ClientFrame, { type: "msg.send" }>, session: Session): string {
-  return `${frame.channelId ?? frame.conversationID ?? frame.threadID ?? session.agentID}:${frame.toAgentId ?? session.agentID}`;
-}
-
-/** A message the owner sent while its thread was mid-turn: run it next. */
 interface QueuedMessage {
   deps: DispatchDeps;
   frame: Extract<ClientFrame, { type: "msg.send" }>;
@@ -519,11 +498,21 @@ function drainThreadQueue(deps: DispatchDeps, threadID: string): void {
   const queues = threadQueues.get(deps.db);
   const queue = queues?.get(threadID);
   if (!queues || !queue || queue.length === 0) return;
-  const next = queue.shift()!;
+  let next = queue.shift()!;
+  // A burst sent while the last turn ran becomes one turn, not one per message.
+  while (mergeable(next) && queue[0] && mergeable(queue[0])) {
+    const more = queue.shift()!;
+    next = { ...more, text: `${next.text}\n\n${more.text}`, rowIDs: [...next.rowIDs, ...more.rowIDs] };
+  }
   if (queue.length === 0) queues.delete(threadID);
   // A stop that somehow landed in the queue still means "stop", not a turn.
   if (isStopCommand(next.text)) return forgetOwnerMessages(deps.db, next.rowIDs);
   dispatchUserMessage(next.deps, next.session, next.frame, next.text, next.rowIDs);
+}
+
+/** Plain chat merges; files, stops and explicit remembers stay their own turn (GATE-003). */
+function mergeable(message: QueuedMessage): boolean {
+  return !message.frame.files?.length && !isStopCommand(message.text) && !bypassesBatch(classifyTurn(message.text).category);
 }
 
 /** Forget everything waiting on a thread; returns how many messages. */
@@ -576,75 +565,15 @@ function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<Clie
       return;
     }
   }
-  // GATE-003: explicit remember/task commands are processed immediately — the
-  // debounce exists to merge a burst of chat, not to delay a direct command.
+  // Every message starts at once; one sent while a turn runs waits in the
+  // thread queue, where a burst merges into a single follow-up turn.
   const rowID = persistOwnerMessage(deps, session, frame, combined);
-  const gate = classifyTurn(combined);
-  if (frame.files?.length || bypassesBatch(gate.category)) {
-    dispatchUserMessage(deps, session, frame, combined, [rowID]);
-    return;
-  }
-  const batches = messageBatches.get(deps.db) ?? new Map<string, PendingMessageBatch>();
-  messageBatches.set(deps.db, batches);
-  const key = batchKey(frame, session);
-  const existing = batches.get(key);
-  if (existing) {
-    existing.texts.push(...parts);
-    existing.frame = frame;
-    existing.session = session;
-    existing.deps = deps;
-    existing.rowIDs.push(rowID);
-    clearTimeout(existing.timer);
-    existing.timer = setTimeout(() => flushMessageBatch(deps, key), deps.config.messageBatchMs ?? 800);
-    return;
-  }
-
-  const pending: PendingMessageBatch = {
-    texts: [...parts],
-    frame,
-    session,
-    deps,
-    firstAt: Date.now(),
-    typing: false,
-    rowIDs: [rowID],
-    timer: setTimeout(() => flushMessageBatch(deps, key), deps.config.messageBatchMs ?? 800),
-  };
-  batches.set(key, pending);
-  deps.emit({
-    type: "status.update",
-    channelId: frame.channelId ?? "main",
-    agentId: frame.toAgentId,
-    text: "Got it, looking into this…",
-    transient: true,
-  });
+  dispatchUserMessage(deps, session, frame, combined, [rowID]);
 }
 
-function handleUserTyping(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "user.typing" }>): void {
-  if (!requireAuth(deps, session)) return;
-  const batches = messageBatches.get(deps.db);
-  if (!batches) return;
-  const prefix = `${frame.channelId ?? session.agentID}:`;
-  for (const [key, batch] of batches) {
-    if (!key.startsWith(prefix)) continue;
-    batch.typing = frame.isTyping;
-    if (!frame.isTyping) {
-      clearTimeout(batch.timer);
-      batch.timer = setTimeout(() => flushMessageBatch(deps, key), 0);
-    }
-  }
-}
-
-function flushMessageBatch(deps: DispatchDeps, key: string): void {
-  const batches = messageBatches.get(deps.db);
-  const batch = batches?.get(key);
-  if (!batches || !batch) return;
-  const elapsed = Date.now() - batch.firstAt;
-  if (batch.typing && elapsed < 2_000) {
-    batch.timer = setTimeout(() => flushMessageBatch(deps, key), Math.min(deps.config.messageBatchMs ?? 800, 2_000 - elapsed));
-    return;
-  }
-  batches.delete(key);
-  dispatchUserMessage(batch.deps, batch.session, batch.frame, batch.texts.join("\n\n"), batch.rowIDs);
+function handleUserTyping(deps: DispatchDeps, session: Session, _frame: Extract<ClientFrame, { type: "user.typing" }>): void {
+  // Accepted for older clients; messages no longer wait on typing.
+  requireAuth(deps, session);
 }
 
 async function runUserMessage(

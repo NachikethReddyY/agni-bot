@@ -437,7 +437,7 @@ public struct Conversation: Sendable, Equatable {
       guard belongsTo(threadID: token.threadID, conversationID: nil) || adopted else { return [] }
       let id = Self.assistantID(turnID: token.turnID)
       if let index = messages.firstIndex(where: { $0.id == id }) {
-        messages[index].text += token.delta
+        messages[index].text = token.reset == true ? token.delta : messages[index].text + token.delta
       } else {
         // Replayed deltas without their turn.start: rebuild the bubble.
         inFlightTurnID = token.turnID

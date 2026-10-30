@@ -593,7 +593,15 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     /** Highest seq the server has assigned so far. */
     lastSeq: z.number().int().nonnegative(),
   }),
-  z.object({ type: z.literal("token"), seq, turnID: z.string(), threadID: z.string(), delta: z.string() }),
+  z.object({
+    type: z.literal("token"),
+    seq,
+    turnID: z.string(),
+    threadID: z.string(),
+    delta: z.string(),
+    /** The text streamed for the current step was tool-call narration: clear it before applying `delta`. */
+    reset: z.boolean().optional(),
+  }),
   z.object({
     type: z.literal("turn.start"),
     seq,

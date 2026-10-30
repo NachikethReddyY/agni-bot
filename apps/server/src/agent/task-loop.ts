@@ -505,13 +505,10 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   let saidSomething = false;
   const offRoadGuard = !persona.id.startsWith("coder") && !CODE_REQUEST.test(run.text) && !FILE_REQUEST.test(run.text);
   let activeStepText = "";
-  // Channel turns show progress where the owner asked for it: `say` messages
-  // and the final answer. A model's between-tool narration is thinking aloud,
-  // so it stays in the model's context instead of becoming a bubble for every
-  // internal step. Direct turns (the CLI) keep streaming live for feedback.
-  const channelBacked = Boolean(run.channelID);
-  const emitToken = (delta: string): void => {
-    if (!peerInput) run.emit({ type: "token", turnID, threadID, delta });
+  // Every step streams live. A step that ends in tool calls was narration,
+  // which stays in the model's context: `reset` clears it from the bubble.
+  const emitToken = (delta: string, reset?: true): void => {
+    if (!peerInput) run.emit({ type: "token", turnID, threadID, delta, ...(reset ? { reset } : {}) });
   };
   const publish = (text: string, uiHint: "normal" | "progress" = "normal"): void => {
     if (text.trim().length === 0) return;
@@ -555,11 +552,10 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
         ...(tokenLimit === null ? {} : { maxTokens: Math.min(2_048, tokenLimit - tokenCount) }),
         onDelta: (delta: string) => {
           activeStepText += delta;
-          // Hold channel turns until the step is known to be the answer: a
-          // step that calls tools is narration, not something to show.
-          if (!channelBacked) emitToken(delta);
+          emitToken(delta);
         },
       });
+      const streamedText = activeStepText;
       activeStepText = "";
       // Counted for the record (the debugger shows it), not enforced.
       tokenCount += result.outputTokens ?? estimateTokens(result.text + JSON.stringify(result.toolCalls ?? []));
@@ -575,15 +571,11 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
         answerText = result.text;
         messages.push(assistantMessage(result.text, result.reasoning));
         consecutiveNonTextSteps = 0;
-        // The buffered answer arrives as one token so the client fills the
-        // bubble it already owns, then the durable message seals it.
-        if (channelBacked && result.text.length > 0) {
-          emitToken(result.text);
-        }
         publish(result.text);
         break;
       }
 
+      if (streamedText) emitToken("", true);
       messages.push({ role: "assistant", content: result.text, toolCalls: result.toolCalls, ...(result.reasoning ? { reasoning: result.reasoning } : {}), ...(result.responseItems ? { responseItems: result.responseItems } : {}) });
       // The narration that introduced these tools is not a message. The model
       // keeps it, the owner sees the tools' activity and the `say` updates.
@@ -687,7 +679,6 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
         if (activeStepText) {
           answerText = activeStepText;
           messages.push({ role: "assistant", content: activeStepText });
-          if (channelBacked) emitToken(activeStepText);
           publish(activeStepText);
           activeStepText = "";
         }
@@ -700,7 +691,6 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
           // marked failed so the UI never presents an interrupted task as done.
           answerText = activeStepText;
           messages.push({ role: "assistant", content: activeStepText });
-          if (channelBacked) emitToken(activeStepText);
           publish(activeStepText);
         } else if (!answerText && stopReason === "error") {
           // A turn that failed with nothing to say still owes the user a trace:

@@ -722,6 +722,8 @@ public enum ServerFrame: Sendable, Equatable {
     public var turnID: String
     public var threadID: String
     public var delta: String
+    /// The text streamed for the current step was tool-call narration: clear it first.
+    public var reset: Bool?
   }
 
   public struct TurnStart: Sendable, Equatable, Decodable {

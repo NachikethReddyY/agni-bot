@@ -118,7 +118,7 @@ accountLabel?, error?, connectedAt?}`.
 | Frame | Payload | Notes |
 | --- | --- | --- |
 | `hello.ok` | `{v, serverTime, lastSeq}` | `lastSeq` = seq of this frame. |
-| `token` | `{turnID, threadID, delta}` | One streaming chunk. |
+| `token` | `{turnID, threadID, delta, reset?}` | One streaming chunk. `reset: true` means the text streamed for the current step was narration before a tool call; the client clears the bubble, then applies `delta` (usually empty). |
 | `turn.start` | `{turnID, threadID, agentID, conversationID?}` | Turn accepted; called before any `token`. |
 | `turn.end` | `{turnID, threadID, stopReason, usage?, conversationID?}` | `stopReason`: `end \| cancelled \| error \| timeout \| budget`; `usage`: `{provider, model, inputTokens?, outputTokens?, latencyMs?}` (latencyMs is server-measured model call time). |
 | `tool.start` | `{callID, name, preview?}` | Tool activity strip. |
@@ -161,12 +161,13 @@ open a fresh bubble for the next chunks. `uiHint: "progress"` rows (`say`) are
 separate messages and never seal the answer.
 
 In the task lane the narration a model writes *between* its tool calls stays in
-the model's own context: it is never published as a message and never streamed
-to clients. Only `say` progress rows and the final answer become messages. A
-turn that is backed by a channel (the web and Mac clients) buffers the answer's
-deltas and emits it as one `token` frame before the `msg.new` that seals it, so
-a channel client shows one bubble per answer; a direct client (the CLI) keeps
-live streaming.
+the model's own context: it is never published as a message. Only `say`
+progress rows and the final answer become messages. Every step streams live,
+because the server cannot know a step is narration until the step ends. When a
+step that streamed text turns out to call tools, the server sends one
+`token {delta: "", reset: true}` and the client clears that text from the
+bubble. A client that ignores `reset` still shows the right answer: the sealing
+`msg.new` replaces the bubble's text.
 
 ## Error codes (v2)
 
