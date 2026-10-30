@@ -11,6 +11,7 @@ import type { Database } from "bun:sqlite";
 import { openDatabase } from "../src/db";
 import type { Router } from "../src/models/router";
 import {
+  CARRY_SUMMARY_CHARS,
   parseStructuredSummary,
   renderSummary,
   ROLLOVER_HYSTERESIS_CHARS,
@@ -183,6 +184,18 @@ describe("the structured summary", () => {
     const rendered = renderSummary(summary);
     expect(rendered).toContain("Decided: Ship on Friday");
     expect(rendered).toContain("Still open: Write the notes");
+  });
+
+  test("goal and open loops survive a long list of decisions", () => {
+    const summary = parseStructuredSummary(JSON.stringify({
+      goal: "Launch the beta",
+      next_step: "Email the testers",
+      decisions: Array.from({ length: 20 }, (_, index) => `decision ${index} ${"d".repeat(300)}`),
+      open_loops: ["Pick a pricing tier"],
+    }));
+    const rendered = renderSummary(summary);
+    expect(rendered.startsWith("Goal: Launch the beta. Next: Email the testers. Still open: Pick a pricing tier")).toBe(true);
+    expect(rendered.length).toBeLessThanOrEqual(CARRY_SUMMARY_CHARS);
   });
 
   test("prose still becomes a summary", () => {

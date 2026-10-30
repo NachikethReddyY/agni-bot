@@ -28,6 +28,7 @@ import { registerCreateAgentTool } from "../tools/create-agent-tool";
 import { createUpdateAgentTool } from "../tools/update-agent-tool";
 import { recallFact } from "../tools/facts";
 import { retrieveFacts, rewriteForRetrieval, previousBlockTail } from "./retrieval";
+import type { MemoryHit } from "../stores/agent-memories";
 import { embedderConfig } from "./embeddings";
 import { registerExpandTool } from "../tools/expand-tool";
 import { buildDelegationPrefix } from "./prompts";
@@ -191,6 +192,16 @@ function openedTail(db: Database, threadID: string): string[] {
 }
 
 /**
+ * Recalled memories for the prompt: skip what the pinned facts already say,
+ * and tag each with its id and date so the model can `expand` it.
+ */
+export function recallLines(hits: MemoryHit[], pinnedIDs: Set<string>): string[] {
+  return hits
+    .filter((hit) => !pinnedIDs.has(hit.row.id))
+    .map((hit) => `[memory ${hit.row.id}, ${hit.row.updated_at.slice(0, 10)}] ${hit.row.content}`);
+}
+
+/**
  * Split a long answer for the channel: the first paragraph becomes a
  * progress bubble, the rest stays the answer. The words are the model's —
  * only the presentation changes.
@@ -327,7 +338,8 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // inherits the parent's state via run.guardrail. Facts ride in the prefix.
   let guardrail = run.guardrail ?? rootGuardrail(persona.id);
   // Sorted so an update to one fact does not reshuffle the cached prefix.
-  const facts = run.facts === false ? [] : recallFact(db, { limit: 6, callerAgentID: persona.id }).facts.map((row) => row.fact).sort();
+  const factRows = run.facts === false ? [] : recallFact(db, { limit: 6, callerAgentID: persona.id }).facts;
+  const facts = factRows.map((row) => row.fact).sort();
   const channelSummary = run.channelID ? getChannelSummary(db, run.channelID)?.summary : null;
   // ASM-002: a short, always-present note of the current topic. It holds the
   // latest question, so the compiler places it after the per-block slots.
@@ -350,8 +362,10 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     minScore: settings.minRecallScore,
     embedder: embedderConfig(),
   });
-  const recall: string[] = retrieved ? retrieved.hits.map((hit) => hit.row.content) : [];
-  if (!retrieved || retrieved.belowThreshold) {
+  const recall = recallLines(retrieved?.hits ?? [], new Set(factRows.map((row) => row.id)));
+  const previousTail = openedTail(db, threadID);
+  // A block that opened with the old tail already carries those turns.
+  if ((!retrieved || retrieved.belowThreshold) && previousTail.length === 0) {
     recall.push(...previousBlockTail(db, { conversationID: run.conversationID ?? null, threadID }));
   }
   const delegationPrefix = buildDelegationPrefix({
@@ -369,7 +383,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     // ROL-006: the new block opens with the last turns of the old one, so
     // the boundary does not lose the stretch the summary has not caught up
     // with.
-    previousTail: openedTail(db, threadID),
+    previousTail,
     // CMP-001: the day and epoch summaries, when this conversation has them.
     rollups: run.conversationID
       ? listSummaries(db, { conversationID: run.conversationID, level: "day", limit: 3 }).map((summary) => summary.text)
@@ -878,7 +892,7 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
         return domainAllowed((item as { url: string }).url, allowedDomains);
       }) };
     }
-    const content = truncate(JSON.stringify(safeResult), MAX_TOOL_RESULT_CHARS);
+    const content = fitToolResult(safeResult);
     storeResult(content, true, null);
     emit({ type: "tool.end", callID: call.id, ok: true, preview: toolPreview(result) });
     return { content, awaiting: false };
@@ -962,6 +976,33 @@ export function compact(messages: ChatMessage[], previousSummary: string | null)
   }
   return { messages: normalized, summary };
 }
+/**
+ * A tool result that fits the prompt and is still valid JSON: long strings
+ * and arrays are cut step by step, and the result is marked truncated.
+ */
+export function fitToolResult(value: unknown, max = MAX_TOOL_RESULT_CHARS): string {
+  const full = JSON.stringify(value) ?? "null";
+  if (full.length <= max) return full;
+  for (const [items, chars] of [[20, 1_000], [10, 400], [5, 200], [3, 80]] as const) {
+    const text = JSON.stringify({ truncated: true, result: shrinkValue(value, items, chars) });
+    if (text.length <= max) return text;
+  }
+  // shortcut: very wide or deep objects can still overflow; they fall back to a plain cut.
+  return truncate(full, max);
+}
+
+function shrinkValue(value: unknown, items: number, chars: number): unknown {
+  if (typeof value === "string") return value.length > chars ? `${value.slice(0, chars)}…` : value;
+  if (Array.isArray(value)) {
+    const kept = value.slice(0, items).map((item) => shrinkValue(item, items, chars));
+    return value.length > items ? [...kept, `…${value.length - items} more`] : kept;
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, shrinkValue(item, items, chars)]));
+  }
+  return value;
+}
+
 function estimateTokens(text: string): number { return Math.ceil(text.length / 4); }
 function truncate(text: string, max: number): string { return text.length > max ? `${text.slice(0, max - 1)}…` : text; }
 

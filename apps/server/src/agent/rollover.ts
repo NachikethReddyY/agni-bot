@@ -56,7 +56,7 @@ export const ROLLOVER_MIN_TURNS = 3;
 export const ROLLOVER_IDLE_MS = 30 * 60_000;
 
 /** Hard cap on the carried summary the next block opens with. */
-export const CARRY_SUMMARY_CHARS = 900;
+export const CARRY_SUMMARY_CHARS = 1_500;
 
 /** How many turns of the old block the new one opens with (ROL-006). */
 export const OPENED_TAIL_TURNS = 6;
@@ -66,6 +66,9 @@ export const OPENED_TAIL_TURNS = 6;
  * shape, and the text version is rendered from it.
  */
 export const StructuredSummarySchema = z.object({
+  goal: z.string().max(300).default(""),
+  next_step: z.string().max(300).default(""),
+  constraints: z.array(z.string().max(300)).max(10).default([]),
   decisions: z.array(z.string().max(400)).max(20).default([]),
   open_loops: z.array(z.string().max(400)).max(20).default([]),
   entities: z.array(z.string().max(120)).max(30).default([]),
@@ -76,8 +79,10 @@ export type StructuredSummary = z.infer<typeof StructuredSummarySchema>;
 
 const SUMMARY_SYSTEM_PROMPT = [
   "You compress a chat session for continuity. Answer with strict JSON:",
-  '{"decisions":[],"open_loops":[],"entities":[],"tone":"","source_turn_range":{"from":0,"to":0}}',
-  "decisions: what was decided. open_loops: what is still owed. entities: people, projects, files.",
+  '{"goal":"","next_step":"","constraints":[],"decisions":[],"open_loops":[],"entities":[],"tone":"","source_turn_range":{"from":0,"to":0}}',
+  "goal: what the owner is trying to get done. next_step: what should happen next.",
+  "constraints: limits and preferences that must be kept. decisions: what was decided.",
+  "open_loops: what is still owed. entities: people, projects, files, ids.",
   "tone: one short phrase. source_turn_range: the turn numbers you were given.",
   "Nothing else — no preamble, no prose outside the JSON.",
 ].join(" ");
@@ -331,6 +336,9 @@ export async function summarizeBlock(
 /** Parse the model's answer into the structured shape. */
 export function parseStructuredSummary(text: string): StructuredSummary {
   const fallback: StructuredSummary = {
+    goal: "",
+    next_step: "",
+    constraints: [],
     decisions: [],
     open_loops: [],
     entities: [],
@@ -350,13 +358,22 @@ export function parseStructuredSummary(text: string): StructuredSummary {
 
 /** The text version of a structured summary — what the prompt carries. */
 export function renderSummary(summary: StructuredSummary): string {
-  const parts: string[] = [];
-  if (summary.decisions.length > 0) parts.push(`Decided: ${summary.decisions.join("; ")}`);
-  if (summary.open_loops.length > 0) parts.push(`Still open: ${summary.open_loops.join("; ")}`);
-  if (summary.entities.length > 0) parts.push(`Mentioned: ${summary.entities.join(", ")}`);
-  if (summary.tone) parts.push(`Tone: ${summary.tone}`);
-  return parts.join(". ");
+  // Most actionable first, and each field capped, so a long list of
+  // decisions cannot push the goal or the open loops past the carry clamp.
+  const parts = [
+    summary.goal && `Goal: ${summary.goal}`,
+    summary.next_step && `Next: ${summary.next_step}`,
+    summary.open_loops.length > 0 && `Still open: ${summary.open_loops.join("; ")}`,
+    summary.constraints.length > 0 && `Constraints: ${summary.constraints.join("; ")}`,
+    summary.decisions.length > 0 && `Decided: ${summary.decisions.join("; ")}`,
+    summary.entities.length > 0 && `Mentioned: ${summary.entities.join(", ")}`,
+    summary.tone && `Tone: ${summary.tone}`,
+  ].filter((part): part is string => Boolean(part));
+  return parts.map((part) => (part.length > RENDER_FIELD_CHARS ? `${part.slice(0, RENDER_FIELD_CHARS)}…` : part)).join(". ");
 }
+
+/** Per-field cap in the rendered carry (TUNABLE). */
+const RENDER_FIELD_CHARS = 400;
 
 /** Carry is a seam, not storage: keep it short, no matter what the model said. */
 function clampCarry(text: string): string | null {
