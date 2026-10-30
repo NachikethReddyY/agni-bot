@@ -549,6 +549,7 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
         firstTokenTimeoutMs: settings.firstTokenTimeoutMs,
         tools,
         toolChoice: tools.length ? "auto" : "none",
+        preferredModel: persona.model,
         ...(tokenLimit === null ? {} : { maxTokens: Math.min(2_048, tokenLimit - tokenCount) }),
         onDelta: (delta: string) => {
           activeStepText += delta;

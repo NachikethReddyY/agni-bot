@@ -551,6 +551,12 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
     agentId: z.string().min(1),
     role: z.string().max(160).optional(),
     visibility: z.enum(["private", "summary", "shared"]).optional(),
+    /**
+     * The bot's own model: `provider`, `provider:model`, or a model id. The
+     * router tries it first and falls back to the normal list. Null or ""
+     * clears it.
+     */
+    model: z.string().max(200).nullable().optional(),
   }),
   /**
    * Create an agent from the app — the "+" in the roster. The same creation
