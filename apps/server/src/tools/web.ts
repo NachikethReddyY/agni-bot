@@ -4,7 +4,7 @@
  * web_fetch reuses fetchPage with SSRF protections; Firecrawl is used for
  * JS-rendered pages when configured.
  */
-import { fetchPage } from "./fetch-url";
+import { assertPublicHost, fetchPage } from "./fetch-url";
 
 const SEARXNG_URL = process.env.AGNI_SEARXNG_URL?.trim();
 const FIRECRAWL_KEY = process.env.AGNI_FIRECRAWL_API_KEY?.trim();
@@ -142,6 +142,12 @@ export async function webFetch(args: WebFetchArgs, allowedHost?: (url: URL) => b
   // Firecrawl follows redirects on its side, out of reach of allowedHost, so a
   // host-restricted (routine) fetch always goes through fetchPage.
   const base = allowedHost ? null : firecrawlBase();
+  // Same checks as fetchPage, before the URL leaves for a third party.
+  const target = new URL(args.url);
+  if (target.protocol !== "https:" && target.protocol !== "http:") throw new Error("unsupported URL scheme");
+  if (target.username || target.password) throw new Error("URLs with credentials are blocked");
+  if (allowedHost && !allowedHost(target)) throw new Error("host outside the allowlist");
+  if (base) await assertPublicHost(target.hostname);
   if (base) {
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -175,7 +181,7 @@ export async function webFetch(args: WebFetchArgs, allowedHost?: (url: URL) => b
 }
 
 /** Deep research: search + fetch top results, return compiled findings. */
-export async function deepResearch(args: { query: string; depth?: number }): Promise<{
+export async function deepResearch(args: { query: string; depth?: number }, allowedHost?: (url: URL) => boolean): Promise<{
   query: string;
   findings: { title: string; url: string; snippet: string; content: string | null }[];
   provider: string;
@@ -187,7 +193,7 @@ export async function deepResearch(args: { query: string; depth?: number }): Pro
   const topResults = searchResult.results.slice(0, depth);
   const fetches = await Promise.allSettled(
     topResults.map(async (r) => {
-      const page = await webFetch({ url: r.url, maxChars: 2000 });
+      const page = await webFetch({ url: r.url, maxChars: 2000 }, allowedHost);
       return { title: r.title, url: r.url, snippet: r.snippet, content: page.summary };
     }),
   );

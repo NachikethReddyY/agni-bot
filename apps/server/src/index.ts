@@ -69,8 +69,10 @@ async function serve(): Promise<void> {
   if (restored > 0) log.info(`agents: restored ${restored} agent(s) created at runtime`);
   const router = new Router(config.providers, new HealthTracker(), fetch, config.maxConcurrentTurns);
 
-  const requeued = requeueStuckJobs(db);
-  if (requeued > 0) log.warn(`job queue: requeued ${requeued} job(s) a previous process left running`);
+  // A detached promise or callback that throws is a bug to log, not a reason
+  // to drop every open connection and running turn.
+  process.on("unhandledRejection", (reason) => log.error("unhandled rejection", reason));
+  process.on("uncaughtException", (error) => log.error("uncaught exception", error));
 
   let running: RunningServer;
   try {
@@ -82,6 +84,10 @@ async function serve(): Promise<void> {
     }
     throw error;
   }
+  // Only after the port is ours: a second `serve` that hit EADDRINUSE must
+  // not re-queue the live daemon's running jobs.
+  const requeued = requeueStuckJobs(db);
+  if (requeued > 0) log.warn(`job queue: requeued ${requeued} job(s) a previous process left running`);
 
   const settings = {
     firstTokenTimeoutMs: config.firstTokenTimeoutMs,

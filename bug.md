@@ -13,6 +13,21 @@ code · ❓ = suspected, not proven.
 
 ---
 
+## Fix status (2026-10-30, branch `claude/security-audit-bugs-fd1e57`)
+
+Fixed, with tests: **C1–C6**, fix-first list 1–10, H1, H3, H4, H5, H6, H7,
+H9, H10, H11, H13–H19, H21, H24–H29, H31, H33, M5, M7, M13, M19, M23, M30,
+M39; Low: `job_list`/`job_cancel` ownership, SMTP waits for `354`.
+
+Partial: H2 (redirect hops re-checked; Bun `fetch` can't pin the IP —
+`shortcut:` comment in `fetch-url.ts`), H8 (`run_privileged` now always
+needs an approval card; the macOS dialog text is unchanged).
+
+Open: H12 (owner decision), H20, H22, H23, H30, H32, H34–H37, the rest of
+Medium/Low, and sections 5–6.
+
+---
+
 ## The verdict, bluntly
 
 1. **The safety model is a prompt, not a boundary.** `read_file` has no

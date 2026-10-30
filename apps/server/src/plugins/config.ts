@@ -4,7 +4,8 @@
  * this file on startup, and the agent can manage its own plugins here in the
  * future (plugin.create / plugin.configure tools).
  *
- * File location: data/plugins.json (gitignored, server-side only).
+ * File location: ~/.agni/plugins.json by default (`AGNI_PLUGINS_PATH`;
+ * server-side only, mode 600).
  *
  * Schema:
  * {
@@ -24,8 +25,12 @@
  *   oauth:         { kind, refresh_token?, access_token?, expires_at? }
  *   mcp:           { kind }                     // browser OAuth, no stored creds
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
+import { log } from "../log";
+
+/** Configs loaded from an unreadable file: saving one would wipe the stored credentials. */
+const unreadable = new WeakSet<PluginsFile>();
 
 export interface PluginAuth {
   kind: "app-password" | "api-key" | "oauth" | "mcp";
@@ -71,16 +76,35 @@ export function loadPluginsFile(path: string): PluginsFile {
   if (!existsSync(path)) return emptyPluginsFile();
   try {
     const parsed = JSON.parse(readFileSync(path, "utf-8")) as PluginsFile;
-    if (parsed.version !== 1 || typeof parsed.plugins !== "object") return emptyPluginsFile();
-    return parsed;
+    if (parsed.version === 1 && parsed.plugins && typeof parsed.plugins === "object") return parsed;
   } catch {
-    return emptyPluginsFile();
+    // fall through: treat as unreadable below
   }
+  // Run with no plugins, but never save over the file: it may hold the only copy of the tokens.
+  try { copyFileSync(path, `${path}.corrupt`); chmodSync(`${path}.corrupt`, 0o600); } catch { /* best effort */ }
+  log.error(`plugins file ${path} is unreadable; kept a copy at ${path}.corrupt and will not overwrite it`);
+  const empty = emptyPluginsFile();
+  unreadable.add(empty);
+  return empty;
 }
 
 export function savePluginsFile(path: string, config: PluginsFile): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  if (unreadable.has(config)) {
+    throw new Error(`refusing to overwrite unreadable ${path}; fix or remove it and restart`);
+  }
+  const dir = dirname(path);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // Write a private temp file, flush it, then rename: a crash leaves the old file or the new one, never half.
+  const tmp = `${path}.${process.pid}.tmp`;
+  const fd = openSync(tmp, "w", 0o600);
+  try {
+    writeSync(fd, `${JSON.stringify(config, null, 2)}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  chmodSync(tmp, 0o600); // a stale tmp from a crash keeps its old mode on open
+  renameSync(tmp, path);
 }
 
 export function getPluginEntry(config: PluginsFile, pluginID: string): PluginEntry | undefined {

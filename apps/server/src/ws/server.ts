@@ -17,7 +17,7 @@ import { PluginService } from "../plugins/service";
 import type { Router, ProviderStatus } from "../models/router";
 import { dayTotals, type DayTotals } from "../stores/usage";
 import { readShareFile } from "../share/document";
-import { dispatch, newSession, type Session } from "./dispatch";
+import { dispatch, errorFrame, newSession, type Session } from "./dispatch";
 import { FrameLog } from "./frame-log";
 import { dirname, resolve } from "node:path";
 import { ChatGPTAuth } from "../models/chatgpt-auth";
@@ -131,6 +131,13 @@ export function startServer(config: Config, db: Database, router: Router, starte
         });
       }
       if (url.pathname === "/ws") {
+        // Browsers always send Origin; native clients (Mac, CLI) send none.
+        // Refusing foreign origins stops any web page (or a DNS-rebound
+        // name) in the owner's browser from driving the socket.
+        const origin = request.headers.get("origin");
+        if (origin !== null && !allowedOrigin(origin, config.host)) {
+          return new Response("forbidden origin", { status: 403 });
+        }
         if (srv.upgrade(request, { data: newSession() })) return undefined;
         return new Response("websocket upgrade failed", { status: 400 });
       }
@@ -148,26 +155,32 @@ export function startServer(config: Config, db: Database, router: Router, starte
       async message(socket, message) {
         if (typeof message !== "string") return;
         const session = socket.data;
-        await dispatch(
-          {
-            config,
-            db,
-            router,
-            frameLog,
-            emit,
-            plugins,
-            chatgpt,
-            reply: (body) => {
-              const frame = frameLog.next(body, { replay: false });
-              socket.send(encodeFrame(frame));
-              return frame;
+        try {
+          await dispatch(
+            {
+              config,
+              db,
+              router,
+              frameLog,
+              emit,
+              plugins,
+              chatgpt,
+              reply: (body) => {
+                const frame = frameLog.next(body, { replay: false });
+                socket.send(encodeFrame(frame));
+                return frame;
+              },
+              send: (frame) => socket.send(encodeFrame(frame)),
+              close: (code, reason) => socket.close(code, reason),
             },
-            send: (frame) => socket.send(encodeFrame(frame)),
-            close: (code, reason) => socket.close(code, reason),
-          },
-          session,
-          message,
-        );
+            session,
+            message,
+          );
+        } catch (error) {
+          // A throwing handler answers its own connection; it never takes the daemon down.
+          log.error(`frame handler failed on ${session.id}`, error);
+          socket.send(encodeFrame(errorFrame(frameLog, "internal", error instanceof Error ? error.message : String(error))));
+        }
       },
       close(socket) {
         const session = socket.data;
@@ -191,6 +204,20 @@ export function startServer(config: Config, db: Database, router: Router, starte
       frameLog.flush();
     },
   };
+}
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** Loopback pages (the Vite web client) and pages served from the daemon's own bound host. */
+export function allowedOrigin(origin: string, host: string): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(origin).hostname;
+  } catch {
+    return false;
+  }
+  const bound = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return LOOPBACK_HOSTS.has(hostname) || hostname === bound;
 }
 
 /**

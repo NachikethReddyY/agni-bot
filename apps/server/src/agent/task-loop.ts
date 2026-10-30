@@ -240,10 +240,8 @@ async function waitForThreadIdle(threadID: string, timeoutMs = 2_000): Promise<v
 const MEMORY_WRITE_TOOLS = new Set(["remember_fact", "memory_write", "forget_fact"]);
 
 export async function runTaskTurn(db: Database, router: Router, settings: TaskTurnSettings, run: TaskTurnRun): Promise<TaskTurnResult> {
-  const { threadID, persona } = run;
-  const now = nowISO();
-  const existing = db.query("SELECT turn_id, state, message_log, summary, step_count, token_count FROM agent_sessions WHERE thread_id = ?").get(threadID) as { turn_id: string; state: string; message_log: string; summary: string | null; step_count: number; token_count: number } | null;
-  if ((existing?.state === "running" || existing?.state === "awaiting_approval") && activeThreads.has(threadID)) {
+  const { threadID } = run;
+  if (activeThreads.has(threadID)) {
     // The owner interrupted: the running turn stops and this one takes
     // over. Waiting for the old turn to unwind keeps the two from writing
     // into the same block at the same time.
@@ -253,6 +251,19 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
       throw new Error("a task turn is already active or awaiting approval for this thread");
     }
   }
+  // H19: claim the thread before any await so a second caller cannot slip in.
+  activeThreads.add(threadID);
+  try {
+    return await runTaskTurnLocked(db, router, settings, run);
+  } finally {
+    activeThreads.delete(threadID);
+  }
+}
+
+async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTurnSettings, run: TaskTurnRun): Promise<TaskTurnResult> {
+  const { threadID, persona } = run;
+  const now = nowISO();
+  const existing = db.query("SELECT turn_id, state, message_log, summary, step_count, token_count FROM agent_sessions WHERE thread_id = ?").get(threadID) as { turn_id: string; state: string; message_log: string; summary: string | null; step_count: number; token_count: number } | null;
   // A session parked on a question is resumed, not restarted: the answer
   // continues the same conversation.
   const recovering =
@@ -397,7 +408,6 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   );
 
   const controller = new AbortController();
-  activeThreads.add(threadID);
   runningTurns.set(threadID, { turnID, controller });
   // The handoff tool needs the live emit/signal/guardrail; register it per
   // turn so it can spawn a delegated child in the same thread. It is added
@@ -687,7 +697,6 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   } finally {
     clearTimeout(timer);
     run.signal.removeEventListener("abort", abort);
-    activeThreads.delete(threadID);
     if (runningTurns.get(threadID)?.turnID === turnID) runningTurns.delete(threadID);
   }
 
@@ -951,7 +960,7 @@ function compact(messages: ChatMessage[], previousSummary: string | null): { mes
   const firstUser = normalized.findIndex((message, index) => index >= keepFrom && message.role === "user");
   const cut = firstUser >= 0 ? firstUser : keepFrom;
   const dropped = normalized.slice(0, cut).filter((message) => message.role === "user" || message.role === "assistant").map((message) => `${message.role}: ${message.content}`).join("\n");
-  const summary = truncate([previousSummary, dropped].filter(Boolean).join("\n"), 8_000);
+  const summary = truncateTail([previousSummary, dropped].filter(Boolean).join("\n"), 8_000);
   normalized = normalized.slice(cut);
   while (size() > MAX_PROMPT_CHARS && normalized.length > 1) {
     const nextUser = normalized.findIndex((message, index) => index > 0 && message.role === "user");
@@ -961,6 +970,8 @@ function compact(messages: ChatMessage[], previousSummary: string | null): { mes
   return { messages: normalized, summary };
 }
 function estimateTokens(text: string): number { return Math.ceil(text.length / 4); }
+/** Keep the newest end: summaries grow by appending. */
+function truncateTail(text: string, max: number): string { return text.length > max ? `…${text.slice(text.length - max + 1)}` : text; }
 function truncate(text: string, max: number): string { return text.length > max ? `${text.slice(0, max - 1)}…` : text; }
 
 /** Short human preview for a tool.start frame. */

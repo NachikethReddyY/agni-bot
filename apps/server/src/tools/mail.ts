@@ -5,7 +5,7 @@
  */
 import type { Database } from "bun:sqlite";
 import type { ToolDefinition } from "./registry";
-import { ImapClient, type ImapMessage } from "../mail/imap";
+import { ImapClient, imapQuote, type ImapMessage } from "../mail/imap";
 import { sendEmail } from "../mail/smtp";
 import { getConnectionFor } from "../plugins/store";
 import type { MailAccountResolver } from "../plugins/credentials";
@@ -75,7 +75,8 @@ export function createMailTools(db: Database, accounts?: MailAccountResolver): T
     },
     timeoutMs: 15_000,
     handler: async (args: any) => {
-      const account = (args.account || "agent") as "agent" | "owner";
+      const account = parseAccount(args.account);
+      if (account === null) return { error: 'account must be exactly "agent" or "owner"' };
       const cfg = configFor(account);
       if (!cfg) return { error: mailNotConnected(account) };
       const client = new ImapClient();
@@ -120,7 +121,8 @@ export function createMailTools(db: Database, accounts?: MailAccountResolver): T
     },
     timeoutMs: 15_000,
     handler: async (args: any) => {
-      const account = (args.account || "agent") as "agent" | "owner";
+      const account = parseAccount(args.account);
+      if (account === null) return { error: 'account must be exactly "agent" or "owner"' };
       const cfg = configFor(account);
       if (!cfg) return { error: mailNotConnected(account) };
       const client = new ImapClient();
@@ -163,7 +165,8 @@ export function createMailTools(db: Database, accounts?: MailAccountResolver): T
     },
     timeoutMs: 15_000,
     handler: async (args: any) => {
-      const account = (args.account || "agent") as "agent" | "owner";
+      const account = parseAccount(args.account);
+      if (account === null) return { error: 'account must be exactly "agent" or "owner"' };
       const cfg = configFor(account);
       if (!cfg) return { error: mailNotConnected(account) };
       const result = await sendEmail(
@@ -178,13 +181,19 @@ export function createMailTools(db: Database, accounts?: MailAccountResolver): T
   return tools;
 }
 
-function buildSearchCriteria(query: string): string {
+export function parseAccount(v: unknown): "agent" | "owner" | null {
+  if (v === undefined || v === null) return "agent";
+  const t = typeof v === "string" ? v.trim() : "";
+  return t === "agent" || t === "owner" ? t : null;
+}
+
+export function buildSearchCriteria(query: string): string {
   // If the query looks like Gmail search syntax, pass through as IMAP TEXT search
   // Gmail IMAP supports X-GM-RAW for Gmail search syntax
   if (query.includes(":") || query.includes("is:") || query.includes("from:") || query.includes("subject:")) {
-    return `X-GM-RAW "${query.replace(/"/g, '\\"')}"`;
+    return `X-GM-RAW ${imapQuote(query)}`;
   }
-  return `TEXT "${query.replace(/"/g, '\\"')}"`;
+  return `TEXT ${imapQuote(query)}`;
 }
 
 function parseObject(args: unknown, fn: (v: any) => any): any {

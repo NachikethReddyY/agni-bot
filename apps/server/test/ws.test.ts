@@ -223,6 +223,9 @@ describe("websocket end-to-end", () => {
     client!.send({ type: "msg.send", channelId: "main", text: "run the privileged command" });
     await client!.next("msg.new", { match: (frame) => frame.fromType === "user" });
 
+    // run_privileged is not a known-free tool, so the owner approves it first.
+    const approval = await client!.next("approval.request", { timeoutMs: 5000 });
+    client!.send({ type: "approve.reply", requestID: approval.requestID, decision: "once" });
     const secretRequest = await client!.next("secret.request", { timeoutMs: 5000 });
     expect(secretRequest).toMatchObject({
       purpose: "prove the secret stays out",

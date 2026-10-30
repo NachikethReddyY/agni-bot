@@ -274,7 +274,8 @@ export async function rotate(deps: RolloverDeps, agentOrConversation: string | C
   const active = activeSession(db, conversation);
   if (active) {
     // The owner asked for this boundary, so the summary is worth the wait.
-    const summary = await summarizeBlock(deps, conversation, active);
+    // A failure here carries the previous summary forward: the owner's /new must not break.
+    const summary = await summarizeBlock(deps, conversation, active).catch(() => null);
     if (summary) updateSummary(db, conversation.id, summary.text);
   }
   return rotateNow(deps, conversation, reason);
@@ -294,10 +295,9 @@ export async function summarizeBlock(
   const previous = conversation.summary ?? "";
   const messages = recentMessages(db, block.id, 40);
   if (messages.length === 0) return null;
-  const transcript = messages
-    .map((message, index) => `${index}: ${message.role}: ${message.text}`)
-    .join("\n")
-    .slice(0, 12_000);
+  const full = messages.map((message, index) => `${index}: ${message.role}: ${message.text}`).join("\n");
+  // H29: keep the start and the end of the block, not just the oldest 12k.
+  const transcript = full.length > 12_000 ? `${full.slice(0, 4_000)}\n[... middle omitted ...]\n${full.slice(-8_000)}` : full;
   try {
     const result = await deps.router.route({
       messages: [
@@ -323,8 +323,9 @@ export async function summarizeBlock(
     if (!text) throw new RouterError("provider_failed", "empty summary");
     return { text, structured };
   } catch (error) {
-    log.warn(`carry summary failed; previous summary rides forward: ${error instanceof Error ? error.message : String(error)}`);
-    return null;
+    // H28: let the job runner retry; callers that can live without it catch.
+    log.warn(`carry summary failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
   }
 }
 

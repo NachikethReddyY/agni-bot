@@ -121,6 +121,8 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
   if (!parsed.ok) return sendError(deps, session, "bad_frame", parsed.error);
 
   const frame = parsed.frame;
+  // One gate for every frame: only the handshake may arrive unauthenticated.
+  if (frame.type !== "hello" && !requireAuth(deps, session)) return;
   switch (frame.type) {
     case "hello":
       return handleHello(deps, session, frame);
@@ -143,7 +145,7 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
     case "conversation.open":
       return handleConversationOpen(deps, session, frame);
     case "session.new":
-      return void handleSessionNew(deps, session, frame);
+      return detach(deps, session, "session.new", handleSessionNew(deps, session, frame));
     case "conversation.history":
       return handleConversationHistory(deps, session, frame);
     case "thread.open":
@@ -177,7 +179,7 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
     case "task.answer":
       return handleTaskAnswer(deps, session, frame);
     case "bind.direct":
-      return void handleBindDirect(deps, session, frame);
+      return detach(deps, session, "bind.direct", handleBindDirect(deps, session, frame));
     case "provider.add":
       return await handleProviderAdd(deps, session, frame);
     case "provider.model.set":
@@ -236,7 +238,7 @@ function handleHello(deps: DispatchDeps, session: Session, frame: Extract<Client
     deps.close(4002, "version mismatch");
     return;
   }
-  void verifyToken(deps.db, frame.token).then((device) => {
+  detach(deps, session, "hello", verifyToken(deps.db, frame.token).then((device) => {
     if (!device) {
       sendError(deps, session, "unauthorized", "unknown or revoked token — pair a device first");
       deps.close(4003, "unauthorized");
@@ -274,7 +276,7 @@ function handleHello(deps: DispatchDeps, session: Session, frame: Extract<Client
       });
     }
     emitOnboardingIfNeeded(deps);
-  });
+  }));
 }
 
 function handleResync(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "resync" }>): void {
@@ -291,12 +293,15 @@ interface PendingMessageBatch {
   texts: string[];
   frame: Extract<ClientFrame, { type: "msg.send" }>;
   session: Session;
+  /** The latest frame's deps: flushing replies on the connection that sent last. */
+  deps: DispatchDeps;
   firstAt: number;
   typing: boolean;
   timer: ReturnType<typeof setTimeout>;
 }
 
-const messageBatches = new WeakMap<DispatchDeps, Map<string, PendingMessageBatch>>();
+/** Keyed by the database, like `threadQueues`: `DispatchDeps` is rebuilt per frame. */
+const messageBatches = new WeakMap<Database, Map<string, PendingMessageBatch>>();
 
 function batchKey(frame: Extract<ClientFrame, { type: "msg.send" }>, session: Session): string {
   return `${frame.channelId ?? frame.conversationID ?? frame.threadID ?? session.agentID}:${frame.toAgentId ?? session.agentID}`;
@@ -386,7 +391,7 @@ function dispatchUserMessage(
     });
     return;
   }
-  void runUserMessage(deps, session, frame, text);
+  detach(deps, session, "msg.send", runUserMessage(deps, session, frame, text));
 }
 
 /** After a turn ends, start the next message waiting on that thread. */
@@ -457,14 +462,15 @@ function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<Clie
     dispatchUserMessage(deps, session, frame, combined);
     return;
   }
-  const batches = messageBatches.get(deps) ?? new Map<string, PendingMessageBatch>();
-  messageBatches.set(deps, batches);
+  const batches = messageBatches.get(deps.db) ?? new Map<string, PendingMessageBatch>();
+  messageBatches.set(deps.db, batches);
   const key = batchKey(frame, session);
   const existing = batches.get(key);
   if (existing) {
     existing.texts.push(...parts);
     existing.frame = frame;
     existing.session = session;
+    existing.deps = deps;
     clearTimeout(existing.timer);
     existing.timer = setTimeout(() => flushMessageBatch(deps, key), 800);
     return;
@@ -474,6 +480,7 @@ function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<Clie
     texts: [...parts],
     frame,
     session,
+    deps,
     firstAt: Date.now(),
     typing: false,
     timer: setTimeout(() => flushMessageBatch(deps, key), 800),
@@ -490,7 +497,7 @@ function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<Clie
 
 function handleUserTyping(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "user.typing" }>): void {
   if (!requireAuth(deps, session)) return;
-  const batches = messageBatches.get(deps);
+  const batches = messageBatches.get(deps.db);
   if (!batches) return;
   const prefix = `${frame.channelId ?? session.agentID}:`;
   for (const [key, batch] of batches) {
@@ -504,7 +511,7 @@ function handleUserTyping(deps: DispatchDeps, session: Session, frame: Extract<C
 }
 
 function flushMessageBatch(deps: DispatchDeps, key: string): void {
-  const batches = messageBatches.get(deps);
+  const batches = messageBatches.get(deps.db);
   const batch = batches?.get(key);
   if (!batches || !batch) return;
   const elapsed = Date.now() - batch.firstAt;
@@ -513,7 +520,7 @@ function flushMessageBatch(deps: DispatchDeps, key: string): void {
     return;
   }
   batches.delete(key);
-  dispatchUserMessage(deps, batch.session, batch.frame, batch.texts.join("\n\n"));
+  dispatchUserMessage(batch.deps, batch.session, batch.frame, batch.texts.join("\n\n"));
 }
 
 async function runUserMessage(
@@ -633,7 +640,7 @@ async function runUserMessage(
     });
   }
   if (!attachments.length && (isCapture(routedText) || isStoreQuery(routedText))) {
-    void captureMessage(deps, session, thread, persona.id, routedText);
+    detach(deps, session, "capture", captureMessage(deps, session, thread, persona.id, routedText));
     return;
   }
   const turnID = newID("trn");
@@ -1539,9 +1546,27 @@ function requireAuth(deps: DispatchDeps, session: Session): boolean {
   return false;
 }
 
+/**
+ * Errors answer only the connection that caused them, and take no seq or ring
+ * slot: they reuse the current seq, which every authed socket has already
+ * received, so a client's lastSeq never skips a frame it has not seen.
+ */
 function sendError(deps: DispatchDeps, _session: Session, code: string, message: string): void {
-  deps.emit({ type: "error", code, message });
+  deps.send(errorFrame(deps.frameLog, code, message));
   log.debug(`error frame → ${code}: ${message}`);
+}
+
+export function errorFrame(frameLog: FrameLog, code: string, message: string): ServerFrame {
+  // shortcut: seq 1 before any frame exists, since the schema needs a positive seq.
+  return { type: "error", code, message, seq: Math.max(1, frameLog.seq) };
+}
+
+/** Run a promise off the frame's path; a failure is logged and answered, never fatal. */
+function detach(deps: DispatchDeps, session: Session, label: string, work: Promise<unknown>): void {
+  work.catch((error: unknown) => {
+    log.error(`${label} failed`, error);
+    sendError(deps, session, "internal", error instanceof Error ? error.message : String(error));
+  });
 }
 
 
