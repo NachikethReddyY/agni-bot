@@ -104,7 +104,9 @@ class TestClient {
     });
     const client = new TestClient(ws);
     client.send({ type: "hello", v: PROTOCOL_VERSION, token, device });
-    await client.next("hello.ok");
+    const hello = await client.next("hello.ok");
+    // Real clients resync right after hello; without it the server holds live frames for 1s.
+    client.send({ type: "resync", lastSeq: hello.lastSeq });
     await client.next("agents.update");
     return client;
   }
@@ -181,6 +183,7 @@ async function startTestServer(fetchMock?: typeof fetch): Promise<void> {
     frameLogCapacity: 100,
     jobPollMs: 1000,
     maxConcurrentTurns: 4,
+    messageBatchMs: 50,
     pluginsPath: "",
   };
   server = startServer(config, db, router);
