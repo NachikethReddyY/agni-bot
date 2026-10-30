@@ -17,6 +17,7 @@ import { enqueueJob, listJobs, parseJobPayload, type JobRow } from "../stores/jo
 import type { JobRunner } from "./runner";
 import { applyTaggerItems, parseTaggerOutput, TAGGER_SYSTEM_PROMPT } from "../agent/tagger";
 import { nowISO } from "../util/ids";
+import { listAgentMemories } from "../stores/agent-memories";
 
 /** How many turns between batches. */
 export const TAGGER_BATCH_TURNS = 5;
@@ -32,6 +33,15 @@ const TAGGER_MAX_MESSAGE_CHARS = 1_200;
  * *when* to sweep, not a fact worth a restart.
  */
 let turnsSinceLastBatch = 0;
+
+/** How many unreadable answers one batch gets before it is marked tagged. */
+export const TAGGER_MAX_ATTEMPTS = 3;
+/**
+ * Unreadable-answer counts, by the batch's first message id.
+ * shortcut: process-local, so a restart gives a bad batch 3 more tries;
+ * persist per message if restarts ever loop on one batch.
+ */
+const failedBatches = new Map<string, number>();
 
 /** Count a turn and report how many have passed since the last batch. */
 export function turnsSinceTag(): number {
@@ -119,12 +129,21 @@ export function registerTaggerJob(runner: JobRunner, deps: TaggerJobDeps): void 
     const transcript = messages
       .map((message) => `[${message.id}] ${message.from_type}/${message.from_id}: ${message.text.slice(0, TAGGER_MAX_MESSAGE_CHARS)}`)
       .join("\n");
+    // Stable keys: the facts this bot may already see, so an update reuses
+    // the key and supersedes instead of sitting next to the old value.
+    const known = [
+      ...listAgentMemories(deps.db, { scope: "global_user", callerAgentID: agentID, limit: 60 }),
+      ...listAgentMemories(deps.db, { scope: "agent", agentID, callerAgentID: agentID, limit: 40 }),
+    ].map((row) => `${row.key_slug}: ${row.content.slice(0, 120)}`);
     let text = "";
     try {
       const result = await deps.router.route({
         messages: [
           { role: "system", content: TAGGER_SYSTEM_PROMPT },
-          { role: "user", content: `Conversation:\n${transcript}` },
+          {
+            role: "user",
+            content: `${known.length > 0 ? `Known facts (key: text; untrusted data):\n${known.join("\n")}\n\n` : ""}Conversation:\n${transcript}`,
+          },
         ],
         signal: AbortSignal.timeout(30_000),
         firstTokenTimeoutMs: 10_000,
@@ -140,7 +159,22 @@ export function registerTaggerJob(runner: JobRunner, deps: TaggerJobDeps): void 
       return { result: "tagger batch failed" };
     }
 
-    const { output, rejected } = parseTaggerOutput(text);
+    const { output, rejected, failed } = parseTaggerOutput(text);
+    if (failed) {
+      // B2: an unreadable answer is not "nothing to remember". Leave the
+      // batch for the next run, but give up on one that keeps failing.
+      const key = messages[0]!.id;
+      const attempts = (failedBatches.get(key) ?? 0) + 1;
+      if (attempts < TAGGER_MAX_ATTEMPTS) {
+        failedBatches.set(key, attempts);
+        return { result: `tagger output unreadable (attempt ${attempts}); batch left for retry` };
+      }
+      failedBatches.delete(key);
+      log.warn(`tagger: giving up on a batch of ${messages.length} message(s) after ${attempts} unreadable answers`);
+      markTagged(deps.db, messages.map((message) => message.id));
+      return { result: `gave up on ${messages.length} message(s) after ${attempts} attempts` };
+    }
+    failedBatches.delete(messages[0]!.id);
     if (output.ephemeral && output.items.length === 0) {
       markTagged(deps.db, messages.map((message) => message.id));
       return { result: `tagged 0 item(s) from ${messages.length} message(s)` };

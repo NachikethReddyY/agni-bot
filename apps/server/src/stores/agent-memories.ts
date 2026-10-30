@@ -1,8 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { newID, nowISO } from "../util/ids";
-import { cosineSimilarity, packVector, unpackVector } from "../agent/embeddings";
+import { cosineSimilarity, embedderConfig, embedText, packVector, unpackVector, type EmbedderConfig } from "../agent/embeddings";
 
-export const MEMORY_TYPES = ["fact", "preference", "style", "entity", "decision", "procedure", "insight"] as const;
+export const MEMORY_TYPES = ["fact", "preference", "style", "entity", "decision", "procedure", "insight", "episode"] as const;
 export type MemoryType = (typeof MEMORY_TYPES)[number];
 
 export const MEMORY_SCOPES = ["agent", "global", "global_user", "user"] as const;
@@ -36,6 +36,14 @@ export interface AgentMemoryRow {
   embedding_dim: number | null;
   archived_at: string | null;
 }
+
+/**
+ * A live row: never closed, or closed in the future (B12: a tagger `ttl`
+ * is stored as `valid_to`, so a temporary fact expires on its own).
+ * The format matches `nowISO()`, so the comparison is a string compare.
+ */
+export const LIVE_SQL = "(valid_to IS NULL OR valid_to > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))";
+const LIVE_SQL_M = LIVE_SQL.replace(/valid_to/g, "m.valid_to");
 
 const MEMORY_COLUMNS =
   "id, scope, agent_id, type, key_slug, content, tags, importance, created_at, updated_at, kind, valid_from, valid_to, supersedes_id, source_block_id, source_turn_ids, last_used_at, use_count, embedding, confidence, salience, visibility, source, embedding_model, embedding_dim, archived_at";
@@ -148,25 +156,29 @@ export function putAgentMemory(db: Database, input: AgentMemoryInput): AgentMemo
 
   const existing = db
     .query<AgentMemoryRow, [string, string, string]>(
-      `SELECT ${MEMORY_COLUMNS} FROM agent_memories WHERE scope = ? AND COALESCE(agent_id, '') = ? AND key_slug = ? AND valid_to IS NULL`,
+      // Any row holding the exact key: the live one, or one closed without
+      // a rename (an expired ttl, the consolidation sweep). The unique key
+      // index means it has to move out of the way either way.
+      `SELECT ${MEMORY_COLUMNS} FROM agent_memories WHERE scope = ? AND COALESCE(agent_id, '') = ? AND key_slug = ?`,
     )
       .get(effectiveScope, effectiveAgentID ?? "", normalizedKeySlug);
+  const live = existing && (existing.valid_to === null || existing.valid_to > timestamp) ? existing : null;
 
   if (existing) {
     // MEM-002: a changed fact supersedes the old one; it is never silently
     // overwritten. The old row is closed (valid_to set, key renamed to free
     // the semantic key) and a new live row points back at it.
     const unchanged =
+      live !== null &&
       existing.content === content &&
       existing.type === type &&
       existing.tags === tags &&
-      existing.importance === importance;
-    if (unchanged) {
-      db.run("UPDATE agent_memories SET updated_at = ? WHERE id = ?", [timestamp, existing.id]);
-      return getAgentMemory(db, existing.id)!;
-    }
+      existing.importance === importance &&
+      existing.valid_to === (input.validTo ?? null);
+    // B11: a no-op rewrite leaves updated_at alone, or it reshuffles the pins.
+    if (unchanged) return existing;
     db.run("UPDATE agent_memories SET valid_to = ?, key_slug = ?, updated_at = ? WHERE id = ?", [
-      timestamp,
+      live ? timestamp : existing.valid_to,
       `${existing.key_slug}~${existing.id}`,
       timestamp,
       existing.id,
@@ -187,7 +199,7 @@ export function putAgentMemory(db: Database, input: AgentMemoryInput): AgentMemo
     kind: input.kind?.trim() || type,
     valid_from: input.validFrom ?? timestamp,
     valid_to: input.validTo ?? null,
-    supersedes_id: existing?.id ?? null,
+    supersedes_id: live?.id ?? null,
     source_block_id: input.sourceBlockID ?? null,
     source_turn_ids: input.sourceTurnIDs?.join(",") ?? null,
     last_used_at: null,
@@ -230,7 +242,37 @@ export function putAgentMemory(db: Database, input: AgentMemoryInput): AgentMemo
       row.source,
     ],
   );
+  embedOnWrite(db, row.id, row.content);
   return row;
+}
+
+/** At most this many write-time embeddings in flight; the rest wait for the job. */
+const EMBED_ON_WRITE_MAX = 4;
+let embedsInFlight = 0;
+
+/**
+ * Embed a new row right away, so it is findable by meaning at once instead
+ * of after the next `memory.embed` sweep. Fire-and-forget and bounded: when
+ * the embedder is absent, busy or down, the sweep still backfills the row.
+ */
+export function embedOnWrite(
+  db: Database,
+  id: string,
+  content: string,
+  config: EmbedderConfig | null = embedderConfig(),
+  fetchFn?: typeof fetch,
+): Promise<void> | null {
+  if (!config || embedsInFlight >= EMBED_ON_WRITE_MAX) return null;
+  embedsInFlight += 1;
+  return embedText(content, config, fetchFn)
+    .then((vector) => {
+      // The row may have been superseded or the store closed meanwhile.
+      if (vector) setMemoryEmbedding(db, id, vector, config.model);
+    })
+    .catch(() => {})
+    .finally(() => {
+      embedsInFlight -= 1;
+    });
 }
 
 export function getAgentMemory(db: Database, id: string): AgentMemoryRow | null {
@@ -299,7 +341,9 @@ export function searchAgentMemories(
 ): MemoryHit[] {
   const query = input.query.trim();
   if (!query) return [];
-  const scope = input.scope ?? "global_user";
+  // No scope: everything the caller may read (the turn's own retrieval).
+  // A named scope is that scope alone (B10).
+  const scope = input.scope;
   const agentID = input.agentID === undefined ? null : input.agentID;
   const caller = input.callerAgentID ?? null;
   if (scope === "agent" && !agentID) return [];
@@ -317,10 +361,18 @@ export function searchAgentMemories(
   if (rows.length === 0) return [];
 
   const now = Date.now();
-  const hits: MemoryHit[] = rows.map((row) => {
-    // bm25 is negative and smaller is better; turn it into a 0..1 relevance.
-    const relevance = 1 / (1 + Math.max(0, row.rank));
-    return { row: row as unknown as AgentMemoryRow, relevance, score: rankMemory(row as unknown as AgentMemoryRow, relevance, now) };
+  const terms = queryTerms(query);
+  // B1: bm25 is negative (more negative is better) and, in a small store,
+  // nearly zero for every row, so it only orders hits. Relevance is how much
+  // of the query a row covers, scaled by where bm25 puts it in this set.
+  const scores = rows.map((row) => -row.rank);
+  const best = Math.max(...scores);
+  const worst = Math.min(...scores);
+  const hits: MemoryHit[] = rows.map((row, index) => {
+    const memory = row as unknown as AgentMemoryRow;
+    const position = best > worst ? (scores[index]! - worst) / (best - worst) : 1;
+    const relevance = termCoverage(terms, `${memory.content} ${memory.tags ?? ""}`) * (0.5 + 0.5 * position);
+    return { row: memory, relevance, score: rankMemory(memory, relevance, now) };
   });
   hits.sort((a, b) => b.score - a.score);
   return hits.slice(0, limit);
@@ -332,13 +384,17 @@ interface SqlFilter {
 }
 
 /** The caller-filter, shared by the list and the search. */
-function memoryFilter(scope: string, agentID: string | null, caller: string | null): SqlFilter {
-  const clauses = ["m.valid_to IS NULL", "m.archived_at IS NULL"];
+function memoryFilter(scope: string | undefined, agentID: string | null, caller: string | null): SqlFilter {
+  const clauses = [LIVE_SQL_M, "m.archived_at IS NULL"];
   const values: string[] = [];
   if (scope === "agent") {
-    clauses.push("m.agent_id = ?");
+    clauses.push("m.scope = 'agent'", "m.agent_id = ?");
     values.push(agentID ?? "");
   } else {
+    if (scope) {
+      clauses.push("m.scope = ?");
+      values.push(scope);
+    }
     clauses.push("(m.agent_id IS NULL OR m.agent_id = ?)");
     values.push(caller ?? "");
   }
@@ -412,7 +468,7 @@ export function listMemoriesNeedingEmbedding(
   return db
     .query<AgentMemoryRow, [string, number]>(
       `SELECT ${MEMORY_COLUMNS} FROM agent_memories
-       WHERE valid_to IS NULL AND archived_at IS NULL
+       WHERE ${LIVE_SQL} AND archived_at IS NULL
          AND (embedding IS NULL OR embedding_model IS NULL OR embedding_model <> ?)
        ORDER BY updated_at ASC LIMIT ?`,
     )
@@ -436,7 +492,9 @@ export function searchMemoriesByVector(
     limit?: number;
   },
 ): MemoryHit[] {
-  const scope = input.scope ?? "global_user";
+  // No scope: everything the caller may read (the turn's own retrieval).
+  // A named scope is that scope alone (B10).
+  const scope = input.scope;
   const agentID = input.agentID === undefined ? null : input.agentID;
   const caller = input.callerAgentID ?? null;
   if (scope === "agent" && !agentID) return [];
@@ -518,15 +576,55 @@ export function markMemoryUsed(db: Database, ids: string[]): void {
  * says "deployments happen on Tuesday".
  */
 export function toMatchQuery(query: string, mode: "and" | "or" = "and"): string {
-  const terms = query
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}_-]+/u)
-    .filter((term) => term.length > 0)
-    .slice(0, 16);
+  const all = splitTerms(query).slice(0, 16);
+  // OR alone would match any fact sharing "the" or "what": stopwords out.
+  const terms = mode === "or" ? all.filter((term) => !STOPWORDS.has(term)) : all;
   if (terms.length === 0) return '""';
   const joiner = mode === "and" ? " AND " : " OR ";
   return terms.map((term) => `"${term.replace(/"/g, "")}"`).join(joiner);
 }
+
+function splitTerms(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}_-]+/u)
+    .filter((term) => term.length > 0);
+}
+
+/** The words that carry meaning in a query. */
+function queryTerms(query: string): string[] {
+  const all = splitTerms(query).slice(0, 16);
+  const content = all.filter((term) => !STOPWORDS.has(term));
+  return content.length > 0 ? content : all;
+}
+
+/**
+ * The share of query terms the text contains.
+ * shortcut: a shared-prefix test stands in for the porter stemmer FTS uses; swap for
+ * FTS5 per-term matches if coverage proves too loose.
+ */
+export function termCoverage(terms: string[], text: string): number {
+  if (terms.length === 0) return 0;
+  const words = splitTerms(text.slice(0, 4_000));
+  // Same stem: a shared prefix of at least 4 that covers all but the last
+  // two letters of the shorter word ("escalate" ~ "escalations").
+  const sameStem = (a: string, b: string): boolean => {
+    if (a === b) return true;
+    const shorter = Math.min(a.length, b.length);
+    if (shorter < 4) return false;
+    let common = 0;
+    while (common < shorter && a[common] === b[common]) common += 1;
+    return common >= Math.max(4, shorter - 2);
+  };
+  const hit = (term: string): boolean => words.some((word) => sameStem(word, term));
+  return terms.filter(hit).length / terms.length;
+}
+
+const STOPWORDS = new Set(
+  ("a an and are as at be been but by can could did do does for from had has have he her his how i if in into is it its " +
+    "me my of on or our she so that the their them then there these they this to was we were what when where which who " +
+    "why will with would you your about any just like know tell remember please").split(" "),
+);
 
 export function getAgentMemoryByKey(
   db: Database,
@@ -537,7 +635,7 @@ export function getAgentMemoryByKey(
   return (
     db
       .query<AgentMemoryRow, [string, string, string]>(
-        `SELECT ${MEMORY_COLUMNS} FROM agent_memories WHERE scope = ? AND COALESCE(agent_id, '') = ? AND key_slug = ? AND valid_to IS NULL`,
+        `SELECT ${MEMORY_COLUMNS} FROM agent_memories WHERE scope = ? AND COALESCE(agent_id, '') = ? AND key_slug = ? AND ${LIVE_SQL}`,
       )
       .get(scope, agentID ?? "", input.keySlug) ?? null
   );
@@ -545,7 +643,15 @@ export function getAgentMemoryByKey(
 
 export function listAgentMemories(
   db: Database,
-  input: { scope?: string; agentID?: string | null; limit?: number; query?: string; callerAgentID?: string | null } = {},
+  input: {
+    scope?: string;
+    agentID?: string | null;
+    limit?: number;
+    query?: string;
+    callerAgentID?: string | null;
+    /** B11: the pinned set — by salience, then use, not by the last edit. */
+    pinned?: boolean;
+  } = {},
 ): AgentMemoryRow[] {
   const scope = input.scope ?? "agent";
   const agentID = input.agentID === undefined ? null : input.agentID;
@@ -564,7 +670,7 @@ export function listAgentMemories(
   const limit = clampLimit(input.limit);
   const query = input.query?.trim();
   const params: (string | number)[] = [];
-  const clauses: string[] = ["scope = ?", "valid_to IS NULL", "archived_at IS NULL"];
+  const clauses: string[] = ["scope = ?", LIVE_SQL, "archived_at IS NULL"];
   params.push(scope);
   if (scope === "agent") {
     clauses.push("agent_id = ?");
@@ -584,9 +690,47 @@ export function listAgentMemories(
   params.push(limit);
   return db
     .query<AgentMemoryRow, (string | number)[]>(
-      `SELECT ${MEMORY_COLUMNS} FROM agent_memories WHERE ${clauses.join(" AND ")} ORDER BY updated_at DESC, rowid DESC LIMIT ?`,
+      `SELECT ${MEMORY_COLUMNS} FROM agent_memories WHERE ${clauses.join(" AND ")} ORDER BY ${input.pinned ? "salience DESC, use_count DESC, " : ""}updated_at DESC, rowid DESC LIMIT ?`,
     )
     .all(...params);
+}
+
+/** True when the row is live and `caller` may read it (the list's filter, for one row). */
+export function memoryVisibleTo(row: AgentMemoryRow, caller: string | null): boolean {
+  const live = row.archived_at === null && (row.valid_to === null || row.valid_to > nowISO());
+  const scoped = row.agent_id === null || row.agent_id === caller;
+  const visible = row.visibility !== "private" || (row.agent_id ?? "ea") === caller;
+  return live && scoped && visible;
+}
+
+/**
+ * The owner rewrites a memory. The new text supersedes the old (MEM-002),
+ * keeps the row's key, scope and pin, and counts as owner-stated.
+ */
+export function rewriteAgentMemory(db: Database, id: string, content: string): AgentMemoryRow | null {
+  const current = getAgentMemory(db, id);
+  if (!current) return null;
+  return putAgentMemory(db, {
+    scope: current.scope,
+    agentID: current.agent_id,
+    keySlug: current.key_slug,
+    type: current.type,
+    kind: current.kind,
+    content,
+    tags: current.tags ? current.tags.split(", ") : undefined,
+    importance: current.importance,
+    salience: current.salience,
+    confidence: 1,
+    visibility: current.visibility,
+    source: "user",
+    validTo: current.valid_to,
+  });
+}
+
+/** Pinned means salience 1.0, the same mark the consolidation sweep gives. */
+export function setMemoryPinned(db: Database, id: string, pinned: boolean): AgentMemoryRow | null {
+  const changed = db.run(`UPDATE agent_memories SET salience = ? WHERE id = ? AND ${LIVE_SQL}`, [pinned ? 1 : 0.5, id]).changes;
+  return changed > 0 ? getAgentMemory(db, id) : null;
 }
 
 export function deleteAgentMemory(db: Database, id: string): boolean {

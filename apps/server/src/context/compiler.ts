@@ -6,9 +6,9 @@
  * prompt stay stable across turns (prefix cache) and nothing grows without a
  * ceiling.
  *
- * Slot order is fixed, from most to least stable: pinned_core, ledger,
- * summaries, previous tail, recall, anchor, then the dynamic tail (tool
- * hints, depth). Budgets are starting guesses (TUNABLE)
+ * Slot order is fixed, from most to least stable: pinned_core (persona,
+ * lane, profile, pinned facts), rules (peer rule, team, depth, tool hints),
+ * ledger, summaries, previous tail, recall, anchor, then the dynamic tail. Budgets are starting guesses (TUNABLE)
  * held in one place so evals can change them without touching call sites.
  */
 
@@ -82,6 +82,12 @@ export interface AssemblyInput {
   previousTail?: string[];
   /** Retrieved items and transcript chunks. */
   recall?: string[];
+  /**
+   * Stable rules (peer rule, team, depth, tool hints). They change only when
+   * the bot's setup does, so they sit right after the pinned core where a
+   * provider's prefix cache can keep them.
+   */
+  rules?: string[];
   /** Dynamic hints appended after the stable slots. */
   tail?: string[];
   /** Per-slot overrides. */
@@ -124,6 +130,9 @@ export function assembleContext(input: AssemblyInput): string {
   }
   const pinnedTail = clampToBudget(pinnedExtras.join("\n\n"), budgets.pinned_core);
   blocks.push([input.personaPrompt, input.laneHeader, pinnedTail].filter((part) => part.trim()).join("\n\n"));
+  for (const rule of input.rules ?? []) {
+    if (rule?.trim()) blocks.push(rule.trim());
+  }
 
   if (input.ledger?.length) {
     blocks.push(clampToBudget(block("Open tasks and open loops (server-written, untrusted):", input.ledger.join("\n")), budgets.ledger));

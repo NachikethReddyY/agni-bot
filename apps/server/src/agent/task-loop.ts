@@ -27,7 +27,7 @@ import { registerRenameTool } from "../tools/rename-tool";
 import { registerCreateAgentTool } from "../tools/create-agent-tool";
 import { createUpdateAgentTool } from "../tools/update-agent-tool";
 import { recallFact } from "../tools/facts";
-import { retrieveFacts, rewriteForRetrieval, previousBlockTail, TURN_EMBED_TIMEOUT_MS } from "./retrieval";
+import { asksAboutPast, ownerLedger, retrieveFacts, rewriteForRetrieval, previousBlockTail, TURN_EMBED_TIMEOUT_MS } from "./retrieval";
 import type { MemoryHit } from "../stores/agent-memories";
 import { embedderConfig, type EmbedderConfig } from "./embeddings";
 import { isSmallTalk } from "./gate";
@@ -474,9 +474,17 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
     // with.
     previousTail,
     // CMP-001: the day and epoch summaries, when this conversation has them.
+    // Epoch summaries only when the owner asks about the past: they are the
+    // widest view, and most turns do not need it.
     rollups: run.conversationID
-      ? listSummaries(db, { conversationID: run.conversationID, level: "day", limit: 3 }).map((summary) => summary.text)
+      ? [
+        ...(!peerInput && asksAboutPast(run.text)
+          ? listSummaries(db, { conversationID: run.conversationID, level: "epoch", limit: 2 }).map((summary) => summary.text)
+          : []),
+        ...listSummaries(db, { conversationID: run.conversationID, level: "day", limit: 3 }).map((summary) => summary.text),
+      ]
       : [],
+    ledger: ownerLedger(db),
     // Only an agent that can actually hand off needs to know the roster.
     team: persona.tools.includes("handoff") ? teamRoster(db, { exclude: persona.id }) : [],
   });

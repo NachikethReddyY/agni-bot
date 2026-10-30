@@ -22,9 +22,10 @@ import {
 import { embedText, type EmbedderConfig } from "./embeddings";
 import type { Anchor } from "../context/compiler";
 import { looksDeictic } from "./gate";
+import { listTasks } from "../stores/tasks";
 
 /** The confidence floor for automatic retrieval (TUNABLE). */
-export const DEFAULT_MIN_SCORE = 0.15;
+export const DEFAULT_MIN_SCORE = 0.2;
 
 /**
  * The floor for a vector hit, on its 0..1 relevance ((cosine + 1) / 2).
@@ -101,6 +102,9 @@ export async function retrieveFacts(
 ): Promise<RetrieveResult> {
   const limit = options.limit ?? 8;
   const floor = options.minScore ?? DEFAULT_MIN_SCORE;
+  // The embedding call starts before the text search, so a turn that needs
+  // the vector half does not wait for FTS and then for the embedder.
+  const pendingVector = options.embedder ? embedText(options.query, options.embedder, options.fetchFn) : null;
   const textHits = searchAgentMemories(db, {
     query: options.query,
     scope: options.scope,
@@ -109,19 +113,18 @@ export async function retrieveFacts(
     limit,
   });
 
-  // The text search first: it is local, it is fast, and it is usually
-  // enough. The embedder is the *lift* for the cases the text search
-  // cannot serve — a paraphrase, or a question with no matching words —
-  // not a tax on every turn.
+  // The text search is local, fast, and usually enough. The embedder is the
+  // *lift* for the cases it cannot serve — a paraphrase, or a question with
+  // no matching words — so a good text result does not wait for it.
   const textIsGood = textHits.length > 0 && textHits[0]!.score >= floor;
-  if (textIsGood || !options.embedder) {
+  if (textIsGood || !pendingVector) {
     const kept = textHits.filter((hit) => hit.score >= floor);
     if (kept.length === 0 && textHits.length > 0) return { hits: [], belowThreshold: true, usedVectors: false };
     markMemoryUsed(db, kept.map((hit) => hit.row.id));
     return { hits: kept.slice(0, limit), belowThreshold: false, usedVectors: false };
   }
 
-  const vector = await embedText(options.query, options.embedder, options.fetchFn);
+  const vector = await pendingVector;
   if (!vector) {
     // The embedder is down: FTS alone is a smaller result, not a failure.
     const kept = textHits.filter((hit) => hit.score >= floor);
@@ -173,4 +176,27 @@ export function previousBlockTail(
     )
     .all(input.conversationID, input.threadID, limit);
   return rows.reverse().map((row) => `${row.role}: ${row.text}`);
+}
+
+/**
+ * True when a message asks about the past ("what did we decide in
+ * August?"), so the turn reads the epoch summaries too.
+ * shortcut: an English keyword test; swap for the anchor's intent if it
+ * misses too often.
+ */
+export function asksAboutPast(text: string): boolean {
+  return /\b(ago|earlier|previously|last (week|month|year|time)|back in|remember when|(what|when|why|how) did (we|i|you)|did we|we decided|yesterday|(jan|febr)uary|march|april|june|july|august|september|october|november|december)\b/i.test(text);
+}
+
+/** The ledger slot: the owner's open tasks, a few short lines. */
+export function ownerLedger(db: Database, limit = 5): string[] {
+  return listTasks(db, { status: "open", limit: 50 })
+    .filter((task) => task.origin === "user_direct")
+    .slice(0, limit)
+    .map((task) => {
+      const title = task.title.length > 80 ? `${task.title.slice(0, 80)}…` : task.title;
+      const due = task.due_at ? `, due ${task.due_at.slice(0, 10)}` : "";
+      const priority = task.priority === "normal" ? "" : `, ${task.priority}`;
+      return `- ${title}${due}${priority}`;
+    });
 }

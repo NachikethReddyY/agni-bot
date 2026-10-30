@@ -13,6 +13,7 @@
  * the background job and not in front of the rotation: a pre-close sweep
  * would put a model call on the path of the user's next turn.
  */
+import { extractJSONObject } from "../util/json";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { Router, RouterError } from "../models/router";
@@ -348,15 +349,8 @@ export function parseStructuredSummary(text: string): StructuredSummary {
     tone: "",
     source_turn_range: null,
   };
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end <= start) return fallback;
-  try {
-    const parsed = StructuredSummarySchema.safeParse(JSON.parse(text.slice(start, end + 1)));
-    return parsed.success ? parsed.data : fallback;
-  } catch {
-    return fallback;
-  }
+  const parsed = StructuredSummarySchema.safeParse(extractJSONObject(text));
+  return parsed.success ? parsed.data : fallback;
 }
 
 /** The text version of a structured summary — what the prompt carries. */
