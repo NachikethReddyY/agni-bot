@@ -52,7 +52,7 @@ describe("scheduling tools", () => {
       dailyAt: "09:05",
       days: ["mon", "tue", "wed", "thu", "fri"],
       agentID: "friday",
-    }, "ea");
+    }, "friday");
 
     expect(result.recurrence).toBe("mon, tue, wed, thu, fri at 09:05");
     expect(result.agent).toBe("friday");
@@ -91,14 +91,27 @@ describe("scheduling tools", () => {
     db = openDatabase(":memory:");
     const database = db;
     const job = scheduleJob(database, { text: "Sweep the inbox.", everyMinutes: 30 }, "ea");
-    const list = listScheduledJobs(database);
+    const list = listScheduledJobs(database, "ea");
     const found = list.scheduled.find((entry) => entry.id === job.id);
     expect(found?.what).toBe("Sweep the inbox.");
     expect(found?.recurrence).toBe("every 30 minute(s)");
 
-    const cancelled = cancelScheduledJob(database, job.id.slice(0, 12));
+    const cancelled = cancelScheduledJob(database, job.id.slice(0, 12), "ea");
     expect(cancelled.state).toBe("cancelled");
-    expect(listScheduledJobs(database).scheduled.find((entry) => entry.id === job.id)).toBeUndefined();
-    expect(() => cancelScheduledJob(database, job.id)).toThrow(/no scheduled job/);
+    expect(listScheduledJobs(database, "ea").scheduled.find((entry) => entry.id === job.id)).toBeUndefined();
+    expect(() => cancelScheduledJob(database, job.id, "ea")).toThrow(/no scheduled job/);
+  });
+
+  test("a bot cannot schedule for, list, or cancel another bot's jobs; payload is non-owner input", () => {
+    db = openDatabase(":memory:");
+    const database = db;
+    expect(() => scheduleJob(database, { text: "x", everyMinutes: 10, agentID: "ea" }, "researcher")).toThrow(/only schedule jobs for itself/);
+    expect(() => scheduleJob(database, { text: "x", everyMinutes: 1 }, "ea")).toThrow(/between 5/);
+    const job = scheduleJob(database, { text: "Mine.", everyMinutes: 10 }, "ea");
+    const row = database.query<{ payload: string }, [string]>("SELECT payload FROM jobs WHERE id = ?").get(job.id)!;
+    expect(JSON.parse(row.payload).inputRole).toBe("system");
+    expect(listScheduledJobs(database, "researcher").scheduled.find((entry) => entry.id === job.id)).toBeUndefined();
+    expect(() => cancelScheduledJob(database, job.id, "researcher")).toThrow(/no scheduled job/);
+    expect(cancelScheduledJob(database, job.id, "ea").state).toBe("cancelled");
   });
 });

@@ -5,8 +5,8 @@
  * scratch tree through the approval card, and lets scratch writes run free
  * (AGENTS.md). `isOutsideScratch` is the boundary check both sides share.
  */
-import { mkdirSync, writeFileSync, statSync } from "node:fs";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { lstatSync, mkdirSync, realpathSync, writeFileSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
 const MAX_BYTES = 1024 * 1024;
 
@@ -20,12 +20,41 @@ export function scratchDir(): string {
   return resolve(configured && configured.length > 0 ? configured : join(process.cwd(), "scratch"));
 }
 
-/** True when `path` is outside the scratch tree, i.e. a write that gates. */
+/**
+ * The real path `path` names: symlinks are followed through its nearest
+ * existing ancestor, and the missing tail is appended. Null for a dangling
+ * symlink, whose real target cannot be known. Relative paths resolve against
+ * the process cwd, like the file tools themselves.
+ */
+function realTarget(path: string): string | null {
+  let target = resolve(path);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(target), ...tail.reverse());
+    } catch {
+      try { lstatSync(target); return null; } catch { /* missing: walk up */ }
+    }
+    const parent = dirname(target);
+    if (parent === target) return join(target, ...tail.reverse());
+    tail.push(basename(target));
+    target = parent;
+  }
+}
+
+/** True when `path` really lives outside the scratch tree (symlinks followed). */
 export function isOutsideScratch(path: string): boolean {
   if (path.trim().length === 0) return true;
-  const target = resolve(isAbsolute(path) ? path : join(process.cwd(), path));
-  const scratch = scratchDir();
+  const target = realTarget(path);
+  const scratch = realTarget(scratchDir());
+  if (!target || !scratch) return true;
   return target !== scratch && !target.startsWith(scratch.endsWith(sep) ? scratch : scratch + sep);
+}
+
+/** The real path of `path`, or a throw when it escapes the scratch tree. */
+export function confineToScratch(path: string): string {
+  if (isOutsideScratch(path)) throw new Error(`${path} is outside the scratch directory`);
+  return realTarget(path)!;
 }
 
 export interface WriteFileArgs {

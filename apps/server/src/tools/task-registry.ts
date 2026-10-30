@@ -193,10 +193,10 @@ export function buildTaskToolRegistry(db: Database, mailAccounts?: MailAccountRe
   register({
     name: "deep_research", description: "Deep research: search the web and fetch top results in parallel, returning compiled findings. Use for research questions needing multiple sources.", kind: "static",
     schema: objectSchema({ query: stringProp, depth: { type: "integer", minimum: 1, maximum: 5, default: 3 } }, ["query"]), timeoutMs: 60_000,
-    handler: async (args) => deepResearch(parseObject(args, (v) => ({ query: string(v.query), depth: typeof v.depth === "number" ? v.depth : undefined }))),
+    handler: async (args, ctx) => deepResearch(parseObject(args, (v) => ({ query: string(v.query), depth: typeof v.depth === "number" ? v.depth : undefined })), ctx.hostAllowed),
   });
   register({
-    name: "bash", description: "Run a shell command in the sandbox. Destructive commands require approval.", kind: "static",
+    name: "bash", description: "Run a shell command (cwd defaults to scratch). Only simple read-only commands inside scratch run without approval; everything else needs an approval card.", kind: "static",
     schema: objectSchema({ command: { type: "string", minLength: 1 }, timeoutMs: { type: "integer", minimum: 1000, maximum: 120_000 }, cwd: pathProp }, ["command"]), timeoutMs: 120_000,
     handler: async (args) => runBash(parseObject(args, (v) => ({ command: string(v.command), timeoutMs: v.timeoutMs === undefined ? undefined : number(v.timeoutMs), cwd: v.cwd === undefined ? undefined : string(v.cwd) }))),
   });

@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChatGPTAuth } from "../src/models/chatgpt-auth";
+import { ChatGPTAuth, chatGPTEnabled } from "../src/models/chatgpt-auth";
 import { chatGPTPage } from "../src/models/chatgpt-page";
 import { responsesBody, streamChatGPT } from "../src/models/chatgpt-responses";
 import type { ChatRequest } from "../src/models/client";
@@ -77,7 +77,75 @@ function harness(options: { path?: string; claims?: Record<string, unknown>; sco
     blockRefresh: () => { let release!: () => void; refreshGate = new Promise<void>((resolve) => { release = resolve; }); return release; } };
 }
 
+const savedFlag = process.env.AGNI_CHATGPT;
+function setChatGPTFlag(value: string | undefined): void {
+  if (value === undefined) delete process.env.AGNI_CHATGPT; else process.env.AGNI_CHATGPT = value;
+}
+
+describe("ChatGPT gating (AGNI_CHATGPT, off by default)", () => {
+  beforeEach(() => setChatGPTFlag(undefined));
+  afterAll(() => setChatGPTFlag(savedFlag));
+
+  test("the flag is off unless set to exactly 1", () => {
+    expect(chatGPTEnabled()).toBe(false);
+    setChatGPTFlag("true");
+    expect(chatGPTEnabled()).toBe(false);
+    setChatGPTFlag("1");
+    expect(chatGPTEnabled()).toBe(true);
+  });
+
+  test("with the flag unset the router never selects ChatGPT and falls back to free providers", async () => {
+    setChatGPTFlag("1");
+    const h = harness(); await h.complete(); // Signed in while enabled, then the flag is switched off.
+    setChatGPTFlag(undefined);
+    const free = { id: "free", label: "Free", apiKey: "unit", baseUrl: "https://free.test", model: "unit" };
+    const router = new Router([free], new HealthTracker(), h.fetchFn);
+    router.setChatGPT(h.auth);
+    expect(router.candidates().map((p) => p.id)).toEqual(["free"]);
+    expect(router.status().map((p) => p.id)).toEqual(["free"]);
+    expect(h.requests.some((r) => r.url.endsWith("/responses"))).toBe(false);
+  });
+
+  test("with the flag unset a ChatGPT-only router does not return needsLogin", async () => {
+    setChatGPTFlag("1");
+    const h = harness(); await h.complete();
+    setChatGPTFlag(undefined);
+    const router = new Router([], new HealthTracker(), h.fetchFn);
+    router.setChatGPT(h.auth);
+    expect(router.candidates()).toEqual([]);
+    await expect(router.route({ messages: [{ role: "user", content: "hi" }], firstTokenTimeoutMs: 1000, onDelta() {} }))
+      .rejects.toThrow("no model providers configured");
+  });
+
+  test("starting a login with the flag unset returns a clear error", async () => {
+    const h = harness();
+    await expect(h.auth.start("unit-device")).rejects.toThrow("ChatGPT sign-in is disabled (set AGNI_CHATGPT=1)");
+  });
+});
+
+describe("ChatGPT account file", () => {
+  beforeEach(() => setChatGPTFlag("1"));
+  afterAll(() => setChatGPTFlag(savedFlag));
+
+  test("a corrupt accounts.json does not throw, is not overwritten, and blocks sign-in", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agni-chatgpt-corrupt-"));
+    cleanups.push(() => rmSync(directory, { recursive: true, force: true }));
+    const path = join(directory, "accounts.json");
+    const corrupt = '{"version":1,"accounts":[{"tokens":';
+    writeFileSync(path, corrupt);
+    let auth!: ChatGPTAuth;
+    expect(() => { auth = new ChatGPTAuth({ filePath: path, fetchFn: fetch }); }).not.toThrow();
+    cleanups.push(() => auth.stop());
+    expect(auth.state()).toMatchObject({ status: "error", accounts: [] });
+    expect(auth.provider()).toBeUndefined();
+    await expect(auth.start("unit-device")).rejects.toThrow("could not be read");
+    expect(readFileSync(path, "utf8")).toBe(corrupt);
+  });
+});
+
 describe("ChatGPT OAuth", () => {
+  beforeAll(() => setChatGPTFlag("1"));
+  afterAll(() => setChatGPTFlag(savedFlag));
   test("callback pages escape messages and allow only the bundled stylesheet", async () => {
     const response = chatGPTPage('<script>alert("untrusted")</script>', 400);
     const html = await response.text();

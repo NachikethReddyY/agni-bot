@@ -23,12 +23,13 @@ import {
 import { defaultPersona, getPersona, personaInfo, mentionRoster, defaultResolvedPersona, resolvePersona, canonicalAgentID, updatePersona } from "../agent/personas";
 import { createAgentPersona } from "../agent/creation";
 import { answerFormAndWake } from "../agent/form-broker";
+import { getForm } from "../stores/forms";
 import { renameAgent } from "../agent/identity";
 import { resolveAgentMention } from "../agent/mentions";
 import { cancelThreadTurn, isThreadActive, runTaskTurn } from "../agent/task-loop";
 import { resolveApprovalWaiter } from "../agent/approval-broker";
 import { cancelSecret, listPendingSecrets, resolveSecret } from "../agent/secret-broker";
-import { verifyToken } from "../auth/tokens";
+import { isDeviceRevoked, verifyToken } from "../auth/tokens";
 import type { Config } from "../config";
 import { log } from "../log";
 import type { Router } from "../models/router";
@@ -85,6 +86,25 @@ export interface Session {
   /** In-flight turns owned by this connection, cancellable via msg.cancel. */
   aborts: Map<string, AbortController>;
   helloTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * H32: live frames held after `hello` until this connection's `resync`
+   * replay is out, so the client never sees a newer seq before an older one.
+   */
+  held?: ServerFrame[];
+  holdTimer?: ReturnType<typeof setTimeout>;
+}
+
+/** How long a fresh connection's live frames wait for its `resync`. */
+export const RESYNC_HOLD_MS = 1_000;
+
+/** Send `frames` plus everything held, once each, in seq order; stop holding. */
+export function releaseHeld(deps: Pick<DispatchDeps, "send">, session: Session, frames: ServerFrame[] = []): void {
+  if (session.holdTimer !== undefined) clearTimeout(session.holdTimer);
+  session.holdTimer = undefined;
+  const bySeq = new Map<number, ServerFrame>();
+  for (const frame of [...frames, ...(session.held ?? [])]) bySeq.set(frame.seq, frame);
+  session.held = undefined;
+  for (const frame of [...bySeq.values()].sort((a, b) => a.seq - b.seq)) deps.send(frame);
 }
 
 export function newSession(): Session {
@@ -121,6 +141,17 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
   if (!parsed.ok) return sendError(deps, session, "bad_frame", parsed.error);
 
   const frame = parsed.frame;
+  // One gate for every frame: only the handshake may arrive unauthenticated.
+  if (frame.type !== "hello" && !requireAuth(deps, session)) return;
+  // A client that acts before resyncing is not going to resync: stop holding its live frames.
+  if (session.held && frame.type !== "resync" && frame.type !== "hello") releaseHeld(deps, session);
+  // M1: a revoked device loses its open sessions too, not just new handshakes.
+  if (session.device && isDeviceRevoked(deps.db, session.device.id)) {
+    session.authed = false;
+    sendError(deps, session, "unauthorized", "this device was revoked");
+    deps.close(4003, "revoked");
+    return;
+  }
   switch (frame.type) {
     case "hello":
       return handleHello(deps, session, frame);
@@ -143,7 +174,7 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
     case "conversation.open":
       return handleConversationOpen(deps, session, frame);
     case "session.new":
-      return void handleSessionNew(deps, session, frame);
+      return detach(deps, session, "session.new", handleSessionNew(deps, session, frame));
     case "conversation.history":
       return handleConversationHistory(deps, session, frame);
     case "thread.open":
@@ -177,7 +208,7 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
     case "task.answer":
       return handleTaskAnswer(deps, session, frame);
     case "bind.direct":
-      return void handleBindDirect(deps, session, frame);
+      return detach(deps, session, "bind.direct", handleBindDirect(deps, session, frame));
     case "provider.add":
       return await handleProviderAdd(deps, session, frame);
     case "provider.model.set":
@@ -236,7 +267,7 @@ function handleHello(deps: DispatchDeps, session: Session, frame: Extract<Client
     deps.close(4002, "version mismatch");
     return;
   }
-  void verifyToken(deps.db, frame.token).then((device) => {
+  detach(deps, session, "hello", verifyToken(deps.db, frame.token).then((device) => {
     if (!device) {
       sendError(deps, session, "unauthorized", "unknown or revoked token — pair a device first");
       deps.close(4003, "unauthorized");
@@ -249,16 +280,20 @@ function handleHello(deps: DispatchDeps, session: Session, frame: Extract<Client
       session.helloTimer = undefined;
     }
     log.info(`hello from "${device.name}" (${device.id}) as agent ${session.agentID}`);
+    // H32: everything after hello.ok (including this handshake's own frames) waits for the resync replay.
+    session.held = [];
+    session.holdTimer = setTimeout(() => releaseHeld(deps, session), RESYNC_HOLD_MS);
     // lastSeq must equal the seq this very frame is about to receive; no
     // await can interleave between the read and the reply, so this is exact.
     // The handshake answer goes only to this connection and stays out of the
     // replay log — other clients never see it, and it is not stream state.
-    deps.reply({
+    const hello = deps.frameLog.next({
       type: "hello.ok",
       v: PROTOCOL_VERSION,
       serverTime: nowISO(),
       lastSeq: deps.frameLog.seq + 1,
-    });
+    }, { replay: false });
+    deps.send(hello);
     deps.emit({ type: "agents.update", agents: personaInfo(deps.db), mentions: mentionRoster(deps.db) });
     // A reconnect must not lose a password prompt that is still waiting.
     for (const pendingSecret of listPendingSecrets()) {
@@ -273,30 +308,64 @@ function handleHello(deps: DispatchDeps, session: Session, frame: Extract<Client
         ...(pendingSecret.conversationID ? { conversationID: pendingSecret.conversationID } : {}),
       });
     }
+    // H36: the same for approval and form cards a turn in this process is still waiting on.
+    for (const approval of deps.db.query<{ id: string; action: string; preview: string }, [string]>(
+      "SELECT id, action, preview FROM approvals WHERE status = 'pending' AND created_at >= ? ORDER BY created_at",
+    ).all(PROCESS_STARTED_AT)) {
+      deps.reply({ type: "approval.request", requestID: approval.id, action: approval.action, preview: approval.preview, buttons: ["once", "always", "reject"] });
+    }
+    for (const { id } of deps.db.query<{ id: string }, [string]>(
+      "SELECT id FROM forms WHERE status = 'pending' AND created_at >= ? ORDER BY created_at",
+    ).all(PROCESS_STARTED_AT)) {
+      const form = getForm(deps.db, id);
+      if (!form) continue;
+      deps.reply({
+        type: "form.request",
+        requestID: form.id,
+        question: form.question,
+        options: form.options.length > 0 ? form.options : undefined,
+        multiple: form.multiple,
+        kind: form.kind,
+        email: form.email ?? undefined,
+      });
+    }
     emitOnboardingIfNeeded(deps);
-  });
+  }));
 }
+
+/**
+ * Approval and form waiters live in memory, so only rows this process created
+ * can still wake a turn. shortcut: a pending row whose turn was aborted in this
+ * process is re-sent too; answering it is a no-op. Expose the waiter maps if that matters.
+ */
+const PROCESS_STARTED_AT = nowISO();
 
 function handleResync(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "resync" }>): void {
   if (!requireAuth(deps, session)) return;
   const { frames, gap, oldest } = deps.frameLog.since(frame.lastSeq);
   if (gap) {
     sendError(deps, session, "resync_gap", `cannot replay from ${frame.lastSeq}; oldest replayed frame is ${oldest}`);
+    releaseHeld(deps, session);
     return;
   }
-  for (const replay of frames) deps.send(replay);
+  releaseHeld(deps, session, frames);
 }
 
 interface PendingMessageBatch {
   texts: string[];
   frame: Extract<ClientFrame, { type: "msg.send" }>;
   session: Session;
+  /** The latest frame's deps: flushing replies on the connection that sent last. */
+  deps: DispatchDeps;
   firstAt: number;
   typing: boolean;
+  /** Durable `queued_messages` rows behind this batch (H22). */
+  rowIDs: string[];
   timer: ReturnType<typeof setTimeout>;
 }
 
-const messageBatches = new WeakMap<DispatchDeps, Map<string, PendingMessageBatch>>();
+/** Keyed by the database, like `threadQueues`: `DispatchDeps` is rebuilt per frame. */
+const messageBatches = new WeakMap<Database, Map<string, PendingMessageBatch>>();
 
 function batchKey(frame: Extract<ClientFrame, { type: "msg.send" }>, session: Session): string {
   return `${frame.channelId ?? frame.conversationID ?? frame.threadID ?? session.agentID}:${frame.toAgentId ?? session.agentID}`;
@@ -308,7 +377,49 @@ interface QueuedMessage {
   frame: Extract<ClientFrame, { type: "msg.send" }>;
   session: Session;
   text: string;
+  rowIDs: string[];
 }
+
+/** H22: write the owner's message before anything acknowledges it. */
+function persistOwnerMessage(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "msg.send" }>, text: string): string {
+  const id = newID("qmsg");
+  deps.db.run(
+    "INSERT INTO queued_messages (id, frame, text, device_id, device_name, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    [id, JSON.stringify(frame), text, session.device?.id ?? "", session.device?.name ?? "You", nowISO()],
+  );
+  return id;
+}
+
+/** The message's turn has started (or it was dropped): it must not replay at boot. */
+function forgetOwnerMessages(db: Database, rowIDs: string[]): void {
+  for (const id of rowIDs) db.run("DELETE FROM queued_messages WHERE id = ?", [id]);
+}
+
+/**
+ * Boot: replay owner messages a previous process accepted but never started,
+ * oldest first. Messages for the same thread queue behind each other as usual.
+ */
+export function resumeQueuedMessages(deps: DispatchDeps): number {
+  const rows = deps.db.query<{ id: string; frame: string; text: string; device_id: string; device_name: string }, []>(
+    "SELECT id, frame, text, device_id, device_name FROM queued_messages ORDER BY created_at, rowid",
+  ).all();
+  for (const row of rows) {
+    if (isDeviceRevoked(deps.db, row.device_id)) {
+      forgetOwnerMessages(deps.db, [row.id]);
+      continue;
+    }
+    const session: Session = { ...newSession(), authed: true, device: { id: row.device_id, name: row.device_name } };
+    const frame = JSON.parse(row.frame) as Extract<ClientFrame, { type: "msg.send" }>;
+    dispatchUserMessage(deps, session, frame, row.text, [row.id]);
+  }
+  return rows.length;
+}
+
+/**
+ * Threads a message has been dispatched to whose turn has not claimed the
+ * thread yet: a second message in that gap queues instead of interrupting.
+ */
+const startingThreads = new Set<string>();
 
 /**
  * FIFO of messages waiting on a busy thread. Keyed by the database — the one
@@ -367,13 +478,14 @@ function dispatchUserMessage(
   session: Session,
   frame: Extract<ClientFrame, { type: "msg.send" }>,
   text: string,
+  rowIDs: string[],
 ): void {
   const thread = targetThread(deps, session, frame, text);
-  if (thread && isThreadActive(thread.id)) {
+  if (thread && (isThreadActive(thread.id) || startingThreads.has(thread.id))) {
     const queues = threadQueues.get(deps.db) ?? new Map<string, QueuedMessage[]>();
     threadQueues.set(deps.db, queues);
     const queue = queues.get(thread.id) ?? [];
-    queue.push({ deps, frame, session, text });
+    queue.push({ deps, frame, session, text, rowIDs });
     queues.set(thread.id, queue);
     deps.emit({
       type: "status.update",
@@ -386,7 +498,15 @@ function dispatchUserMessage(
     });
     return;
   }
-  void runUserMessage(deps, session, frame, text);
+  if (thread) startingThreads.add(thread.id);
+  detach(deps, session, "msg.send", runUserMessage(deps, session, frame, text).finally(() => {
+    // Settled means the turn holds the thread (or the message ended early): either way it is no longer queued.
+    forgetOwnerMessages(deps.db, rowIDs);
+    if (!thread) return;
+    startingThreads.delete(thread.id);
+    // No turn claimed this thread (capture, early error, rollover to a new block): start the next waiting message.
+    if (!isThreadActive(thread.id)) drainThreadQueue(deps, thread.id);
+  }));
 }
 
 /** After a turn ends, start the next message waiting on that thread. */
@@ -397,8 +517,8 @@ function drainThreadQueue(deps: DispatchDeps, threadID: string): void {
   const next = queue.shift()!;
   if (queue.length === 0) queues.delete(threadID);
   // A stop that somehow landed in the queue still means "stop", not a turn.
-  if (isStopCommand(next.text)) return;
-  dispatchUserMessage(next.deps, next.session, next.frame, next.text);
+  if (isStopCommand(next.text)) return forgetOwnerMessages(deps.db, next.rowIDs);
+  dispatchUserMessage(next.deps, next.session, next.frame, next.text, next.rowIDs);
 }
 
 /** Forget everything waiting on a thread; returns how many messages. */
@@ -407,6 +527,7 @@ function clearThreadQueue(deps: DispatchDeps, threadID: string): number {
   const queue = queues?.get(threadID);
   if (!queues || !queue) return 0;
   queues.delete(threadID);
+  for (const message of queue) forgetOwnerMessages(deps.db, message.rowIDs);
   return queue.length;
 }
 
@@ -452,19 +573,22 @@ function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<Clie
   }
   // GATE-003: explicit remember/task commands are processed immediately — the
   // debounce exists to merge a burst of chat, not to delay a direct command.
+  const rowID = persistOwnerMessage(deps, session, frame, combined);
   const gate = classifyTurn(combined);
   if (frame.files?.length || bypassesBatch(gate.category)) {
-    dispatchUserMessage(deps, session, frame, combined);
+    dispatchUserMessage(deps, session, frame, combined, [rowID]);
     return;
   }
-  const batches = messageBatches.get(deps) ?? new Map<string, PendingMessageBatch>();
-  messageBatches.set(deps, batches);
+  const batches = messageBatches.get(deps.db) ?? new Map<string, PendingMessageBatch>();
+  messageBatches.set(deps.db, batches);
   const key = batchKey(frame, session);
   const existing = batches.get(key);
   if (existing) {
     existing.texts.push(...parts);
     existing.frame = frame;
     existing.session = session;
+    existing.deps = deps;
+    existing.rowIDs.push(rowID);
     clearTimeout(existing.timer);
     existing.timer = setTimeout(() => flushMessageBatch(deps, key), 800);
     return;
@@ -474,8 +598,10 @@ function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<Clie
     texts: [...parts],
     frame,
     session,
+    deps,
     firstAt: Date.now(),
     typing: false,
+    rowIDs: [rowID],
     timer: setTimeout(() => flushMessageBatch(deps, key), 800),
   };
   batches.set(key, pending);
@@ -490,7 +616,7 @@ function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<Clie
 
 function handleUserTyping(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "user.typing" }>): void {
   if (!requireAuth(deps, session)) return;
-  const batches = messageBatches.get(deps);
+  const batches = messageBatches.get(deps.db);
   if (!batches) return;
   const prefix = `${frame.channelId ?? session.agentID}:`;
   for (const [key, batch] of batches) {
@@ -504,7 +630,7 @@ function handleUserTyping(deps: DispatchDeps, session: Session, frame: Extract<C
 }
 
 function flushMessageBatch(deps: DispatchDeps, key: string): void {
-  const batches = messageBatches.get(deps);
+  const batches = messageBatches.get(deps.db);
   const batch = batches?.get(key);
   if (!batches || !batch) return;
   const elapsed = Date.now() - batch.firstAt;
@@ -513,7 +639,7 @@ function flushMessageBatch(deps: DispatchDeps, key: string): void {
     return;
   }
   batches.delete(key);
-  dispatchUserMessage(deps, batch.session, batch.frame, batch.texts.join("\n\n"));
+  dispatchUserMessage(batch.deps, batch.session, batch.frame, batch.texts.join("\n\n"), batch.rowIDs);
 }
 
 async function runUserMessage(
@@ -633,7 +759,7 @@ async function runUserMessage(
     });
   }
   if (!attachments.length && (isCapture(routedText) || isStoreQuery(routedText))) {
-    void captureMessage(deps, session, thread, persona.id, routedText);
+    detach(deps, session, "capture", captureMessage(deps, session, thread, persona.id, routedText));
     return;
   }
   const turnID = newID("trn");
@@ -1138,6 +1264,7 @@ function handleApproveReply(
   );
   if (result.changes === 0) {
     sendError(deps, session, "unknown_request", `no pending approval ${frame.requestID}`);
+    return;
   }
   resolveApprovalWaiter(frame.requestID, frame.decision);
 }
@@ -1539,9 +1666,27 @@ function requireAuth(deps: DispatchDeps, session: Session): boolean {
   return false;
 }
 
+/**
+ * Errors answer only the connection that caused them, and take no seq or ring
+ * slot: they reuse the current seq, which every authed socket has already
+ * received, so a client's lastSeq never skips a frame it has not seen.
+ */
 function sendError(deps: DispatchDeps, _session: Session, code: string, message: string): void {
-  deps.emit({ type: "error", code, message });
+  deps.send(errorFrame(deps.frameLog, code, message));
   log.debug(`error frame → ${code}: ${message}`);
+}
+
+export function errorFrame(frameLog: FrameLog, code: string, message: string): ServerFrame {
+  // shortcut: seq 1 before any frame exists, since the schema needs a positive seq.
+  return { type: "error", code, message, seq: Math.max(1, frameLog.seq) };
+}
+
+/** Run a promise off the frame's path; a failure is logged and answered, never fatal. */
+function detach(deps: DispatchDeps, session: Session, label: string, work: Promise<unknown>): void {
+  work.catch((error: unknown) => {
+    log.error(`${label} failed`, error);
+    sendError(deps, session, "internal", error instanceof Error ? error.message : String(error));
+  });
 }
 
 

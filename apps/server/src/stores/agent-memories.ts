@@ -333,7 +333,7 @@ interface SqlFilter {
 
 /** The caller-filter, shared by the list and the search. */
 function memoryFilter(scope: string, agentID: string | null, caller: string | null): SqlFilter {
-  const clauses = ["m.valid_to IS NULL"];
+  const clauses = ["m.valid_to IS NULL", "m.archived_at IS NULL"];
   const values: string[] = [];
   if (scope === "agent") {
     clauses.push("m.agent_id = ?");
@@ -423,6 +423,9 @@ export function listMemoriesNeedingEmbedding(
  * The vector neighbours of a query, filtered by the same caller-filter as
  * the text search. A private fact is not a neighbour of another agent.
  */
+/** How many of the newest embedded rows one vector search scores. */
+const VECTOR_SCAN_ROWS = 2000;
+
 export function searchMemoriesByVector(
   db: Database,
   input: {
@@ -440,27 +443,17 @@ export function searchMemoriesByVector(
   if (scope === "agent" && caller && caller !== agentID) return [];
   const limit = Math.min(50, Math.max(1, Math.floor(input.limit ?? 10)));
 
-  const params: (string | number)[] = [];
-  const clauses = ["m.valid_to IS NULL", "m.embedding IS NOT NULL"];
-  if (scope === "agent") {
-    clauses.push("m.agent_id = ?");
-    params.push(agentID!);
-  } else {
-    clauses.push("(m.agent_id IS NULL OR m.agent_id = ?)");
-    params.push(caller ?? "");
-  }
-  clauses.push("(m.visibility <> 'private' OR COALESCE(m.agent_id, 'ea') = ?)");
-  params.push(caller ?? "");
-  params.push(limit * 4);
-
+  const filter = memoryFilter(scope, agentID, caller);
+  // H27: rank the newest embedded rows (bounded), not an arbitrary sample.
   const rows = db
     .query<AgentMemoryRow & { embedding: Uint8Array | null }, (string | number)[]>(
       `SELECT ${MEMORY_COLUMNS.split(", ").map((column) => `m.${column}`).join(", ")}, m.embedding AS embedding
        FROM agent_memories m
-       WHERE ${clauses.join(" AND ")}
-       LIMIT ?`,
+       WHERE ${[...filter.clauses, "m.embedding IS NOT NULL"].join(" AND ")}
+       ORDER BY m.updated_at DESC, m.rowid DESC
+       LIMIT ${VECTOR_SCAN_ROWS}`,
     )
-    .all(...params);
+    .all(...filter.values);
 
   const now = Date.now();
   const hits: MemoryHit[] = [];
@@ -571,7 +564,7 @@ export function listAgentMemories(
   const limit = clampLimit(input.limit);
   const query = input.query?.trim();
   const params: (string | number)[] = [];
-  const clauses: string[] = ["scope = ?", "valid_to IS NULL"];
+  const clauses: string[] = ["scope = ?", "valid_to IS NULL", "archived_at IS NULL"];
   params.push(scope);
   if (scope === "agent") {
     clauses.push("agent_id = ?");

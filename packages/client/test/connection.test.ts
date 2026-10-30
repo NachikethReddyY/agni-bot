@@ -145,6 +145,50 @@ describe("connection", () => {
     expect(observed).toEqual([...observed].sort((a, b) => a - b));
   });
 
+  test("a frame at or below the applied seq is dropped; errors still pass", async () => {
+    const transport = new FakeTransport([
+      { text: JSON.stringify({ type: "hello.ok", seq: 5, v: 1, serverTime: "now", lastSeq: 5 }) },
+      { text: JSON.stringify({ type: "token", seq: 6, turnID: "t", threadID: "h", delta: "a" }) },
+      { text: JSON.stringify({ type: "token", seq: 6, turnID: "t", threadID: "h", delta: "a" }) },
+      { text: JSON.stringify({ type: "token", seq: 4, turnID: "t", threadID: "h", delta: "old" }) },
+      { text: JSON.stringify({ type: "error", seq: 6, code: "bad_frame", message: "nope" }) },
+    ]);
+    const seen: string[] = [];
+    const connection = new AgniConnection({
+      settings: settings(),
+      token: "t",
+      makeTransport: () => transport,
+      handshakeTimeoutMs: 5000,
+    });
+    connection.onEvent = (event) => {
+      if (event.type === "frame") seen.push(event.frame.type);
+    };
+    connection.start();
+    expect(await settle(() => seen.includes("error"))).toBe(true);
+    connection.stop();
+    expect(seen).toEqual(["token", "error"]);
+  });
+
+  test("hello.ok with a lower lastSeq resets the stored seq and reloads", async () => {
+    const transport = new FakeTransport([
+      { text: JSON.stringify({ type: "hello.ok", seq: 2, v: 1, serverTime: "now", lastSeq: 2 }) },
+    ]);
+    const events: ConnectionEvent[] = [];
+    const connection = new AgniConnection({
+      settings: settings(50),
+      token: "t",
+      makeTransport: () => transport,
+      handshakeTimeoutMs: 5000,
+    });
+    connection.onEvent = (event) => events.push(event);
+    connection.start();
+    expect(await settle(() => ready(connection.state))).toBe(true);
+    connection.stop();
+    expect(connection.lastSeq).toBe(2);
+    expect(events.some((e) => e.type === "durableReloadRequired")).toBe(true);
+    expect(transport.decodedSent()).toContainEqual({ type: "resync", lastSeq: 2 });
+  });
+
   test("a revoked token stops retrying", async () => {
     const transport = new FakeTransport([
       {

@@ -11,6 +11,7 @@
 import type { Database } from "bun:sqlite";
 import { log } from "../log";
 import {
+  dayOf,
   listBlockSummariesForDay,
   listSummaries,
   saveSummary,
@@ -50,6 +51,9 @@ export function rollupSummaries(
 ): RollupResult {
   const now = options.now ?? new Date();
   const result: RollupResult = { days: 0, epochs: 0 };
+  // shortcut: day keys are UTC (dayOf), so "over" means UTC midnight, not the
+  // owner's local midnight; add an owner timezone when one exists.
+  const today = dayOf(now.toISOString());
 
   // The conversations that have block summaries at all.
   const conversations = db
@@ -67,11 +71,12 @@ export function rollupSummaries(
       )
       .all(conversation.conversation_id);
     for (const { day } of days) {
-      const existing = listSummaries(db, {
-        conversationID: conversation.conversation_id,
-        level: "day",
-        limit: 50,
-      }).some((summary) => summary.day === day);
+      if (day >= today) continue; // a partial day is not frozen
+      const existing = db
+        .query<{ id: string }, [string, string]>(
+          "SELECT id FROM summaries WHERE conversation_id = ? AND level = 'day' AND day = ? LIMIT 1",
+        )
+        .get(conversation.conversation_id, day);
       if (existing) continue;
       const blocks = listBlockSummariesForDay(db, {
         conversationID: conversation.conversation_id,
@@ -107,11 +112,13 @@ export function rollupSummaries(
       weeks.set(week, [...(weeks.get(week) ?? []), summary]);
     }
     for (const [week, summaries] of weeks) {
-      const existing = listSummaries(db, {
-        conversationID: conversation.conversation_id,
-        level: "epoch",
-        limit: 60,
-      }).some((summary) => summary.day === week);
+      // Only a finished week (every day in it over) is rolled up.
+      if (weekOf(today) === week) continue;
+      const existing = db
+        .query<{ id: string }, [string, string]>(
+          "SELECT id FROM summaries WHERE conversation_id = ? AND level = 'epoch' AND day = ? LIMIT 1",
+        )
+        .get(conversation.conversation_id, week);
       if (existing) continue;
       const text = compose(summaries.map((summary) => summary.text));
       if (!text) continue;

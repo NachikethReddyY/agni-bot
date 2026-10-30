@@ -92,27 +92,32 @@ export function scheduleTagger(
 export function registerTaggerJob(runner: JobRunner, deps: TaggerJobDeps): void {
   runner.register("tagger", async (job: JobRow) => {
     const payload = parseJobPayload<TaggerJobPayload>(job);
+    // H24: one channel per batch, and the bot is the channel's own.
+    const channelID = payload.channelID ?? deps.db
+      .query<{ channel_id: string }, []>(
+        `SELECT channel_id FROM channel_messages
+         WHERE tagged_at IS NULL AND salience <> 'temp' AND from_type <> 'system' AND peer_influenced = 0
+         ORDER BY created_at ASC, rowid ASC LIMIT 1`,
+      )
+      .get()?.channel_id;
+    if (!channelID) return { result: "nothing to tag" };
     const messages = deps.db
-      .query<{ id: string; from_type: string; from_id: string; text: string; created_at: string; channel_id: string }, [number]>(
+      .query<{ id: string; from_type: string; from_id: string; text: string; created_at: string; channel_id: string }, [string, number]>(
         `SELECT id, from_type, from_id, text, created_at, channel_id
          FROM channel_messages
-         WHERE tagged_at IS NULL AND salience <> 'temp' AND from_type <> 'system' AND peer_influenced = 0
+         WHERE channel_id = ? AND tagged_at IS NULL AND salience <> 'temp' AND from_type <> 'system' AND peer_influenced = 0
          ORDER BY created_at ASC, rowid ASC
          LIMIT ?`,
       )
-      .all(TAGGER_BATCH_MESSAGES) as Array<{
-      id: string;
-      from_type: string;
-      from_id: string;
-      text: string;
-      created_at: string;
-      channel_id: string;
-    }>;
+      .all(channelID, TAGGER_BATCH_MESSAGES);
     if (messages.length === 0) return { result: "nothing to tag" };
 
-    const agentID = payload.agentID ?? messages[0]!.from_id;
+    const agentID = deps.db
+      .query<{ agent_id: string }, [string]>("SELECT agent_id FROM channels WHERE id = ?")
+      .get(channelID)?.agent_id;
+    if (!agentID) return { result: "the channel is gone" };
     const transcript = messages
-      .map((message) => `${message.from_type}/${message.from_id}: ${message.text.slice(0, TAGGER_MAX_MESSAGE_CHARS)}`)
+      .map((message) => `[${message.id}] ${message.from_type}/${message.from_id}: ${message.text.slice(0, TAGGER_MAX_MESSAGE_CHARS)}`)
       .join("\n");
     let text = "";
     try {

@@ -8,10 +8,11 @@ import { listAgentMemories } from "../stores/agent-memories";
 import { appendMessage, createTurn, finishTurn, touchThread, type ThreadRow } from "../stores/threads";
 import { backgroundSession, ensureConversation } from "../stores/conversations";
 import { defaultPersona } from "../agent/personas";
+import { resolveTimeZone } from "../config";
 import { newID, nowISO } from "../util/ids";
 
 export function registerBriefJob(runner: JobRunner, deps: { db: Database; emit: (frame: ServerFrameBody) => void; timeZone?: string }): void {
-  const timeZone = deps.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
+  const timeZone = deps.timeZone ?? resolveTimeZone();
   const existing = deps.db.query<{ id: string }, []>("SELECT id FROM jobs WHERE kind='brief' AND state IN ('queued','running') LIMIT 1").get();
   if (!existing) enqueueJob(deps.db, { kind: "brief", payload: { timeZone }, runAt: nextBriefRunAt(new Date(), timeZone) });
   runner.register("brief", async (job: JobRow): Promise<JobOutcome> => {
@@ -42,7 +43,7 @@ export function registerBriefJob(runner: JobRunner, deps: { db: Database; emit: 
     deps.db.run("UPDATE brief_runs SET notification_sent=1 WHERE local_date=?", [dateKey]);
     deps.emit({ type: "notify", title: "Agni · morning brief", body: `Morning brief for ${dateKey} is ready. ${outcome.taskCount} open task(s).`, sound: false, threadID: outcome.threadID });
     return { result: `brief ${dateKey} saved in thread ${outcome.threadID}`, nextRunAt: nextBriefRunAt(new Date(), timeZone) };
-  });
+  }, { nextRun: () => nextBriefRunAt(new Date(), timeZone) });
 }
 
 function formatBrief(date: string, tasks: ReturnType<typeof listTasks>, links: ReturnType<typeof searchLinks>, memories: ReturnType<typeof listAgentMemories>): string {

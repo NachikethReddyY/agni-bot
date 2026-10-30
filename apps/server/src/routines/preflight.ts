@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import type { Preflight } from "./types";
-import { assertPublicHost } from "../tools/fetch-url";
+import { isIP } from "node:net";
+import { requestPinned, resolvePublicHost } from "../tools/fetch-url";
 
 const SQL_FORBIDDEN = /\b(PRAGMA|ATTACH|DETACH|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|VACUUM)\b/i;
 const MAX_BODY_BYTES = 1_000_000;
@@ -37,8 +38,9 @@ export async function runPreflight(
     let response: Response;
     for (let hop = 0; ; hop++) {
       if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("unsupported URL scheme");
-      await assertPublicHost(url.hostname);
-      response = await fetch(url, { signal, redirect: "manual" });
+      const addresses = await resolvePublicHost(url.hostname);
+      // Hostnames connect only to the checked IPs (DNS-rebinding defence); IP literals can't be rebound.
+      response = isIP(url.hostname.replace(/^\[|\]$/g, "")) ? await fetch(url, { signal, redirect: "manual" }) : await requestPinned(url, addresses);
       const location = response.headers.get("location");
       if (response.status < 300 || response.status > 399 || !location) break;
       await response.body?.cancel().catch(() => {});

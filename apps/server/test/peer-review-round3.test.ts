@@ -57,7 +57,7 @@ describe("update_agent accepts the schema's agent_id field", () => {
   test("a model call with agent_id updates the agent instead of failing", async () => {
     db = openDatabase(":memory:");
     const tool = createUpdateAgentTool({ db, emit: () => undefined });
-    const result = await tool.handler({ agent_id: "researcher", role: "Research lead" } as never, { peerInput: false } as never);
+    const result = await tool.handler({ agent_id: "researcher", role: "Research lead" } as never, { peerInput: false, chain: { currentAgentID: "researcher" } } as never);
     expect((result as { error?: string }).error).toBeUndefined();
   });
 

@@ -1,8 +1,10 @@
 /**
- * File read tool. Reads a file from the sandbox directory and returns its
- * contents (truncated to a sane size). Paths outside the sandbox are rejected.
+ * File read tool. Reads a file from the scratch directory and returns its
+ * contents (truncated to a sane size). Paths whose real location (symlinks
+ * followed) is outside scratch are rejected, so `~/.agni` secrets stay out.
  */
 import { readFileSync, statSync } from "node:fs";
+import { confineToScratch } from "./write-file";
 
 const MAX_BYTES = 256 * 1024;
 
@@ -22,9 +24,10 @@ export interface ReadFileResult {
 }
 
 export function readFile(args: ReadFileArgs): ReadFileResult {
-  const stat = statSync(args.path);
+  const real = confineToScratch(args.path);
+  const stat = statSync(real);
   if (!stat.isFile()) throw new Error(`${args.path} is not a file`);
-  const content = readFileSync(args.path, "utf8");
+  const content = readFileSync(real, "utf8");
   const lines = content.split("\n");
   const start = Math.max(0, args.offset ?? 0);
   const count = args.limit ?? lines.length;

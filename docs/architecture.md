@@ -149,7 +149,7 @@ delegated work.
 
 One SQLite database in WAL mode. Its location comes from `AGNI_DB_PATH`
 (default in `config.ts`). Tables are created by numbered migrations in
-`apps/server/src/db/migrations.ts`, which has 40 migrations. The schema holds
+`apps/server/src/db/migrations.ts`, which has 43 migrations. The schema holds
 about 30 tables. Main groups:
 
 - Conversations and turns: `conversations`, `threads`, `turns`, `messages`,

@@ -8,7 +8,7 @@
  */
 import type { Database } from "bun:sqlite";
 import type { ServerFrameBody } from "@agni/protocol";
-import { personaInfo, mentionRoster } from "../agent/personas";
+import { personaInfo, mentionRoster, getPersona, DEFAULT_AGENT_TOOLS } from "../agent/personas";
 import { createAgentPersona } from "../agent/creation";
 import { nowISO } from "../util/ids";
 import { MAX_AGENT_NAME_CHARS } from "../agent/identity";
@@ -49,6 +49,17 @@ export function registerCreateAgentTool(registry: ToolRegistry, deps: CreateAgen
       if (ctx.peerInput) return { error: "not done: this turn started from another agent's message" };
       const db = deps.db;
       const known = registry.listByKind("static").map((tool) => tool.name);
+      // M19: a new bot never exceeds its creator's tools or memory scope.
+      const creator = getPersona(ctx.chain?.currentAgentID ?? "");
+      if (!creator) return { error: "not done: unknown calling agent" };
+      const wanted = Array.isArray(args.tools) ? args.tools.map((tool) => String(tool)) : [];
+      const over = wanted.filter((tool) => known.includes(tool) && !creator.tools.includes(tool));
+      if (over.length > 0) return { error: `not done: you cannot grant tools you lack: ${over.join(", ")}` };
+      if (args.memoryScope === "readwrite" && creator.memoryScope !== "readwrite") {
+        return { error: "not done: you cannot grant write memory you lack" };
+      }
+      const tools = wanted.length > 0 ? wanted : DEFAULT_AGENT_TOOLS.filter((tool) => creator.tools.includes(tool));
+      if (tools.length === 0) return { error: "not done: no tools to give the new agent" };
       const created = createAgentPersona(
         db,
         {
@@ -57,7 +68,7 @@ export function registerCreateAgentTool(registry: ToolRegistry, deps: CreateAgen
           role: typeof args.role === "string" ? args.role : undefined,
           prompt: String(args.prompt ?? ""),
           color: typeof args.color === "string" ? args.color : undefined,
-          tools: Array.isArray(args.tools) ? args.tools.map((tool) => String(tool)) : [],
+          tools,
           memoryScope: args.memoryScope === "readwrite" ? "readwrite" : "read",
           visibility:
             typeof args.visibility === "string"

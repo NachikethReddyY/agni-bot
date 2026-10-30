@@ -1,13 +1,14 @@
 /**
- * Shell tool. Executes a command in a sandboxed working directory and streams
- * stdout/stderr back to the caller. Destructive commands are routed through the
- * approval broker (see agent/approval-broker.ts) — this handler only runs after
- * the user has allowed it or the pattern is on the always-allow list.
+ * Shell tool. Executes a command (cwd defaults to the scratch directory) and
+ * streams stdout/stderr back to the caller. Every command goes through the
+ * approval broker (see agent/approval-broker.ts) unless `isReadOnlyCommand`
+ * proves it is one read-only program touching only scratch.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { privateTempDir } from "../util/private-temp";
+import { isOutsideScratch, scratchDir } from "./write-file";
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -32,7 +33,11 @@ export interface BashResult {
   durationMs: number;
 }
 
-/** Patterns that always require a human click (never auto-allowed). */
+/**
+ * Known-dangerous shapes, kept for warnings only. A denylist cannot gate a
+ * shell (`s''udo`, `$HOME`, pipes into interpreters all slip past it); the
+ * gate is `isReadOnlyCommand`.
+ */
 export const DESTRUCTIVE_PATTERNS: RegExp[] = [
   /\brm\s+(-[a-zA-Z]*f?|[^-]\S*)\s+\/?(\*|\.\.\/?|~\/?|\/)/, // rm -rf style
   /\brm\s+(-[a-zA-Z]*f?|[^-]\S*)\s+-r/i, // rm -r
@@ -52,6 +57,26 @@ export const DESTRUCTIVE_PATTERNS: RegExp[] = [
 
 export function isDestructive(command: string): boolean {
   return DESTRUCTIVE_PATTERNS.some((pattern) => pattern.test(command));
+}
+
+/** Programs that only read. `env` is out: the daemon's env holds provider keys. */
+const READ_ONLY_PROGRAMS = new Set(["ls", "cat", "head", "tail", "wc", "pwd", "echo", "date", "whoami", "uname", "which", "file", "stat", "du", "df"]);
+/** Plain words only: no quotes, `$`, `~`, globs, redirection, pipes, or separators. */
+const SAFE_WORD = /^[A-Za-z0-9._,:@%+\/-]+$/;
+const SAFE_FLAG = /^--?[A-Za-z0-9-]+$/;
+
+/**
+ * True only for one simple command whose program is read-only and whose
+ * every operand really lives in scratch (relative to `cwd`, symlinks
+ * followed). Anything else needs the owner's click.
+ */
+export function isReadOnlyCommand(command: string, cwd?: string): boolean {
+  const dir = cwd ?? scratchDir();
+  if (isOutsideScratch(dir)) return false;
+  const words = command.trim().split(/[ \t]+/);
+  if (!READ_ONLY_PROGRAMS.has(words[0] ?? "")) return false;
+  return words.slice(1).every((word) =>
+    word.startsWith("-") ? SAFE_FLAG.test(word) : SAFE_WORD.test(word) && !isOutsideScratch(resolve(dir, word)));
 }
 
 interface SecretEnv {
@@ -142,8 +167,9 @@ function redact(text: string, secret: string): string {
 }
 
 export async function runBash(args: BashArgs): Promise<BashResult> {
-  const cwd = args.cwd ?? process.cwd();
-  mkdirSync(cwd, { recursive: true });
+  const cwd = args.cwd ?? scratchDir();
+  // Only scratch is ours to create; any other cwd must already exist.
+  if (!isOutsideScratch(cwd)) mkdirSync(cwd, { recursive: true });
   const timeoutMs = Math.min(args.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000);
   const startedAt = Date.now();
   const executable = bashExecutable();

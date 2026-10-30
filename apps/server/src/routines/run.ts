@@ -13,9 +13,11 @@ import { buildRoutinePrompt, parseRoutineState } from "./prompt";
 import { getRoutine, recordRun, updateRoutineState } from "../stores/routines";
 import { ROUTINE_LIMITS, type Routine, type RoutineRun } from "./types";
 
+// No read_file/grep/glob/mail_search: an unattended run must not read files or
+// search the mailbox for something to exfiltrate (bug.md C1, M16).
 export const ROUTINE_TOOL_ALLOWLIST = [
-  "memory_search", "transcript_search", "links_search", "tasks_list", "grep", "glob",
-  "read_file", "web_search", "web_fetch", "mail_search", "mail_read", "recall_fact",
+  "memory_search", "transcript_search", "links_search", "tasks_list",
+  "web_search", "web_fetch", "mail_read", "recall_fact",
   "skills_list", "skills_load", "skills_resource",
 ];
 

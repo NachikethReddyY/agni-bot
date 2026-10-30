@@ -17,11 +17,15 @@ never reason about thread ids.
 
 ## Envelope
 
-- One WebSocket per client: `GET /ws` (HTTP upgrade). No auth on upgrade; the
-  first frame must be `hello`.
+- One WebSocket per client: `GET /ws` (HTTP upgrade). The upgrade is refused
+  (403) when an `Origin` header names a non-loopback host other than
+  `AGNI_HOST`; native clients send no `Origin`. The first frame must be
+  `hello`; every other frame before auth gets `error {code:"unauthorized"}`.
 - Frames are JSON text. Client frames carry no sequence number. **Every**
   server frame carries `seq`: a positive, monotonically increasing integer
-  assigned by the server.
+  assigned by the server. Exception: `error` frames go only to the
+  connection that caused them and reuse the current `seq` without advancing
+  it, so they never take a replay slot.
 - A client that misses frames reconnects and sends `resync {lastSeq}`; the
   server replays every frame after `lastSeq`. If the gap is older than the
   bounded replay log, the client gets `error {code: "resync_gap"}` and reloads

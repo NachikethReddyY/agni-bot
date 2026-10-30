@@ -13,6 +13,7 @@ import { HealthTracker } from "../src/models/health";
 import type { ProviderConfig } from "../src/models/providers";
 import { Router } from "../src/models/router";
 import { startServer, type RunningServer } from "../src/ws/server";
+import { PERSONAS } from "../src/agent/personas";
 
 /**
  * End-to-end over a real socket: hello, a streamed turn against a stub
@@ -146,8 +147,11 @@ class TestClient {
 let client: TestClient | undefined;
 let server: RunningServer | undefined;
 let db: Database | undefined;
+// Bots created here join the process-wide roster; drop them so later files start clean.
+const INITIAL_ROSTER = PERSONAS.length;
 
 afterEach(() => {
+  PERSONAS.length = INITIAL_ROSTER;
   client?.close();
   client = undefined;
   server?.stop();
@@ -223,6 +227,9 @@ describe("websocket end-to-end", () => {
     client!.send({ type: "msg.send", channelId: "main", text: "run the privileged command" });
     await client!.next("msg.new", { match: (frame) => frame.fromType === "user" });
 
+    // run_privileged is not a known-free tool, so the owner approves it first.
+    const approval = await client!.next("approval.request", { timeoutMs: 5000 });
+    client!.send({ type: "approve.reply", requestID: approval.requestID, decision: "once" });
     const secretRequest = await client!.next("secret.request", { timeoutMs: 5000 });
     expect(secretRequest).toMatchObject({
       purpose: "prove the secret stays out",

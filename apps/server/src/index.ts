@@ -28,7 +28,7 @@ import {
   stopDaemon,
   tailLog,
 } from "./daemon";
-import { openDatabase } from "./db";
+import { openDatabase, openDatabaseForCLI } from "./db";
 import { seedAgentPromptTemplates, setOwnerName, loadRuntimeAgents } from "./agent/personas";
 import { setSlotBudgets } from "./context/compiler";
 import { JobRunner } from "./jobs/runner";
@@ -69,8 +69,10 @@ async function serve(): Promise<void> {
   if (restored > 0) log.info(`agents: restored ${restored} agent(s) created at runtime`);
   const router = new Router(config.providers, new HealthTracker(), fetch, config.maxConcurrentTurns);
 
-  const requeued = requeueStuckJobs(db);
-  if (requeued > 0) log.warn(`job queue: requeued ${requeued} job(s) a previous process left running`);
+  // A detached promise or callback that throws is a bug to log, not a reason
+  // to drop every open connection and running turn.
+  process.on("unhandledRejection", (reason) => log.error("unhandled rejection", reason));
+  process.on("uncaughtException", (error) => log.error("uncaught exception", error));
 
   let running: RunningServer;
   try {
@@ -82,6 +84,10 @@ async function serve(): Promise<void> {
     }
     throw error;
   }
+  // Only after the port is ours: a second `serve` that hit EADDRINUSE must
+  // not re-queue the live daemon's running jobs.
+  const requeued = requeueStuckJobs(db);
+  if (requeued > 0) log.warn(`job queue: requeued ${requeued} job(s) a previous process left running`);
 
   const settings = {
     firstTokenTimeoutMs: config.firstTokenTimeoutMs,
@@ -243,7 +249,7 @@ function printHealth(health: HealthReport | undefined, config: Config): void {
 async function jobCommand(args: string[]): Promise<void> {
   const [sub = "list", ...rest] = args;
   const config = loadConfig();
-  const db = openDatabase(config.dbPath);
+  const db = cliDatabase(config.dbPath);
 
   try {
     if (sub === "add") return jobAdd(db, rest);
@@ -394,7 +400,7 @@ function safePayload(payload: string | null): string {
 async function pair(args: string[]): Promise<void> {
   const name = flag(args, "--name") ?? args.find((arg) => !arg.startsWith("--")) ?? hostname();
   const config = loadConfig();
-  const db = openDatabase(config.dbPath);
+  const db = cliDatabase(config.dbPath);
   const { device, token } = await mintToken(db, name);
   console.log(`device: ${device.name} (${device.id})`);
   console.log(`token:  ${token}`);
@@ -414,7 +420,7 @@ function migrate(): void {
 
 function devices(): void {
   const config = loadConfig();
-  const db = openDatabase(config.dbPath);
+  const db = cliDatabase(config.dbPath);
   const rows = listDevices(db);
   if (rows.length === 0) console.log("no devices paired — run `bun run pair`");
   for (const device of rows) {
@@ -432,7 +438,7 @@ function revoke(args: string[]): void {
     process.exit(1);
   }
   const config = loadConfig();
-  const db = openDatabase(config.dbPath);
+  const db = cliDatabase(config.dbPath);
   const device = revokeDevice(db, target);
   if (!device) {
     console.error(`no device matching "${target}"`);
@@ -441,6 +447,16 @@ function revoke(args: string[]): void {
   }
   console.log(`revoked ${device.id} ("${device.name}")`);
   db.close();
+}
+
+/** CLI commands never migrate a database the daemon may hold open (M35). */
+function cliDatabase(path: string): ReturnType<typeof openDatabase> {
+  try {
+    return openDatabaseForCLI(path);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }
 
 // --- argument helpers --------------------------------------------------------
