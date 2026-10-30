@@ -581,6 +581,11 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
       // keeps it, the owner sees the tools' activity and the `say` updates.
       persistSession(db, threadID, turnID, "running", messages, summary, stepCount, tokenCount);
       let stepProgressed = false;
+      // Several read-only lookups in one step start together; the loop below
+      // still consumes them in order, so guards and message order are unchanged.
+      const started = startParallelReads(result.toolCalls, recentCalls, stepCount, DUPLICATE_WINDOW,
+        (call) => broker.requiresApproval(call.function.name, callArguments(call.function.arguments)),
+        (call) => executeTool(db, threadID, turnID, call, callableTools, registry, broker, controller.signal, run.emit, () => undefined, persona, guardrail, peerInput, run.allowedDomains));
       for (const call of result.toolCalls) {
         stepCount += 1;
         // Is this step the model going off road — reading the app's own
@@ -604,7 +609,7 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
           continue;
         }
         recentCalls.set(signature, stepCount);
-        const callResult = await executeTool(db, threadID, turnID, call, callableTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail, peerInput, run.allowedDomains);
+        const callResult = await (started.get(call.id) ?? executeTool(db, threadID, turnID, call, callableTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail, peerInput, run.allowedDomains));
         let content = callResult.content;
         if (looking && offRoadSteps === OFF_ROAD_NUDGE_AT && !offRoadNudged && !acted) {
           offRoadNudged = true;
@@ -810,6 +815,35 @@ function withNote(content: string, note: string): string {
     // A result that is not JSON still gets the note in front of it.
   }
   return `${note}\n${content}`;
+}
+
+/** Free, read-only tools whose calls in one step may run at the same time. */
+export const PARALLEL_READ_TOOLS = new Set([
+  "memory_search", "transcript_search", "recall_fact", "expand", "links_search", "tasks_list", "job_list",
+  "web_fetch", "web_search", "read_file", "grep", "glob", "delegate_wait", "task_status",
+]);
+
+/**
+ * Start a step's calls concurrently when there are several and every one is a
+ * free read. A call the duplicate guard will skip is not started. Anything
+ * else returns an empty map and the step runs in series as before.
+ */
+export function startParallelReads<T>(
+  calls: ToolCall[], recentCalls: ReadonlyMap<string, number>, stepCount: number, window: number,
+  gated: (call: ToolCall) => boolean, run: (call: ToolCall) => Promise<T>,
+): Map<string, Promise<T>> {
+  const started = new Map<string, Promise<T>>();
+  if (calls.length < 2 || !calls.every((call) => PARALLEL_READ_TOOLS.has(call.function.name) && !gated(call))) return started;
+  const seen = new Map(recentCalls);
+  calls.forEach((call, index) => {
+    const signature = `${call.function.name}:${call.function.arguments}`;
+    const step = stepCount + index + 1;
+    const last = seen.get(signature);
+    if (last !== undefined && step - last <= window) return;
+    seen.set(signature, step);
+    started.set(call.id, run(call));
+  });
+  return started;
 }
 
 async function executeTool(  db: Database, threadID: string, turnID: string, call: ToolCall, allowlist: string[],
