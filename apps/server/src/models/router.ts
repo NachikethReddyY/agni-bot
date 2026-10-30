@@ -46,8 +46,6 @@ export class MidStreamError extends Error {
  * provider would eat the turn budget before the next provider is tried.
  */
 const PROVIDER_RETRIES = 3;
-/** Base backoff between retries of the same provider (ms). */
-const RETRY_BACKOFF_MS = 2_000;
 
 export interface RouteOptions {
   messages: ChatMessage[];
@@ -89,6 +87,8 @@ export interface ProviderStatus {
 }
 
 export class Router {
+  /** Base backoff between retries of the same provider (ms). Tests set it to 0. */
+  static retryBackoffMs = 2_000;
   private activeRoutes = 0;
   private chatgpt?: ChatGPTAuth;
 
@@ -235,8 +235,8 @@ export class Router {
             log.info(`provider ${provider.id} attempt ${retry + 1} failed (${providerError.message}) — failing over`);
             break;
           }
-          log.info(`provider ${provider.id} attempt ${retry + 1}/${PROVIDER_RETRIES} failed (${providerError.message}) — retry in ${RETRY_BACKOFF_MS}ms`);
-          await sleep(RETRY_BACKOFF_MS, options.signal);
+          log.info(`provider ${provider.id} attempt ${retry + 1}/${PROVIDER_RETRIES} failed (${providerError.message}) — retry in ${Router.retryBackoffMs}ms`);
+          await sleep(Router.retryBackoffMs, options.signal);
           if (options.signal?.aborted) throw new ProviderError("cancelled", { kind: "aborted" });
         }
       }

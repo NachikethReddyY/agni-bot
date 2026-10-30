@@ -23,6 +23,8 @@ export interface Config {
   jobPollMs: number;
   /** Maximum simultaneous model streams across chat and background turns. */
   maxConcurrentTurns: number;
+  /** How long a burst of chat messages is merged before its turn starts. Default 800. */
+  messageBatchMs?: number;
   /** IANA zone schedules ("09:05") are read in. AGNI_TZ, else the server's zone. */
   timeZone?: string;
   /** Where `db.backup` writes daily copies, and how many it keeps. */
