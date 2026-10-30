@@ -775,6 +775,7 @@ async function runUserMessage(
     turnTimeoutMs: deps.config.turnTimeoutMs,
     // Mailboxes the owner connected in Settings → Plugins.
     mailAccounts: pluginMailResolver(deps.config.pluginsPath),
+    pluginsPath: deps.config.pluginsPath,
   };
   const turn = runTaskTurn(deps.db, deps.router, turnSettings, {
     attachmentIDs: attachments.map((file) => file.id),

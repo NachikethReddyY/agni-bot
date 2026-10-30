@@ -102,7 +102,7 @@ describe("plugin catalog", () => {
     expect(gmailAgent.available).toBe(true);
     expect(gmailAgent.status).toBeUndefined();
     const granola = rows.find((row) => row.id === "granola")!;
-    expect(granola.available).toBe(false);
+    expect(granola.available).toBe(true);
     expect(granola.authKind).toBe("mcp");
   });
 });
@@ -204,10 +204,10 @@ describe("plugin connect flow", () => {
     expect(getConnectionFor(db, "calendar", "agent")!.status).toBe("pending");
   });
 
-  test("MCP plugins are listed but not connectable yet", () => {
+  test("MCP plugins need a valid server URL to connect", () => {
     const { service } = harness();
-    const result = service.connect("granola", "owner");
-    expect(result.error?.code).toBe("plugin_unavailable");
+    const result = service.configure("granola", "owner", { url: "not a url" });
+    expect(result.error?.code).toBe("plugin_not_configured");
   });
 
   test("unknown plugin accounts refuse cleanly", () => {

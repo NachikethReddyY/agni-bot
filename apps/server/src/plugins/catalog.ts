@@ -28,8 +28,10 @@ export interface PluginManifest {
   category: "google" | "mcp";
   description: string;
   authKind: "oauth" | "mcp" | "app-password" | "api-key";
-  /** Tool names this plugin contributes once connected (PS3+). */
+  /** Registered tool names this plugin contributes once connected (`mcp_<id>_*` for MCP servers). */
   toolNames: string[];
+  /** MCP plugins: the default streamable-HTTP endpoint. */
+  mcpUrl?: string;
   roles: PluginRole[];
 }
 
@@ -52,7 +54,7 @@ export const CATALOG: PluginManifest[] = [
     category: "google",
     description: "Search, read, draft, send and label mail — Agni's own mailbox. Uses an app password (2FA required on the account) so no Google verification is needed.",
     authKind: "app-password",
-    toolNames: ["mail.search", "mail.read", "mail.draft", "mail.send", "mail.labels"],
+    toolNames: ["mail_search", "mail_read", "mail_send"],
     roles: [
       {
         account: "agent",
@@ -67,7 +69,7 @@ export const CATALOG: PluginManifest[] = [
     category: "google",
     description: "Search and read your mail, draft replies; sends always ask first. App password on your account.",
     authKind: "app-password",
-    toolNames: ["mail.search", "mail.read", "mail.draft"],
+    toolNames: ["mail_search", "mail_read", "mail_send"],
     roles: [
       {
         account: "owner",
@@ -82,7 +84,7 @@ export const CATALOG: PluginManifest[] = [
     category: "google",
     description: "Search, create and invite on Agni's own calendar — scheduling it wants to do is its own to do.",
     authKind: "oauth",
-    toolNames: ["calendar.search", "calendar.create", "calendar.invite"],
+    toolNames: ["calendar_list", "calendar_create", "calendar_update"],
     roles: [
       {
         account: "agent",
@@ -97,7 +99,7 @@ export const CATALOG: PluginManifest[] = [
     category: "google",
     description: "Search your calendar any time; creating events and inviting people asks first.",
     authKind: "oauth",
-    toolNames: ["calendar.search", "calendar.create", "calendar.invite"],
+    toolNames: ["calendar_list", "calendar_create", "calendar_update"],
     roles: [
       {
         account: "owner",
@@ -112,7 +114,7 @@ export const CATALOG: PluginManifest[] = [
     category: "google",
     description: "Search and read your files; creating new files is allowed, sharing existing files asks first. Uses sensitive scopes only — no Google verification needed.",
     authKind: "oauth",
-    toolNames: ["drive.search", "drive.read", "drive.create", "drive.share"],
+    toolNames: ["drive_search", "drive_read"],
     roles: [
       {
         account: "owner",
@@ -127,7 +129,7 @@ export const CATALOG: PluginManifest[] = [
     category: "mcp",
     description: "Meeting notes, transcripts and action items via the official Granola MCP server. Read-only by design: the doing happens through the other plugins.",
     authKind: "mcp",
-    toolNames: ["granola.search", "granola.read"],
+    toolNames: ["mcp_granola_*"], mcpUrl: "https://mcp.granola.ai/mcp",
     roles: [
       {
         account: "owner",
@@ -157,7 +159,7 @@ export const CATALOG: PluginManifest[] = [
     category: "mcp",
     description: "Search, read and write pages and databases via the official Notion MCP server, plus the Notion skills bundle.",
     authKind: "mcp",
-    toolNames: ["notion.search", "notion.read", "notion.write"],
+    toolNames: ["mcp_notion_*"], mcpUrl: "https://mcp.notion.com/mcp",
     roles: [
       {
         account: "owner",
