@@ -57,7 +57,7 @@ Owner decisions:
   `task-registry.ts`, `dispatch.ts`) are edited **only by Wave 3**.
 - After each wave, Haiku runs `bun run typecheck` and
   `bun test apps/server packages/protocol`. After Wave 4 also
-  `pnpm --filter @agni/web test` and `pnpm --filter @agni/client test`. Do
+  `bun run test:web` (client and web Vitest). Do
   not start the next wave on red.
 - Commit per wave, Conventional Commits, body wrapped at 72, ending with the
   Co-Authored-By line from the session.
@@ -283,7 +283,7 @@ Telegram/Discord, shell pre-flight, USD budgets, kernel sandbox).
 
 - [ ] `bun run typecheck` clean.
 - [ ] `bun test apps/server packages/protocol` green, including `jobs-registry.test.ts`.
-- [ ] `pnpm --filter @agni/web test` and `pnpm --filter @agni/client test` green.
+- [ ] `bun run test:web` (client and web Vitest) green.
 - [ ] Test: unchanged hash → `skipped_no_delta`, router call count 0, nothing posted to the conversation.
 - [ ] Test: changed hash → model called once, `stateContext` saved, streak 1.
 - [ ] Test: `maxExecutionMs` abort → `timed_out`, prior state kept.

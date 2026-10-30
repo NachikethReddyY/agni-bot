@@ -1022,4 +1022,15 @@ export const MIGRATIONS: Migration[] = [
       CREATE UNIQUE INDEX harness_proposals_subject ON harness_proposals(kind, subject);
     `,
   },
+  {
+    id: 45,
+    name: "pair_codes",
+    sql: `
+      -- One-time browser pairing codes from \`agni open\` / \`agni pair --code\`.
+      CREATE TABLE pair_codes (
+        code_hash TEXT PRIMARY KEY,       -- SHA-256 of the code; the code itself is never stored
+        expires_at TEXT NOT NULL
+      );
+    `,
+  },
 ];

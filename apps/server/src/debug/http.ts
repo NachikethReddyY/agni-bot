@@ -7,7 +7,7 @@
  * Owner-only: every route needs a paired device token, like /attachments.
  */
 import type { Database } from "bun:sqlite";
-import { verifyToken } from "../auth/tokens";
+import { requestToken, verifyToken } from "../auth/tokens";
 import type { Config } from "../config";
 import type { Router } from "../models/router";
 import { dayTotals } from "../stores/usage";
@@ -34,7 +34,7 @@ export async function debugRequest(request: Request, db: Database, router: Route
   const reply = (data: unknown, status = 200) => Response.json(data, { status, headers });
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
   if (request.method !== "GET") return reply({ error: "Read-only." }, 405);
-  const token = /^Bearer (.+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
+  const token = requestToken(request);
   if (!token || !(await verifyToken(db, token))) return reply({ error: "Pair this device first." }, 401);
 
   const url = new URL(request.url);

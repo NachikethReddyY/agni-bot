@@ -2,4 +2,4 @@ name = "agni-site"
 compatibility_date = "2025-10-17"
 
 [assets]
-directory = "./public"
+directory = "../apps/public"

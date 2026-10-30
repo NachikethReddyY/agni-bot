@@ -1,5 +1,4 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { homePath } from "./home";
 import { loadProviders, type ProviderConfig } from "./models/providers";
 import { DEFAULT_SLOT_BUDGETS, type SlotBudgets } from "./context/compiler";
 
@@ -31,6 +30,8 @@ export interface Config {
   /** Where `db.backup` writes daily copies, and how many it keeps. */
   backupDir?: string;
   backupKeep?: number;
+  /** The https origin a proxy serves the daemon on (AGNI_PUBLIC_ORIGIN), allowed like loopback. */
+  publicOrigin?: string;
   /** Path to plugins.json (plugin auth + activation state). */
   pluginsPath: string;
   /** Optional first name for first-run onboarding; never inferred from secrets. */
@@ -85,9 +86,9 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): C
   return {
     host: env.AGNI_HOST?.trim() || "127.0.0.1",
     port: int(env, "AGNI_PORT", 8787),
-    dbPath: env.AGNI_DB_PATH?.trim() || join(homedir(), ".agni", "agni.sqlite"),
-    pidPath: env.AGNI_PID_PATH?.trim() || join(homedir(), ".agni", "agni.pid"),
-    logPath: env.AGNI_LOG_PATH?.trim() || join(homedir(), ".agni", "agni.log"),
+    dbPath: env.AGNI_DB_PATH?.trim() || homePath("data", "agni.sqlite"),
+    pidPath: env.AGNI_PID_PATH?.trim() || homePath("run", "agni.pid"),
+    logPath: env.AGNI_LOG_PATH?.trim() || homePath("logs", "agni.log"),
     providers: loadProviders(env),
     firstTokenTimeoutMs: int(env, "AGNI_FIRST_TOKEN_TIMEOUT_MS", 30000),
     turnTimeoutMs: int(env, "AGNI_TURN_TIMEOUT_MS", 120000),
@@ -98,7 +99,8 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): C
     timeZone: resolveTimeZone(env),
     backupDir: env.AGNI_BACKUP_DIR?.trim() || undefined,
     backupKeep: int(env, "AGNI_BACKUP_KEEP", 7),
-    pluginsPath: env.AGNI_PLUGINS_PATH?.trim() || join(homedir(), ".agni", "plugins.json"),
+    publicOrigin: env.AGNI_PUBLIC_ORIGIN?.trim() || undefined,
+    pluginsPath: env.AGNI_PLUGINS_PATH?.trim() || homePath("plugins.json"),
     userFirstName: env.AGNI_USER_FIRST_NAME?.trim() || undefined,
     slotBudgets: slotBudgets(env),
     minRecallScore: float(env, "AGNI_MIN_RECALL_SCORE", 0.15),

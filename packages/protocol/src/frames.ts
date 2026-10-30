@@ -348,7 +348,8 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("hello"),
     v: z.number().int(),
-    token: z.string().min(1),
+    // Optional: a browser paired by cookie authenticates at the socket upgrade.
+    token: z.string().min(1).optional(),
     device: z.string().min(1),
   }),
   z.object({ type: z.literal("resync"), lastSeq: z.number().int().nonnegative() }),

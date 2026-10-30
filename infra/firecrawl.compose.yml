@@ -5,7 +5,7 @@
 #
 # Usage:
 #   git clone --depth 1 https://github.com/mendableai/firecrawl.git apps/firecrawl
-#   docker compose -f docker-compose.firecrawl.yml up -d
+#   docker compose -f infra/firecrawl.compose.yml up -d
 #   # → Firecrawl API on http://localhost:3002
 #   # → set AGNI_FIRECRAWL_URL=http://localhost:3002 in .env, restart daemon
 

@@ -10,7 +10,7 @@
  */
 import type { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homePath } from "../home";
 import { dirname, join, resolve } from "node:path";
 import { canonicalAgentID } from "../agent/personas";
 import { getConversation } from "../stores/conversations";
@@ -24,7 +24,7 @@ import { renderShareHTML, type ShareDocument, type ShareRecord } from "./render"
 export function shareDir(): string {
   const configured = process.env.AGNI_SHARE_DIR?.trim();
   if (configured) return resolve(configured);
-  const dbPath = process.env.AGNI_DB_PATH?.trim() || join(homedir(), ".agni", "agni.sqlite");
+  const dbPath = process.env.AGNI_DB_PATH?.trim() || homePath("data", "agni.sqlite");
   return resolve(dirname(dbPath), "share");
 }
 

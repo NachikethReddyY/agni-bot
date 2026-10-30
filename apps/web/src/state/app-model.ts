@@ -16,6 +16,7 @@ import {
   healthURL,
   isKnownFrame,
   isReady,
+  pageOrigin,
   websocketURL,
   type AgentInfo,
   type ApprovalRow,
@@ -65,6 +66,8 @@ export interface AppSnapshot {
   settings: ServerSettings;
   secretKind: SecretStoreKind | null;
   tokenIsStored: boolean;
+  /** Paired by the daemon's HttpOnly session cookie, not a stored token. */
+  cookieSession: boolean;
   isCheckingServer: boolean;
   isPairing: boolean;
   pairingError: string | null;
@@ -197,6 +200,7 @@ export class AppModel {
   private settings: ServerSettings;
   private secretKind: SecretStoreKind | null = null;
   private tokenIsStored = false;
+  private cookieSession = false;
   private isCheckingServer = false;
   private isPairing = false;
   private pairingError: string | null = null;
@@ -315,6 +319,7 @@ export class AppModel {
       settings: this.settings,
       secretKind: this.secretKind,
       tokenIsStored: this.tokenIsStored,
+      cookieSession: this.cookieSession,
       isCheckingServer: this.isCheckingServer,
       isPairing: this.isPairing,
       pairingError: this.pairingError,
@@ -379,10 +384,79 @@ export class AppModel {
     if (this.started) return;
     this.started = true;
     this.notifier.request();
+    if (!this.canConnect && pageOrigin()) {
+      void this.resumeCookieSession();
+      return;
+    }
     this.screen = this.canConnect ? "chat" : "pairing";
     if (this.canConnect && typeof window !== "undefined" && window.location.pathname === "/") this.navigatePath(agentPath(this.agent));
     this.publish();
     if (this.canConnect) this.connect();
+  }
+
+  /** Served by the daemon: spend a `#code=` from `agni open`, then reuse the session cookie. */
+  private async resumeCookieSession(): Promise<void> {
+    this.isCheckingServer = true;
+    this.publish();
+    try {
+      const code = new URLSearchParams(window.location.hash.slice(1)).get("code");
+      if (code) {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+        await this.postPairCode(code, this.settings.deviceName).catch((error: unknown) => {
+          this.pairingError = error instanceof Error ? error.message : String(error);
+        });
+      }
+      const response = await fetch("/auth/session", { cache: "no-store" });
+      const session = (await response.json()) as { paired?: boolean };
+      if (session.paired) this.enterCookieSession();
+    } catch {
+      // No daemon behind this page (static hosting): the token form still works.
+    } finally {
+      this.isCheckingServer = false;
+      this.publish();
+    }
+  }
+
+  private async postPairCode(code: string, deviceName: string): Promise<void> {
+    const response = await fetch("/auth/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, name: deviceName }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(body?.error ?? `Pairing failed (${response.status}).`);
+    }
+  }
+
+  private enterCookieSession(): void {
+    this.cookieSession = true;
+    this.pairingError = null;
+    this.settings = { ...this.settings, url: pageOrigin() ?? this.settings.url };
+    this.settingsStore.save(this.settings);
+    this.screen = "chat";
+    if (typeof window !== "undefined" && window.location.pathname === "/") this.navigatePath(agentPath(this.agent));
+    this.connect();
+  }
+
+  /** The pairing view's code form. */
+  pairWithCode(code: string, device: string): void {
+    void (async () => {
+      const name = device.trim() || "This Browser";
+      this.pairingError = null;
+      this.isCheckingServer = true;
+      this.publish();
+      try {
+        await this.postPairCode(code, name);
+        this.settings = { ...this.settings, deviceName: name };
+        this.enterCookieSession();
+      } catch (error) {
+        this.pairingError = error instanceof Error ? error.message : String(error);
+      } finally {
+        this.isCheckingServer = false;
+        this.publish();
+      }
+    })();
   }
 
   private onLocationChange = (): void => { this.applyLocationRoute(true); };
@@ -420,7 +494,7 @@ export class AppModel {
   }
 
   get canConnect(): boolean {
-    return this.token.length > 0 && websocketURL(this.settings) !== null;
+    return (this.token.length > 0 || this.cookieSession) && websocketURL(this.settings) !== null;
   }
 
   get agent(): AgentInfo | null {
@@ -499,7 +573,7 @@ export class AppModel {
   }
 
   cancelConnectionEdit(): void {
-    if (!this.tokenIsStored) return;
+    if (!this.tokenIsStored && !this.cookieSession) return;
     this.pendingPairing = null;
     this.isPairing = false;
     this.connection?.stop();
@@ -515,6 +589,8 @@ export class AppModel {
     this.chatgptError = null;
     this.disconnect();
     SecretStore.clear();
+    if (this.cookieSession) void fetch("/auth/logout", { method: "POST" }).catch(() => undefined);
+    this.cookieSession = false;
     this.token = "";
     this.tokenIsStored = false;
     this.secretKind = null;
@@ -536,7 +612,7 @@ export class AppModel {
   private connect(targetSettings?: ServerSettings, targetToken?: string): void {
     const settings = { ...(targetSettings ?? this.settings) };
     const token = targetToken ?? this.token;
-    if (token.length === 0 || !websocketURL(settings)) return;
+    if ((token.length === 0 && !this.cookieSession) || !websocketURL(settings)) return;
     this.connection?.stop();
     const next = new AgniConnection({
       settings,
@@ -836,10 +912,11 @@ export class AppModel {
 
   private async attachmentRequest(path: string, init: RequestInit = {}): Promise<Response> {
     const base = healthURL(this.settings);
-    if (!base || !this.token) throw new Error("Connect to the server first.");
+    if (!base || (!this.token && !this.cookieSession)) throw new Error("Connect to the server first.");
+    // Cookie mode: same origin, so the browser sends the session cookie itself.
     const response = await fetch(new URL(path, base), {
       ...init,
-      headers: { ...init.headers, Authorization: `Bearer ${this.token}` },
+      headers: this.token ? { ...init.headers, Authorization: `Bearer ${this.token}` } : init.headers,
       signal: init.signal ?? AbortSignal.timeout(30_000),
     });
     if (!response.ok) {

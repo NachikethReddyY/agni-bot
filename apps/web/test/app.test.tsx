@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { SecretStore, type FrameTransport, type HealthReport } from "@agni/client";
 import { AppModel } from "../src/state/app-model";
@@ -41,6 +41,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
+  window.history.replaceState(null, "", "/");
   localStorage.clear();
   SecretStore.memoryToken = null;
 });
@@ -88,8 +90,35 @@ describe("web shell", () => {
     renderApp(model);
 
     expect(screen.getByRole("heading", { name: "Connect to Agni" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Agni server address")).toHaveValue("127.0.0.1:8787");
+    expect(screen.getByLabelText("Pairing code")).toBeInTheDocument();
+    // The token fallback defaults to the page's own origin (the daemon serves the app).
+    expect(screen.getByLabelText("Agni server address")).toHaveValue(window.location.origin);
     expect(screen.getByPlaceholderText("Paste the token shown by the command")).toBeInTheDocument();
+  });
+
+  it("pairs from #code= in the URL and connects with the session cookie", async () => {
+    window.history.replaceState(null, "", "/#code=ABCD-EFGH");
+    const calls: { url: string; body?: unknown }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      calls.push({ url, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+      return Response.json({ paired: true, deviceName: "Test" });
+    });
+    const sent: string[] = [];
+    const model = new AppModel({
+      makeTransport: () => ({ ...idleTransport(), open: async () => undefined, send: async (text) => void sent.push(text) }),
+      healthFetch: async () => health,
+      notifier: silentNotifications,
+      healthPollMs: 0,
+    });
+    model.start();
+
+    await vi.waitFor(() => expect(model.getSnapshot().screen).toBe("chat"));
+    expect(calls.map((call) => call.url)).toEqual(["/auth/pair", "/auth/session"]);
+    expect(calls[0]?.body).toMatchObject({ code: "ABCD-EFGH" });
+    expect(window.location.hash).toBe("");
+    expect(model.getSnapshot().cookieSession).toBe(true);
+    await vi.waitFor(() => expect(sent.length).toBeGreaterThan(0));
+    expect(JSON.parse(sent[0]!)).not.toHaveProperty("token");
   });
 
   it("shows the chat shell when a token is stored", () => {

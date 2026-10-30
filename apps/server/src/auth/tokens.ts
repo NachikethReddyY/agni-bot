@@ -76,3 +76,44 @@ export function listDevices(db: Database): Device[] {
     )
     .all();
 }
+
+// --- browser sessions --------------------------------------------------------
+
+/** The HttpOnly cookie a paired browser carries; its value is a device token. */
+export const SESSION_COOKIE = "agni_session";
+
+/** A device token from `Authorization: Bearer` (Mac, CLI) or the session cookie (browser). */
+export function requestToken(request: Request): string | undefined {
+  const bearer = /^Bearer (.+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
+  if (bearer) return bearer;
+  for (const part of (request.headers.get("cookie") ?? "").split(";")) {
+    const [name, ...value] = part.trim().split("=");
+    if (name === SESSION_COOKIE && value.length > 0) return decodeURIComponent(value.join("="));
+  }
+  return undefined;
+}
+
+// 32 symbols, no 0/O/1/I: a byte % 32 is unbiased and the code is easy to type.
+const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+export const PAIR_CODE_TTL_MS = 10 * 60_000;
+
+/** A one-time pairing code, shown as `ABCD-EFGH`. Only its hash is stored. */
+export async function mintPairCode(db: Database, ttlMs = PAIR_CODE_TTL_MS): Promise<string> {
+  const raw = Array.from(crypto.getRandomValues(new Uint8Array(8)), (byte) => CODE_ALPHABET[byte % 32]).join("");
+  db.run("DELETE FROM pair_codes WHERE expires_at < ?", [nowISO()]);
+  db.run("INSERT INTO pair_codes (code_hash, expires_at) VALUES (?, ?)", [
+    await hashToken(raw),
+    new Date(Date.now() + ttlMs).toISOString(),
+  ]);
+  return `${raw.slice(0, 4)}-${raw.slice(4)}`;
+}
+
+/** Spend a pairing code: true once, while it is unexpired; false ever after. */
+export async function redeemPairCode(db: Database, code: string): Promise<boolean> {
+  const normalized = code.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (normalized.length !== 8) return false;
+  const row = db
+    .query<{ expires_at: string }, [string]>("DELETE FROM pair_codes WHERE code_hash = ? RETURNING expires_at")
+    .get(await hashToken(normalized));
+  return row !== null && row.expires_at > nowISO();
+}
