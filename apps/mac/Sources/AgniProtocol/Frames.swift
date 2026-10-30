@@ -794,6 +794,7 @@ public enum ServerFrame: Sendable, Equatable {
     public var body: String
     public var sound: Bool?
     public var threadID: String?
+    public var agentId: String?
   }
 
   public struct AgentsUpdate: Sendable, Equatable, Decodable {

@@ -178,7 +178,7 @@ export const RoutineInfoSchema = z.object({
   cron: z.string(),
   timezone: z.string(),
   misfire: z.enum(["skip", "run_once"]),
-  preflight: z.enum(["http", "sql", "none"]),
+  preflight: z.enum(["http", "sql", "mail", "none"]),
   maxTokens: z.number().int().positive(),
   maxExecutionMs: z.number().int().positive(),
   allowedDomains: z.array(z.string()),
@@ -575,6 +575,31 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
     requestID: z.string().min(1),
     answer: z.string().min(1).max(4_000),
   }),
+  /**
+   * Phase 2 (proactive delivery), client side. Additive: no version bump.
+   * `push.subscribe` stores this device's Web Push subscription; `push.vapid.get`
+   * asks for the public key to subscribe with (answer: `push.vapid`);
+   * `agent.proactivity` sets a bot's quiet hours / daily cap and is always
+   * answered with the current values (send it with no fields to read them).
+   */
+  z.object({
+    type: z.literal("push.subscribe"),
+    subscription: z.object({
+      endpoint: z.string().url().max(2_048),
+      keys: z.object({ p256dh: z.string().min(1).max(256), auth: z.string().min(1).max(64) }),
+    }),
+  }),
+  z.object({ type: z.literal("push.unsubscribe"), endpoint: z.string().min(1).max(2_048) }),
+  z.object({ type: z.literal("push.vapid.get") }),
+  z.object({
+    type: z.literal("agent.proactivity"),
+    agentId: z.string().min(1),
+    /** "HH:MM" in the server's time zone; null clears quiet hours. Both or neither. */
+    quietStart: z.string().regex(/^\d{1,2}:\d{2}$/).nullable().optional(),
+    quietEnd: z.string().regex(/^\d{1,2}:\d{2}$/).nullable().optional(),
+    /** Max unprompted pushes per local day; null removes the cap. */
+    maxPerDay: z.number().int().min(0).max(1_000).nullable().optional(),
+  }),
 ]);
 export type ClientFrame = z.infer<typeof ClientFrameSchema>;
 export type ClientFrameType = ClientFrame["type"];
@@ -673,7 +698,7 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
       })
       .optional(),
   }),
-  z.object({ type: z.literal("notify"), seq, title: z.string(), body: z.string(), sound: z.boolean().optional(), threadID: z.string().optional() }),
+  z.object({ type: z.literal("notify"), seq, title: z.string(), body: z.string(), sound: z.boolean().optional(), threadID: z.string().optional(), agentId: z.string().optional() }),
   z.object({
     type: z.literal("agents.update"),
     seq,
@@ -833,6 +858,17 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     visibility: z.enum(["private", "summary", "shared"]).optional(),
   }),
   z.object({ type: z.literal("error"), seq, code: z.string(), message: z.string(), retryAfter: z.number().optional() }),
+  /** Phase 2 (additive): the VAPID public key a client subscribes to Web Push with. */
+  z.object({ type: z.literal("push.vapid"), seq, publicKey: z.string() }),
+  /** Phase 2 (additive): a bot's proactivity settings (reply to `agent.proactivity`). */
+  z.object({
+    type: z.literal("agent.proactivity"),
+    seq,
+    agentId: z.string(),
+    quietStart: z.string().nullable(),
+    quietEnd: z.string().nullable(),
+    maxPerDay: z.number().int().nullable(),
+  }),
 ]);
 export type ServerFrame = z.infer<typeof ServerFrameSchema>;
 export type ServerFrameType = ServerFrame["type"];

@@ -51,7 +51,7 @@ export function registerSayTool(registry: ToolRegistry, deps: SayDeps): void {
       if (!deps.channelID) {
         // The CLI has no channel surface; a notify still shows the update
         // immediately instead of hiding it until history is reloaded.
-        deps.emit({ type: "notify", title: deps.persona.name, body: text, sound: false });
+        deps.emit({ type: "notify", title: deps.persona.name, body: text, sound: false, agentId: deps.persona.id });
         return { delivered: true, messageID: message.id, channel: false };
       }
       const agent = deps.db.query<{ display_name: string; avatar_color: string }, [string]>(

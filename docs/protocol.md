@@ -50,6 +50,10 @@ never reason about thread ids.
 | `agent.rename` | `{agentId, name}` | Renames an agent and completes primary-agent onboarding. |
 | `agent.profile` | `{agentId, role?, visibility?}` | Edits an agent's profile from the app: `role` is the tag the roster shows ("chief of staff"), `visibility` is what other agents may see of its work (`private \| summary \| shared`). At least one field is required. The answer is an `agent.updated` carrying the new `role` and `visibility`; the same change the `update_agent` chat tool makes, so the two cannot drift apart. |
 | `agent.create` | `{name, prompt, role?, id?, color?}` | Creates an agent from the app's roster — the "+" button. `prompt` is its system prompt, `role` its tag. The same creation the `create_agent` chat tool performs, so a bot made here and a bot made in chat are the same kind of thing; the roster comes back in an `agents.update`. |
+| `push.subscribe` | `{subscription: {endpoint, keys: {p256dh, auth}}}` | Stores this device's Web Push subscription (replacing any for the same endpoint). The server pushes a `notify` there only when no authed socket is connected. APNs for the Mac app is not built. |
+| `push.unsubscribe` | `{endpoint}` | Drops that subscription. |
+| `push.vapid.get` | `{}` | Asks for the VAPID public key; answer: `push.vapid`. |
+| `agent.proactivity` | `{agentId, quietStart?, quietEnd?, maxPerDay?}` | Per-bot quiet hours (`"HH:MM"`, server time zone; both or neither, `null` clears) and a cap on unprompted pushes per local day (`null` removes it). Held messages still land in the transcript; only the push and sound are held. Always answered with the current values as `agent.proactivity`, so an empty set reads them. |
 | `form.answer` | `{requestID, answer}` | The owner answered a question the agent asked — the option they chose, or their own words if they typed instead of choosing. The answer lands on the `forms` row and the turn waiting on it carries on with it. |
 | `msg.cancel` | `{turnID}` | Interrupts the turn: providers abort, partial output is kept. |
 | `approve.reply` | `{requestID, decision}` | `decision`: `once \| always \| reject`. |
@@ -128,7 +132,7 @@ accountLabel?, error?, connectedAt?}`.
 | `secret.request` | `{requestID, purpose, command, kind, expiresAt, threadID?, conversationID?}` | A command needs the owner's password. The frame carries no secret; the owner types it into a secure field. Replayable on reconnect; expires after two minutes. |
 | `secret.cancel` | `{requestID, reason}` | The prompt was resolved, expired, cancelled, or its turn stopped. Replayable. |
 | `form.request` | `{requestID, question, options?, multiple?, kind?, email?}` | A question the agent put to the owner. `kind` is `choice` (a list of options) or `email` (a draft to approve: `email` carries `from`, `to`, `subject`, `body`). `multiple` means more than one option may be chosen. The owner answers on the `form.answer` frame — or types instead of choosing, which dismisses the question and steers the work with their message. |
-| `notify` | `{title, body, sound?, threadID?}` | Push-worthy event; Mac opens the referenced thread when clicked. |
+| `notify` | `{title, body, sound?, threadID?, agentId?}` | Push-worthy event; Mac opens the referenced thread when clicked. |
 | `agents.update` | `{agents: [{id, name, color?, model?, role?, tools?, onboarded?, visibility?}]}` | Roster snapshot. `onboarded` is set once the agent has been named, which settles the "what should I call you?" prompt. `role` is what the agent is for, in the owner's words ("inbox manager"). `visibility` is what other agents may see of that agent's work: `private` (a receipt only), `summary` (one line) or `shared` (full text). |
 | `thread.list.ok` | `{threads: [{id, agentID, title?, updatedAt}]}` | Answer to `thread.list`; addressed to the requester. |
 | `thread.history.ok` | `{threadID, title?, messages: [{id, role, text, createdAt, turnID?}]}` | Answer to `thread.history`; addressed to the requester. |
@@ -152,6 +156,8 @@ accountLabel?, error?, connectedAt?}`.
 | `status.update` | `{channelId, agentId?, text, transient}` | Activity text; transient updates clear on the next message. |
 | `msg.new` | `{id, channelId, fromType, fromId, senderName, senderColor?, text, internal, uiHint?, intent?, toAgentId?, taskId?, questionId?, createdAt}` | Durable channel message; `uiHint` can be `onboarding_name_prompt`, `handoff_notice`, `progress`, `needs_input`, or `normal`. `intent` says what an agent-to-agent message is for (`request`, `result`, `question`, `status`, `fyi`); it is absent on ordinary messages. The live frame for a handoff notice always carries one, defaulting to `request`; a notice reloaded from history has none, because channel rows do not store intent. `toAgentId` names the agent a handoff notice is about, so the client can render the name as a link to that agent's chat. `taskId` + `questionId` mark a question from a delegated task: the client renders an answer field that sends `task.answer`. |
 | `agent.updated` | `{agentId, displayName, onboarded, role?, visibility?}` | Agent rename/onboarding state changed. `role` and `visibility` are present when the change touched them (an `agent.profile` edit). |
+| `push.vapid` | `{publicKey}` | Answer to `push.vapid.get`: the base64url VAPID public key for `pushManager.subscribe`. |
+| `agent.proactivity` | `{agentId, quietStart, quietEnd, maxPerDay}` | A bot's proactivity settings (answer to the client frame of the same name). |
 | `error` | `{code, message, retryAfter?}` | See codes below. |
 
 A task turn speaks in messages, not one growing reply: each completed assistant

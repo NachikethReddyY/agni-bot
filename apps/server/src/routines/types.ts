@@ -9,6 +9,7 @@ export type MisfirePolicy = "skip" | "run_once";
 export type Preflight =
   | { kind: "http"; url: string } // compares ETag, else status + body hash
   | { kind: "sql"; query: string } // read-only SELECT on the Agni DB
+  | { kind: "mail"; account: "agent" | "owner" } // changed when a newer unseen message arrived
   | { kind: "none" }; // always counts as changed
 
 export type RunOutcome =

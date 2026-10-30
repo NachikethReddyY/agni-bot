@@ -121,7 +121,7 @@ async function serve(): Promise<void> {
     mailAccounts: pluginMailResolver(config.pluginsPath),
     pluginsPath: config.pluginsPath,
   };
-  const runner = new JobRunner(db, running.emit, { pollMs: config.jobPollMs });
+  const runner = new JobRunner(db, running.emit, { pollMs: config.jobPollMs, concurrency: config.jobConcurrency });
   // Every job kind, in one place: a kind that is enqueued but never
   // registered is a job that silently fails.
   registerAllJobs(runner, {

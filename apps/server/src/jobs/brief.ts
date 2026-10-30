@@ -41,7 +41,7 @@ export function registerBriefJob(runner: JobRunner, deps: { db: Database; emit: 
     })();
     if (!outcome.created) return { result: `brief for ${dateKey} already exists`, nextRunAt: nextBriefRunAt(new Date(), timeZone) };
     deps.db.run("UPDATE brief_runs SET notification_sent=1 WHERE local_date=?", [dateKey]);
-    deps.emit({ type: "notify", title: "Agni · morning brief", body: `Morning brief for ${dateKey} is ready. ${outcome.taskCount} open task(s).`, sound: false, threadID: outcome.threadID });
+    deps.emit({ type: "notify", title: "Agni · morning brief", body: `Morning brief for ${dateKey} is ready. ${outcome.taskCount} open task(s).`, sound: false, threadID: outcome.threadID, agentId: defaultPersona().id });
     return { result: `brief ${dateKey} saved in thread ${outcome.threadID}`, nextRunAt: nextBriefRunAt(new Date(), timeZone) };
   }, { nextRun: () => nextBriefRunAt(new Date(), timeZone) });
 }

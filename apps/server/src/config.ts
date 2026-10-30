@@ -21,6 +21,8 @@ export interface Config {
   frameLogCapacity: number;
   /** How often the job runner looks for due work. */
   jobPollMs: number;
+  /** Background jobs that may run at once (AGNI_JOB_CONCURRENCY, default 2). */
+  jobConcurrency?: number;
   /** Maximum simultaneous model streams across chat and background turns. */
   maxConcurrentTurns: number;
   /** IANA zone schedules ("09:05") are read in. AGNI_TZ, else the server's zone. */
@@ -93,6 +95,7 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): C
     helloTimeoutMs: int(env, "AGNI_HELLO_TIMEOUT_MS", 5000),
     frameLogCapacity: int(env, "AGNI_FRAME_LOG_CAPACITY", 1000),
     jobPollMs: int(env, "AGNI_JOB_POLL_MS", 3000),
+    jobConcurrency: int(env, "AGNI_JOB_CONCURRENCY", 2),
     maxConcurrentTurns: int(env, "AGNI_MAX_CONCURRENT_TURNS", 4),
     timeZone: resolveTimeZone(env),
     backupDir: env.AGNI_BACKUP_DIR?.trim() || undefined,

@@ -1033,4 +1033,37 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    id: 50,
+    name: "push_subscriptions",
+    sql: `
+      -- Web Push subscriptions, one per browser endpoint. Server-side only.
+      CREATE TABLE push_subscriptions (
+        endpoint TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    id: 51,
+    name: "agent_proactivity",
+    sql: `
+      -- Quiet hours and a daily cap on unprompted pushes, per bot.
+      CREATE TABLE agent_proactivity (
+        agent_id TEXT PRIMARY KEY,
+        quiet_start TEXT,                 -- "HH:MM" in the server time zone
+        quiet_end TEXT,
+        max_per_day INTEGER
+      );
+      CREATE TABLE proactive_sent (
+        agent_id TEXT NOT NULL,
+        day TEXT NOT NULL,                -- local date
+        count INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (agent_id, day)
+      );
+    `,
+  },
 ];
