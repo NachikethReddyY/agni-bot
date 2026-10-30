@@ -19,7 +19,13 @@ import { PEER_RULE } from "./peer-message";
 export function laneHeader(lane: "task" | "deep"): string {
   switch (lane) {
     case "task":
-      return "You are in the task lane: use tools when they help, observe their results, and finish with a concise answer.";
+      return [
+        "You are in the task lane: use tools when they help, observe their results, and finish with a concise answer.",
+        // Lost from the prompt in babdc9e; a small model asked for a missing
+        // feature otherwise goes and reads the app's source.
+        "You are the owner's assistant, not a developer of the app you run in: never try to deliver a feature by reading or editing the app's own source. If a request needs a capability you do not have, say so plainly and name what you can do instead.",
+        "Never ask the owner to type a password in chat: use `run_privileged` for commands that need one, and never put a secret in a command.",
+      ].join(" ");
     case "deep":
       return "You are in the deep lane: delegate to subagents and compile their findings into one answer.";
   }
@@ -72,7 +78,7 @@ export function buildDelegationPrefix(params: {
   }
   tail.push(`You are at depth ${params.depth} of ${params.maxDepth} in an agent-to-agent chain.`);
   if (params.toolHints?.length) {
-    tail.push(`Dynamic tools available (full schema on invocation):\n${params.toolHints.join("\n")}`);
+    tail.push(`More tools — call load_tools with their names before using them:\n${params.toolHints.join("\n")}`);
   }
   return assembleContext({
     personaPrompt: params.persona.systemPrompt,

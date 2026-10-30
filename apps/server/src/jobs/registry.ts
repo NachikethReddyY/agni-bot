@@ -20,6 +20,7 @@ import { registerRolloverJob } from "./rollover";
 import { registerTaskReminderJob } from "./task-reminders";
 import { registerBackupJob } from "./backup";
 import { registerRoutineJob } from "./routine";
+import { registerHarnessReviewJob } from "./harness-review";
 
 export interface AllJobsDeps {
   db: Database;
@@ -40,6 +41,8 @@ export function registerAllJobs(runner: JobRunner, deps: AllJobsDeps): void {
   registerTaggerJob(runner, { db: deps.db, router: deps.router, emit: deps.emit });
   // MEM-003/MEM-006: vectors, the nightly sweep, the summary rollup.
   registerMemoryJobs(runner, { db: deps.db, router: deps.router });
+  // The harness review: proposals from tool-usage counts, for the owner to approve.
+  registerHarnessReviewJob(runner, { db: deps.db });
   // ROL-002: the summary of a closed block is written in the background, so
   // a turn never waits for it.
   registerRolloverJob(runner, {

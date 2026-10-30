@@ -7,10 +7,13 @@ import { openDatabase } from "../src/db";
 import { HealthTracker } from "../src/models/health";
 import type { ProviderConfig } from "../src/models/providers";
 import { Router } from "../src/models/router";
-import { runTaskTurn } from "../src/agent/task-loop";
+import { compact, fitToolResult, recallLines, runTaskTurn } from "../src/agent/task-loop";
+import { tailOf } from "../src/agent/rollover";
+import { ensureConversation, openSession } from "../src/stores/conversations";
+import { putAgentMemory, type MemoryHit } from "../src/stores/agent-memories";
 import { resolveApprovalWaiter } from "../src/agent/approval-broker";
 import type { ResolvedPersona } from "../src/agent/personas";
-import { createThread, createTurn } from "../src/stores/threads";
+import { appendMessage, createThread, createTurn } from "../src/stores/threads";
 import { ensureDMChannel } from "../src/stores/channels";
 
 const provider: ProviderConfig = {
@@ -358,5 +361,66 @@ describe("task lane loop", () => {
     expect(result.text).toContain("no model providers configured");
     expect(emitted.find((frame) => frame.type === "error")).toMatchObject({ code: "no_provider" });
     expect(db.query<{ text: string }, [string]>("SELECT text FROM messages WHERE thread_id = ? AND role = 'assistant'").get(thread.id)?.text).toContain("This turn failed:");
+  });
+});
+
+describe("compact", () => {
+  test("the carried summary keeps the newest dropped turn, not the oldest", () => {
+    let summary: string | null = null;
+    for (let round = 0; round < 3; round += 1) {
+      const messages = Array.from({ length: 12 }, (_, index) => ({
+        role: (index % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+        content: `round ${round} turn ${index} ${"x".repeat(5_000)}`,
+      }));
+      ({ summary } = compact(messages, summary));
+    }
+    expect(summary!.length).toBeLessThanOrEqual(8_000);
+    expect(summary).toContain("round 2 turn 3");
+  });
+});
+
+describe("recall in the prefix", () => {
+  test("the previous block's tail is sent once, not again as recall", async () => {
+    db = openDatabase(":memory:");
+    const conversation = ensureConversation(db, taskPersona.id);
+    const first = openSession(db, conversation, "manual", null);
+    appendMessage(db, { threadID: first.id, role: "user", text: "we picked the blue logo" });
+    const second = openSession(db, conversation, "context", null, tailOf(db, first.id));
+    // A weak match under a high floor takes the below-threshold fallback path.
+    putAgentMemory(db, { scope: "global_user", keySlug: "logo", content: "Logo files live in the design folder." });
+    let system = "";
+    const fetchMock = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { messages: Array<{ role: string; content: string }> };
+      system = body.messages.filter((message) => message.role === "system").map((message) => message.content).join("\n");
+      return streamResponse([{ choices: [{ delta: { content: "Blue." } }] }]);
+    }) as unknown as typeof fetch;
+    const router = new Router([provider], new HealthTracker(), fetchMock);
+    await runTaskTurn(db, router, { firstTokenTimeoutMs: 1000, turnTimeoutMs: 5000, minRecallScore: 0.99 }, {
+      threadID: second.id, conversationID: conversation.id, text: "which logo did we pick", persona: taskPersona,
+      emit: () => undefined, signal: new AbortController().signal,
+    });
+    expect(system.split("we picked the blue logo").length - 1).toBe(1);
+  });
+
+  test("recall skips pinned facts and carries id and date", () => {
+    const hit = (id: string, content: string) =>
+      ({ row: { id, content, updated_at: "2026-10-01T09:00:00.000Z" }, relevance: 1, score: 1 }) as unknown as MemoryHit;
+    expect(recallLines([hit("mem_a", "Pinned already."), hit("mem_b", "Deploys are on Tuesday.")], new Set(["mem_a"])))
+      .toEqual(["[memory mem_b, 2026-10-01] Deploys are on Tuesday."]);
+  });
+});
+
+describe("tool results", () => {
+  test("a large result is cut to valid JSON and marked truncated", () => {
+    const result = { results: Array.from({ length: 50 }, (_, index) => ({ url: `https://example.com/${index}`, snippet: "s".repeat(500) })) };
+    const text = fitToolResult(result);
+    expect(text.length).toBeLessThanOrEqual(4_000);
+    const parsed = JSON.parse(text) as { truncated: boolean; result: { results: unknown[] } };
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.result.results.at(-1)).toMatch(/more$/);
+  });
+
+  test("a small result is passed through unchanged", () => {
+    expect(fitToolResult({ ok: true })).toBe('{"ok":true}');
   });
 });

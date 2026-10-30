@@ -43,6 +43,7 @@ Read in this order first:
 | `remaining-work.md` | CURRENT | Reported current by audit. Not line-checked. |
 | `agni-context-memory-spec.md` | CURRENT | Context and memory spec. Reported current by audit. |
 | `research-context-management.md` | CURRENT | Research brief for context management. |
+| `harness-review.md` | CURRENT | The nightly harness review (tool-usage proposals). Approval UI and eval probing are not built. |
 | `p2-plan.md` | STALE | Historical P2 plan. A status banner was added 2026-10-26; tools are now registered. |
 | `issues-to-fix.md` | PARTLY STALE | Issue list. Entries need checking against code before action. |
 | `routines-plan.md` | PLAN | Built on feat/agnibot-routines (not merged yet). Plan for the build; sections 0-9 describe the build as it was made. |

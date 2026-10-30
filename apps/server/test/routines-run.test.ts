@@ -134,7 +134,8 @@ describe("routine execution", () => {
     for (const banned of ["mail_send", "bash", "write_file", "handoff", "routine_create", "ask", "run_privileged"]) {
       expect(names).not.toContain(banned);
     }
-    for (const name of names) expect(ROUTINE_TOOL_ALLOWLIST).toContain(name);
+    // load_tools only unlocks tools already on the allowlist.
+    for (const name of names) if (name !== "load_tools") expect(ROUTINE_TOOL_ALLOWLIST).toContain(name);
   });
 
   test("a tool allowlist never grants a tool the persona lacks", async () => {

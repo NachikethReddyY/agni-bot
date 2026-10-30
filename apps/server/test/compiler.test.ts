@@ -13,7 +13,7 @@ describe("context assembler", () => {
       recall: ["RECALL-1"],
       tail: ["TAIL-1"],
     });
-    const order = ["PERSONA", "FACT-1", "ANCHOR-TOPIC", "LEDGER-1", "SUMMARY-1", "RECALL-1", "TAIL-1"].map((marker) =>
+    const order = ["PERSONA", "FACT-1", "LEDGER-1", "SUMMARY-1", "RECALL-1", "ANCHOR-TOPIC", "TAIL-1"].map((marker) =>
       prefix.indexOf(marker),
     );
     for (const position of order) expect(position).toBeGreaterThanOrEqual(0);

@@ -66,6 +66,9 @@ export const OPENED_TAIL_TURNS = 6;
  * shape, and the text version is rendered from it.
  */
 export const StructuredSummarySchema = z.object({
+  goal: z.string().max(300).default(""),
+  next_step: z.string().max(300).default(""),
+  constraints: z.array(z.string().max(300)).max(10).default([]),
   decisions: z.array(z.string().max(400)).max(20).default([]),
   open_loops: z.array(z.string().max(400)).max(20).default([]),
   entities: z.array(z.string().max(120)).max(30).default([]),
@@ -76,8 +79,10 @@ export type StructuredSummary = z.infer<typeof StructuredSummarySchema>;
 
 const SUMMARY_SYSTEM_PROMPT = [
   "You compress a chat session for continuity. Answer with strict JSON:",
-  '{"decisions":[],"open_loops":[],"entities":[],"tone":"","source_turn_range":{"from":0,"to":0}}',
-  "decisions: what was decided. open_loops: what is still owed. entities: people, projects, files.",
+  '{"goal":"","next_step":"","constraints":[],"decisions":[],"open_loops":[],"entities":[],"tone":"","source_turn_range":{"from":0,"to":0}}',
+  "goal: what the owner is trying to get done. next_step: what should happen next.",
+  "constraints: limits and preferences that must be kept. decisions: what was decided.",
+  "open_loops: what is still owed. entities: people, projects, files, ids.",
   "tone: one short phrase. source_turn_range: the turn numbers you were given.",
   "If a running summary is given, merge it with the new session: keep every durable decision, fact and",
   "open loop from it that still holds (drop only what is resolved or superseded), then add the new ones.",
@@ -334,6 +339,9 @@ export async function summarizeBlock(
 /** Parse the model's answer into the structured shape. */
 export function parseStructuredSummary(text: string): StructuredSummary {
   const fallback: StructuredSummary = {
+    goal: "",
+    next_step: "",
+    constraints: [],
     decisions: [],
     open_loops: [],
     entities: [],
@@ -353,12 +361,28 @@ export function parseStructuredSummary(text: string): StructuredSummary {
 
 /** The text version of a structured summary — what the prompt carries. */
 export function renderSummary(summary: StructuredSummary): string {
-  const parts: string[] = [];
-  if (summary.decisions.length > 0) parts.push(`Decided: ${summary.decisions.join("; ")}`);
-  if (summary.open_loops.length > 0) parts.push(`Still open: ${summary.open_loops.join("; ")}`);
-  if (summary.entities.length > 0) parts.push(`Mentioned: ${summary.entities.join(", ")}`);
-  if (summary.tone) parts.push(`Tone: ${summary.tone}`);
-  return parts.join(". ");
+  // Most actionable first, and each field capped, so a long list of
+  // decisions cannot push the goal or the open loops past the carry clamp.
+  const parts = [
+    summary.goal && `Goal: ${summary.goal}`,
+    summary.next_step && `Next: ${summary.next_step}`,
+    summary.open_loops.length > 0 && `Still open: ${summary.open_loops.join("; ")}`,
+    summary.constraints.length > 0 && `Constraints: ${summary.constraints.join("; ")}`,
+    summary.decisions.length > 0 && `Decided: ${summary.decisions.join("; ")}`,
+    summary.entities.length > 0 && `Mentioned: ${summary.entities.join(", ")}`,
+    summary.tone && `Tone: ${summary.tone}`,
+  ].filter((part): part is string => Boolean(part));
+  return parts.map(clampField).join(". ");
+}
+
+/** Per-field cap in the rendered carry: seven fields fit the carry clamp (TUNABLE). */
+const RENDER_FIELD_CHARS = 550;
+
+/** A long field keeps its start (the oldest items) and its end (the newest). */
+function clampField(part: string): string {
+  if (part.length <= RENDER_FIELD_CHARS) return part;
+  const head = Math.floor(RENDER_FIELD_CHARS * 0.4);
+  return `${part.slice(0, head)} … ${part.slice(part.length - (RENDER_FIELD_CHARS - head - 3))}`;
 }
 
 /** Carry is a seam, not storage: bounded, no matter what the model said. Keeps head and tail. */
