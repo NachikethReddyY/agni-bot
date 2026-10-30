@@ -58,6 +58,8 @@ export interface ResolvedPersona extends Persona {
   systemPrompt: string;
   /** The bot's own model (`agents.model`), tried first by the router. */
   model?: string | null;
+  /** Phase 4: the bot that reviews this bot's email drafts, when opted in. */
+  criticAgentID?: string | null;
 }
 
 /** Used when no owner first name is configured; never inferred from secrets. */
@@ -220,14 +222,19 @@ export function loadRuntimeAgents(db: Database): number {
 export function updatePersona(
   db: Database,
   id: string,
-  changes: { role?: string; prompt?: string; visibility?: Visibility; model?: string | null },
+  changes: { role?: string; prompt?: string; visibility?: Visibility; model?: string | null; critic?: string | null },
 ): { id: string; name: string; role: string; prompt: string; visibility: Visibility } | undefined {
   const persona = getPersona(id);
   if (!persona) return undefined;
   const role = changes.role?.trim();
   const prompt = changes.prompt?.trim();
   const visibility = changes.visibility;
-  if (!role && !prompt && !visibility && changes.model === undefined) throw new Error("nothing to change: give a role, a prompt, a visibility, or a model");
+  if (!role && !prompt && !visibility && changes.model === undefined && changes.critic === undefined) throw new Error("nothing to change: give a role, a prompt, a visibility, a model, or a critic");
+  if (changes.critic !== undefined) {
+    const critic = changes.critic?.trim() ? canonicalAgentID(changes.critic.trim()) : null;
+    if (critic && (!getPersona(critic) || critic === persona.id)) throw new Error("the critic must be another existing bot");
+    db.run("UPDATE agents SET critic_agent_id = ?, updated_at = ? WHERE id = ?", [critic, nowISO(), persona.id]);
+  }
   // An empty or null model clears it: the bot follows the normal provider list.
   if (changes.model !== undefined) db.run("UPDATE agents SET model = ?, updated_at = ? WHERE id = ?", [changes.model?.trim() || null, nowISO(), persona.id]);
   if (role) {
@@ -309,8 +316,8 @@ export function resolvePersona(db: Database, id: string): ResolvedPersona | unde
   const persona = getPersona(id);
   if (!persona) return undefined;
   const row = db
-    .query<{ display_name: string | null; avatar_color: string | null; system_prompt: string | null; role_detail: string | null; memory_scope: string | null; visibility: string | null; model: string | null }, [string]>(
-      "SELECT display_name, avatar_color, system_prompt, role_detail, memory_scope, visibility, model FROM agents WHERE id = ?",
+    .query<{ display_name: string | null; avatar_color: string | null; system_prompt: string | null; role_detail: string | null; memory_scope: string | null; visibility: string | null; model: string | null; critic_agent_id: string | null }, [string]>(
+      "SELECT display_name, avatar_color, system_prompt, role_detail, memory_scope, visibility, model, critic_agent_id FROM agents WHERE id = ?",
     )
     .get(persona.id);
   const name = row?.display_name?.trim() || persona.name;
@@ -329,6 +336,7 @@ export function resolvePersona(db: Database, id: string): ResolvedPersona | unde
     systemPrompt: composeSystemPrompt(template, name),
     visibility: normalizeVisibility(row?.visibility ?? persona.visibility ?? DEFAULT_VISIBILITY),
     model: row?.model?.trim() || null,
+    criticAgentID: row?.critic_agent_id?.trim() || null,
   };
 }
 

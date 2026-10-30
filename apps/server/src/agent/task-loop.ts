@@ -23,6 +23,7 @@ import { registerRequestOwnerInputTool } from "../tools/needs-input-tool";
 import { registerArtifactTool } from "../tools/artifact-tool";
 import { registerSecureExecTool } from "../tools/secure-exec-tool";
 import { registerSayTool } from "../tools/say-tool";
+import { criticReview } from "./critic";
 import { SCRATCH_TOOLS, registerScratchTools } from "../tools/scratch-tool";
 import { registerRenameTool } from "../tools/rename-tool";
 import { registerCreateAgentTool } from "../tools/create-agent-tool";
@@ -419,7 +420,7 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   // The agent can put a question to the owner, and can put an email draft up
   // for approval. Both wait for the owner, so both are registered per turn.
   registerAskTool(registry, { db, broker: formBroker });
-  registerDraftEmailTool(registry, { db, broker: formBroker });
+  registerDraftEmailTool(registry, { db, broker: formBroker, review: criticReview(db, router, settings.firstTokenTimeoutMs, persona) });
   // DEL-001: the async sibling of handoff. It returns as soon as the task is
   // queued; the specialist runs in a background session with only the brief.
   registerDelegateTaskTool(registry, {

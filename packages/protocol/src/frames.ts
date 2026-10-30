@@ -568,6 +568,11 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
      * clears it.
      */
     model: z.string().max(200).nullable().optional(),
+    /**
+     * Opt-in critic: the bot that reviews this bot's email drafts before the
+     * owner's approval card. Null or "" turns it off.
+     */
+    critic: z.string().max(64).nullable().optional(),
   }),
   /**
    * Create an agent from the app — the "+" in the roster. The same creation

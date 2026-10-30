@@ -1655,12 +1655,12 @@ function handleAgentProfile(
 ): void {
   if (!requireAuth(deps, session)) return;
   const role = frame.role?.trim();
-  if (!role && !frame.visibility && frame.model === undefined) {
-    sendError(deps, session, "bad_frame", "give a role, a visibility or a model to change");
+  if (!role && !frame.visibility && frame.model === undefined && frame.critic === undefined) {
+    sendError(deps, session, "bad_frame", "give a role, a visibility, a model or a critic to change");
     return;
   }
   try {
-    const updated = updatePersona(deps.db, frame.agentId, { role, visibility: frame.visibility, model: frame.model });
+    const updated = updatePersona(deps.db, frame.agentId, { role, visibility: frame.visibility, model: frame.model, critic: frame.critic });
     if (!updated) {
       sendError(deps, session, "unknown_agent", `no agent with id ${frame.agentId}`);
       return;

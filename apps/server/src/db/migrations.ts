@@ -1050,4 +1050,13 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_task_notes_task ON task_notes(task_id, created_at);
     `,
   },
+  {
+    id: 59,
+    name: "agent_critic",
+    sql: `
+      -- Phase 4: opt-in critic. When set, this bot's outbound email drafts
+      -- are reviewed by the named bot before the owner's approval card.
+      ALTER TABLE agents ADD COLUMN critic_agent_id TEXT;
+    `,
+  },
 ];
