@@ -84,7 +84,7 @@ describe("peer influenced input boundaries", () => {
 
   test("durable configuration and scheduling tools refuse peers and work for owners", async () => {
     db = openDatabase(":memory:");
-    const context = (peerInput: boolean) => ({ threadID: "thr_test", turnID: "trn_test", signal: new AbortController().signal, peerInput });
+    const context = (peerInput: boolean) => ({ threadID: "thr_test", turnID: "trn_test", signal: new AbortController().signal, peerInput, chain: { depth: 1, rootAgentID: "ea", currentAgentID: "ea", handoffSummary: null } });
     const update = createUpdateAgentTool({ db, emit: () => undefined });
     const peerUpdate = await update.handler({ agentID: "ea", role: "changed" }, context(true));
     expect(peerUpdate).toEqual({ error: refusal });

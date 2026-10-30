@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { log } from "../log";
 import { MIGRATIONS } from "./migrations";
@@ -8,10 +8,38 @@ import { MIGRATIONS } from "./migrations";
 export function openDatabase(path: string): Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path, { create: true });
+  // A CLI and the daemon share this file; wait for the other writer instead of failing with SQLITE_BUSY.
+  db.exec("PRAGMA busy_timeout = 5000;");
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   const applied = migrate(db);
   if (applied.length > 0) log.info(`db: applied migrations ${applied.join(", ")}`);
+  return db;
+}
+
+/**
+ * Open the database for a CLI command (`pair`, `revoke`, `job add`, …). The
+ * schema belongs to the daemon, so this never migrates: a database that is
+ * behind this build is refused with a message that says how to fix it.
+ */
+export function openDatabaseForCLI(path: string): Database {
+  if (!existsSync(path)) throw new Error(`no database at ${path} — run \`bun run migrate\` (or start the server) first`);
+  const db = new Database(path, { readwrite: true, create: false });
+  db.exec("PRAGMA busy_timeout = 5000;");
+  db.exec("PRAGMA foreign_keys = ON;");
+  const latest = MIGRATIONS.at(-1)?.id ?? 0;
+  let current = 0;
+  try {
+    current = db.query<{ id: number | null }, []>("SELECT max(id) AS id FROM schema_migrations").get()?.id ?? 0;
+  } catch {
+    // No schema_migrations table: a database no server has ever opened.
+  }
+  if (current < latest) {
+    db.close();
+    throw new Error(
+      `database ${path} is at schema ${current}, this build needs ${latest} — run \`bun run migrate\` (or start the server) first`,
+    );
+  }
   return db;
 }
 

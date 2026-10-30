@@ -24,6 +24,11 @@ export interface Config {
   jobPollMs: number;
   /** Maximum simultaneous model streams across chat and background turns. */
   maxConcurrentTurns: number;
+  /** IANA zone schedules ("09:05") are read in. AGNI_TZ, else the server's zone. */
+  timeZone?: string;
+  /** Where `db.backup` writes daily copies, and how many it keeps. */
+  backupDir?: string;
+  backupKeep?: number;
   /** Path to plugins.json (plugin auth + activation state). */
   pluginsPath: string;
   /** Optional first name for first-run onboarding; never inferred from secrets. */
@@ -66,6 +71,14 @@ function slotBudgets(env: Record<string, string | undefined>): SlotBudgets {
   };
 }
 
+/** AGNI_TZ if it is a valid IANA name, else the server's local zone. */
+export function resolveTimeZone(env: Record<string, string | undefined> = Bun.env): string {
+  const local = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const raw = env.AGNI_TZ?.trim();
+  if (!raw) return local;
+  try { new Intl.DateTimeFormat("en", { timeZone: raw }); return raw; } catch { return local; }
+}
+
 export function loadConfig(env: Record<string, string | undefined> = Bun.env): Config {
   return {
     host: env.AGNI_HOST?.trim() || "127.0.0.1",
@@ -80,6 +93,9 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): C
     frameLogCapacity: int(env, "AGNI_FRAME_LOG_CAPACITY", 1000),
     jobPollMs: int(env, "AGNI_JOB_POLL_MS", 3000),
     maxConcurrentTurns: int(env, "AGNI_MAX_CONCURRENT_TURNS", 4),
+    timeZone: resolveTimeZone(env),
+    backupDir: env.AGNI_BACKUP_DIR?.trim() || undefined,
+    backupKeep: int(env, "AGNI_BACKUP_KEEP", 7),
     pluginsPath: env.AGNI_PLUGINS_PATH?.trim() || join(homedir(), ".agni", "plugins.json"),
     userFirstName: env.AGNI_USER_FIRST_NAME?.trim() || undefined,
     slotBudgets: slotBudgets(env),

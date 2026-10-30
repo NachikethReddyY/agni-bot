@@ -33,5 +33,12 @@ export function registerRoutineJob(runner: JobRunner, deps: RoutineJobDeps): voi
 
     await executeRoutine(deps, routine);
     return { nextRunAt: nextRun(routine.cron, routine.timezone, new Date()).toISOString() };
+  }, {
+    // M38: after a failed run, skip to the routine's next cron slot (null if the routine is gone).
+    nextRun: (job) => {
+      const routineID = parseJobPayload<{ routineID?: string }>(job).routineID;
+      const routine = routineID ? getRoutine(deps.db, routineID) : null;
+      return routine ? nextRun(routine.cron, routine.timezone, new Date()).toISOString() : null;
+    },
   });
 }

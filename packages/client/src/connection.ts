@@ -55,6 +55,8 @@ export interface ConnectionOptions {
   sleep?: (milliseconds: number) => Promise<void>;
 }
 
+const STABLE_MS = 10_000;
+
 function defaultSleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -86,6 +88,7 @@ export class AgniConnection {
   private settings: ServerSettings;
   private token: string;
   private onEventValue: ((event: ConnectionEvent) => void) | null = null;
+  private readyAt: number | null = null;
 
   constructor(options: ConnectionOptions) {
     this.settings = { ...options.settings };
@@ -169,11 +172,14 @@ export class AgniConnection {
     while (!this.aborted(id)) {
       let reason: string;
       try {
+        const startedAt = Date.now();
         reason = await this.session(id);
-        attempt = 0;
+        // Only a connection that stayed up resets the backoff (M58).
+        if (this.readyAt !== null && Date.now() - Math.max(startedAt, this.readyAt) >= STABLE_MS) attempt = 0;
         if (this.aborted(id)) break;
       } catch (error) {
         if (this.aborted(id) || error instanceof AbortError) break;
+        if (this.readyAt !== null && Date.now() - this.readyAt >= STABLE_MS) attempt = 0;
         if (error instanceof TransportError && error.kind === "closed" && (error.code === 4002 || error.code === 4003)) {
           this.setState({
             kind: "refused",
@@ -186,7 +192,8 @@ export class AgniConnection {
 
       if (this.aborted(id)) break;
       attempt += 1;
-      const seconds = Math.min(this.maxBackoffSeconds, 0.5 * 2 ** (attempt - 1));
+      const base = Math.min(this.maxBackoffSeconds, 0.5 * 2 ** (attempt - 1));
+      const seconds = base * (0.8 + Math.random() * 0.4); // ±20% jitter
       this.setState({ kind: "waiting", attempt, seconds, reason });
       await this.sleep(seconds * 1000);
     }
@@ -204,6 +211,7 @@ export class AgniConnection {
 
     const socket = this.makeTransport();
     this.transport = socket;
+    this.readyAt = null;
     try {
       await socket.open(url);
       if (this.aborted(id)) return "stopped";
@@ -240,19 +248,26 @@ export class AgniConnection {
             return error.message;
           }
 
-          const resumeAfterSeq = this.settings.lastSeq;
           const decoded = decodeServerFrame(text);
           if (!decoded.ok) {
             this.onEventValue?.({ type: "malformed", detail: decoded.error });
             continue;
           }
           const frame = decoded.frame;
-          this.observe(frameSeq(frame));
+          const isError = frame.type === "error" && !("__unknown" in frame);
 
           if (!greeted) {
             if (frame.type === "hello.ok" && !("__unknown" in frame)) {
               greeted = true;
               clearWatchdog();
+              this.readyAt = Date.now();
+              if (frame.lastSeq < this.settings.lastSeq) {
+                // Server restarted behind us (M3): our seq is meaningless now.
+                this.settings.lastSeq = frame.lastSeq;
+                this.onEventValue?.({ type: "lastSeq", seq: frame.lastSeq });
+                this.onEventValue?.({ type: "durableReloadRequired" });
+              }
+              const resumeAfterSeq = this.settings.lastSeq;
               this.setState({ kind: "ready", lastSeq: frame.lastSeq });
               // Re-enter the stream where this browser left off.
               try {
@@ -264,11 +279,17 @@ export class AgniConnection {
               // The server rejects before hello.ok: unauthorized, version_mismatch.
               throw TransportError.closed(frame.code === "version_mismatch" ? 4002 : 4003, frame.message);
             } else {
-              // Presence and other broadcasts can arrive before hello.ok; keep them.
+              // Presence and other broadcasts can arrive before hello.ok; keep them
+              // but do not advance lastSeq: resync replays them.
               this.onEventValue?.({ type: "frame", frame });
             }
             continue;
           }
+
+          // Replayed/live overlap (H32). Errors reuse the current seq and bypass.
+          const seq = frameSeq(frame);
+          if (!isError && seq > 0 && seq <= this.settings.lastSeq) continue;
+          this.observe(seq);
 
           if (frame.type === "error" && !("__unknown" in frame) && frame.code === "resync_gap") {
             this.onEventValue?.({ type: "durableReloadRequired" });

@@ -55,8 +55,8 @@ export const ROLLOVER_MIN_TURNS = 3;
 /** How long a block may sit idle before a topic shift is a new block. */
 export const ROLLOVER_IDLE_MS = 30 * 60_000;
 
-/** Hard cap on the carried summary the next block opens with. */
-export const CARRY_SUMMARY_CHARS = 1_500;
+/** Hard cap on the carried summary the next block opens with (~1k tokens; H30). */
+export const CARRY_SUMMARY_CHARS = 4000;
 
 /** How many turns of the old block the new one opens with (ROL-006). */
 export const OPENED_TAIL_TURNS = 6;
@@ -84,6 +84,8 @@ const SUMMARY_SYSTEM_PROMPT = [
   "constraints: limits and preferences that must be kept. decisions: what was decided.",
   "open_loops: what is still owed. entities: people, projects, files, ids.",
   "tone: one short phrase. source_turn_range: the turn numbers you were given.",
+  "If a running summary is given, merge it with the new session: keep every durable decision, fact and",
+  "open loop from it that still holds (drop only what is resolved or superseded), then add the new ones.",
   "Nothing else — no preamble, no prose outside the JSON.",
 ].join(" ");
 
@@ -279,7 +281,8 @@ export async function rotate(deps: RolloverDeps, agentOrConversation: string | C
   const active = activeSession(db, conversation);
   if (active) {
     // The owner asked for this boundary, so the summary is worth the wait.
-    const summary = await summarizeBlock(deps, conversation, active);
+    // A failure here carries the previous summary forward: the owner's /new must not break.
+    const summary = await summarizeBlock(deps, conversation, active).catch(() => null);
     if (summary) updateSummary(db, conversation.id, summary.text);
   }
   return rotateNow(deps, conversation, reason);
@@ -299,10 +302,9 @@ export async function summarizeBlock(
   const previous = conversation.summary ?? "";
   const messages = recentMessages(db, block.id, 40);
   if (messages.length === 0) return null;
-  const transcript = messages
-    .map((message, index) => `${index}: ${message.role}: ${message.text}`)
-    .join("\n")
-    .slice(-12_000); // keep the newest turns; the oldest are what the carry already covers
+  const full = messages.map((message, index) => `${index}: ${message.role}: ${message.text}`).join("\n");
+  // H29: keep the start and the end of the block, not just the oldest 12k.
+  const transcript = full.length > 12_000 ? `${full.slice(0, 4_000)}\n[... middle omitted ...]\n${full.slice(-8_000)}` : full;
   try {
     const result = await deps.router.route({
       messages: [
@@ -318,7 +320,7 @@ export async function summarizeBlock(
       firstTokenTimeoutMs: deps.firstTokenTimeoutMs,
       onDelta: () => {},
       toolChoice: "none",
-      maxTokens: 600,
+      maxTokens: 1500,
     });
     const structured = parseStructuredSummary(result.text);
     // A model that answers in prose still gets a summary: the structured
@@ -328,8 +330,9 @@ export async function summarizeBlock(
     if (!text) throw new RouterError("provider_failed", "empty summary");
     return { text, structured };
   } catch (error) {
-    log.warn(`carry summary failed; previous summary rides forward: ${error instanceof Error ? error.message : String(error)}`);
-    return null;
+    // H28: let the job runner retry; callers that can live without it catch.
+    log.warn(`carry summary failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
   }
 }
 
@@ -369,18 +372,29 @@ export function renderSummary(summary: StructuredSummary): string {
     summary.entities.length > 0 && `Mentioned: ${summary.entities.join(", ")}`,
     summary.tone && `Tone: ${summary.tone}`,
   ].filter((part): part is string => Boolean(part));
-  return parts.map((part) => (part.length > RENDER_FIELD_CHARS ? `${part.slice(0, RENDER_FIELD_CHARS)}…` : part)).join(". ");
+  return parts.map(clampField).join(". ");
 }
 
-/** Per-field cap in the rendered carry (TUNABLE). */
-const RENDER_FIELD_CHARS = 400;
+/** Per-field cap in the rendered carry: seven fields fit the carry clamp (TUNABLE). */
+const RENDER_FIELD_CHARS = 550;
 
-/** Carry is a seam, not storage: keep it short, no matter what the model said. */
-function clampCarry(text: string): string | null {
+/** A long field keeps its start (the oldest items) and its end (the newest). */
+function clampField(part: string): string {
+  if (part.length <= RENDER_FIELD_CHARS) return part;
+  const head = Math.floor(RENDER_FIELD_CHARS * 0.4);
+  return `${part.slice(0, head)} … ${part.slice(part.length - (RENDER_FIELD_CHARS - head - 3))}`;
+}
+
+/** Carry is a seam, not storage: bounded, no matter what the model said. Keeps head and tail. */
+export function clampCarry(text: string): string | null {
   if (!text) return null;
   const cleaned = text.replace(/\s+/g, " ").trim();
   if (!cleaned) return null;
-  return cleaned.length > CARRY_SUMMARY_CHARS ? `${cleaned.slice(0, CARRY_SUMMARY_CHARS)}…` : cleaned;
+  if (cleaned.length <= CARRY_SUMMARY_CHARS) return cleaned;
+  const marker = " [… middle omitted …] ";
+  const room = CARRY_SUMMARY_CHARS - marker.length;
+  const head = Math.ceil(room / 2);
+  return `${cleaned.slice(0, head)}${marker}${cleaned.slice(cleaned.length - (room - head))}`;
 }
 
 /** Rotate by conversation id when the caller already holds the id. */

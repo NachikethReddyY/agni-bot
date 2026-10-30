@@ -16,6 +16,8 @@ import { defaultResolvedPersona, loadRuntimeAgents, personaInfo, registerPersona
 import { updateAgent } from "../src/tools/update-agent-tool";
 import { createThread } from "../src/stores/threads";
 import type { Persona } from "../src/agent/personas";
+import { ToolRegistry } from "../src/tools/registry";
+import { registerCreateAgentTool } from "../src/tools/create-agent-tool";
 
 const provider: ProviderConfig = {
   id: "test", label: "Test", baseUrl: "https://test.local/v1", apiKey: "test", model: "mock",
@@ -194,5 +196,33 @@ describe("task-lane prompt", () => {
     });
     expect(prefix).toContain("SUMMARY-MARKER-7");
     db.close();
+  });
+});
+
+describe("create_agent privilege ceiling (M19, M7)", () => {
+  async function callAs(creator: Persona, args: Record<string, unknown>): Promise<{ error?: string }> {
+    db = openDatabase(":memory:");
+    registerPersona(creator);
+    const registry = new ToolRegistry();
+    for (const name of ["bash", "web_search"]) {
+      registry.register({ name, description: name, kind: "static", schema: {}, timeoutMs: 1, handler: async () => ({}) });
+    }
+    registerCreateAgentTool(registry, { db, emit: () => undefined });
+    const ctx = { chain: { depth: 1, rootAgentID: creator.id, currentAgentID: creator.id, handoffSummary: null } } as never;
+    return (await registry.get("create_agent")!.handler({ name: "Kid", prompt: "p", ...args } as never, ctx)) as { error?: string };
+  }
+  const weak: Persona = { id: "weak", name: "Weak", color: "#ffffff", role: "r", systemPromptTemplate: "p", tools: ["web_search"] };
+
+  test("cannot grant a tool the creator lacks", async () => {
+    expect((await callAs(weak, { tools: ["bash"] })).error).toContain("bash");
+  });
+  test("cannot grant readwrite memory the creator lacks", async () => {
+    expect((await callAs(weak, { memoryScope: "readwrite" })).error).toContain("memory");
+  });
+  test("a bad colour is rejected", async () => {
+    await expect(callAs(weak, { color: "red;background:url(x)" })).rejects.toThrow(/hex/);
+  });
+  test("a subset of the creator's tools works", async () => {
+    expect(await callAs(weak, { tools: ["web_search"] })).not.toHaveProperty("error");
   });
 });

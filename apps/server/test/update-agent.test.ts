@@ -10,6 +10,7 @@ import { createUpdateAgentTool, updateAgent } from "../src/tools/update-agent-to
 import { personaInfo, resolvePersona, registerPersona } from "../src/agent/personas";
 import type { Persona } from "../src/agent/personas";
 
+const chainOf = (id: string) => ({ depth: 1, rootAgentID: id, currentAgentID: id, handoffSummary: null });
 let db: Database | undefined;
 afterEach(() => { db?.close(); db = undefined; });
 
@@ -63,7 +64,7 @@ describe("updating an agent", () => {
     );
     const emitted: Array<{ type: string; [key: string]: unknown }> = [];
     const tool = createUpdateAgentTool({ db, emit: (frame) => emitted.push(frame as { type: string }) });
-    await tool.handler({ agentID: "testbot", role: "inbox manager" }, { threadID: "thr_x", turnID: "trn_x", signal: new AbortController().signal });
+    await tool.handler({ agentID: "testbot", role: "inbox manager" }, { threadID: "thr_x", turnID: "trn_x", signal: new AbortController().signal, chain: chainOf("testbot") });
 
     const roster = personaInfo(database);
     expect(roster.find((agent) => agent.id === "testbot")?.role).toContain("inbox manager");
@@ -74,5 +75,14 @@ describe("updating an agent", () => {
     db = openDatabase(":memory:");
     const database = db;
     expect(() => updateAgent(database, { agentID: "nobody", role: "x" })).toThrow(/no agent with id/);
+  });
+
+  test("a bot cannot update another bot (C3)", async () => {
+    db = openDatabase(":memory:");
+    const tool = createUpdateAgentTool({ db, emit: () => undefined });
+    const ctx = { chain: chainOf("researcher") } as never;
+    const hit = await tool.handler({ agent_id: "ea", prompt: "evil", visibility: "shared" } as never, ctx);
+    expect((hit as { error?: string }).error).toContain("only update itself");
+    expect(await tool.handler({ role: "Research lead" } as never, ctx)).not.toHaveProperty("error");
   });
 });

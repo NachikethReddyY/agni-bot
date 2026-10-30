@@ -17,6 +17,7 @@ import { runTaskTurn, isThreadActive, type TaskTurnSettings } from "../agent/tas
 import { defaultResolvedPersona, getPersona, resolvePersona, type ResolvedPersona } from "../agent/personas";
 import { DEFAULT_VISIBILITY, redactForCaller } from "../agent/visibility";
 import { rootGuardrail } from "../agent/guardrails";
+import { ApprovalBroker } from "../agent/approval-broker";
 import type { Router } from "../models/router";
 import { getThread } from "../stores/threads";
 import { backgroundSession, ensureConversation, getConversation, type ConversationRow } from "../stores/conversations";
@@ -33,13 +34,23 @@ import {
 } from "../stores/tasks";
 import { saveArtifact } from "../stores/artifacts";
 import { scheduleTagger } from "./tagger";
-import { nextDailyRun } from "./schedule";
+import { nextDailyRun, nextIntervalRun } from "./schedule";
 import { peerEnvelope } from "../agent/peer-message";
 import type { PeerIntent } from "@agni/protocol";
-import type { JobRunner } from "./runner";
+import { JobGiveUp, type JobRunner } from "./runner";
+import { nowISO } from "../util/ids";
 
-/** How long a wake waits when the parent's thread is busy. */
+/** How long a wake first waits when the parent's thread is busy; doubles per deferral. */
 const WAKE_RETRY_MS = 1_500;
+const WAKE_RETRY_MAX_MS = 60_000;
+/** M36: a wake that has waited this many times gives up (about half an hour). */
+export const MAX_WAKE_DEFERRALS = 40;
+/** Tools whose effect a retry would repeat even though they are not approval-gated. */
+const NON_IDEMPOTENT_TOOLS = new Set(["mail_send", "run_privileged", "delegate_task"]);
+// requiresApproval reads no broker state, so one inert instance serves the check.
+const gatePolicy = new ApprovalBroker(null as never);
+/** Daily-cap notices already sent, `${agentID}:${day}`. */
+const capNotified = new Set<string>();
 
 export interface TurnJobPayload {
   chainID?: string;
@@ -73,6 +84,10 @@ export interface TurnJobPayload {
     redacted: boolean;
   };
   wakeKey?: string;
+  /** M36: how many times this wake has waited for a busy parent. */
+  deferrals?: number;
+  /** H23: delegation depth of this turn; 1 = root, each delegate_task hop adds one. */
+  depth?: number;
   /** The completions a coalesced wake carries. */
   results?: Array<{
     taskID: string;
@@ -104,12 +119,18 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
     if (payload.wakeKey && payload.results?.length) {
       const parentThreadID = payload.threadID?.trim();
       if (parentThreadID && isThreadActive(parentThreadID)) {
-        enqueueJob(deps.db, {
-          kind: "turn",
-          payload: { ...payload },
-          runAt: new Date(Date.now() + WAKE_RETRY_MS).toISOString(),
-        });
-        return { result: "deferred: the parent thread is busy" };
+        // M36: reschedule this same row with a growing delay, never a new row.
+        const deferrals = (payload.deferrals ?? 0) + 1;
+        if (deferrals > MAX_WAKE_DEFERRALS) {
+          throw new JobGiveUp(`the parent thread stayed busy through ${MAX_WAKE_DEFERRALS} deferrals; the result is on the task row`);
+        }
+        deps.db.run("UPDATE jobs SET payload = ?, updated_at = ? WHERE id = ?", [
+          JSON.stringify({ ...payload, deferrals }),
+          nowISO(),
+          job.id,
+        ]);
+        const delay = Math.min(WAKE_RETRY_MS * 2 ** (deferrals - 1), WAKE_RETRY_MAX_MS);
+        return { result: "deferred: the parent thread is busy", nextRunAt: new Date(Date.now() + delay).toISOString() };
       }
       payload.text = buildWakeText(payload.results);
     }
@@ -125,6 +146,11 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
     }
 
     const persona = (payload.agentID ? resolvePersona(deps.db, payload.agentID) : undefined) ?? defaultResolvedPersona(deps.db);
+    const capped = payload.wakeKey ? null : dailyCapReached(deps, persona);
+    if (capped) {
+      if (delegationTaskID) setDelegationState(deps.db, delegationTaskID, "failed", capped);
+      throw new JobGiveUp(capped, true);
+    }
 
     let threadID = payload.threadID?.trim();
     let conversation: ConversationRow | undefined;
@@ -152,7 +178,13 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
     // to the same conversation.
     if (delegationTaskID) setDelegationThread(deps.db, delegationTaskID, threadID);
 
-    const result = await runTurn(deps, payload, persona, threadID, conversation, text);
+    const startedAt = nowISO();
+    let result: Awaited<ReturnType<typeof runTurn>>;
+    try {
+      result = await runTurn(deps, payload, persona, threadID, conversation, text, job.attempts > 1);
+    } catch (error) {
+      throw giveUpIfSideEffects(deps.db, threadID, startedAt, error instanceof Error ? error.message : String(error)) ?? error;
+    }
 
     if (result.stopReason === "needs_input") {
       // DEL-006: the task asked the owner a question and is waiting. This is
@@ -164,7 +196,9 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
       // runTaskTurn already reported the failure as frames; a non-end stop
       // is a failed job so the runner retries it honestly.
       if (delegationTaskID) setDelegationState(deps.db, delegationTaskID, "failed", `turn ended with ${result.stopReason}`);
-      throw new Error(`turn ended with ${result.stopReason}${result.text ? " (partial output kept)" : ""}`);
+      const message = `turn ended with ${result.stopReason}${result.text ? " (partial output kept)" : ""}`;
+      // H20: a retry re-runs every tool, so a turn that already acted is not retried.
+      throw giveUpIfSideEffects(deps.db, threadID, startedAt, message) ?? new Error(message);
     }
 
     // TAG-001: a background turn is also material worth tagging. A peer-influenced
@@ -193,7 +227,7 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
       }
       setDelegationState(deps.db, delegationTaskID, "done", summary);
       announceTask(deps, delegationTaskID);
-      wakeParent(deps, delegationTaskID, summary);
+      wakeParent(deps, delegationTaskID, summary, Math.max(1, (payload.depth ?? 2) - 1));
     }
     if (payload.notify !== false) {
       deps.emit({ type: "notify", title: `${persona.name} · ${truncate(text, 60)}`, body: reply, sound: false });
@@ -205,10 +239,70 @@ export function registerTurnJob(runner: JobRunner, deps: TurnJobDeps): void {
       // the schedule names, on the days it names.
       outcome.nextRunAt = nextDailyRun(payload.dailyAt, payload.days).toISOString();
     } else if (payload.everyMs && payload.everyMs > 0) {
-      outcome.nextRunAt = new Date(Date.now() + payload.everyMs).toISOString();
+      outcome.nextRunAt = nextIntervalRun(job.run_at, payload.everyMs).toISOString();
     }
     return outcome;
+  }, { nextRun: nextScheduledRun });
+}
+
+/** M38: where a recurring turn goes after a failed run. Wakes and one-shots have none. */
+function nextScheduledRun(job: JobRow): string | null {
+  const payload = parseJobPayload<TurnJobPayload>(job);
+  if (payload.dailyAt) return nextDailyRun(payload.dailyAt, payload.days).toISOString();
+  if (payload.everyMs && payload.everyMs > 0) return nextIntervalRun(job.run_at, payload.everyMs).toISOString();
+  return null;
+}
+
+/**
+ * H20: a give-up error when this run already completed (or started and lost
+ * track of) a side-effecting tool call. Calls refused before running do not count.
+ */
+function giveUpIfSideEffects(db: Database, threadID: string, since: string, message: string): JobGiveUp | null {
+  const calls = db
+    .query<{ tool_name: string; args: string }, [string, string]>(
+      `SELECT tool_name, args FROM tool_calls
+       WHERE thread_id = ? AND created_at >= ?
+         AND (error IS NULL OR error NOT IN ('approval_rejected', 'tool_not_allowed', 'domain_not_allowed'))`,
+    )
+    .all(threadID, since);
+  const acted = calls.find((call) => {
+    let args: Record<string, unknown> = {};
+    try { args = JSON.parse(call.args) as Record<string, unknown>; } catch { /* treat as no args */ }
+    return NON_IDEMPOTENT_TOOLS.has(call.tool_name) || gatePolicy.requiresApproval(call.tool_name, args);
   });
+  return acted ? new JobGiveUp(`${message}; not retried because it already ran ${acted.tool_name}`) : null;
+}
+
+/** Background turns started today by this agent (wakes excluded: they follow a counted delegation). */
+export function backgroundTurnsToday(db: Database, agentID: string): number {
+  const dayStart = new Date();
+  dayStart.setHours(0, 0, 0, 0);
+  return db
+    .query<{ n: number }, [string, string]>(
+      `SELECT COUNT(*) AS n FROM turns
+       WHERE agent_id = ? AND started_at >= ?
+         AND thread_id IN (SELECT json_extract(payload, '$.threadID') FROM jobs
+                           WHERE kind = 'turn' AND json_extract(payload, '$.wakeKey') IS NULL)`,
+    )
+    .get(agentID, dayStart.toISOString())?.n ?? 0;
+}
+
+/** Cost backstop: the reason a bot past its daily background-turn cap must stop, or null. Notifies once a day. */
+function dailyCapReached(deps: TurnJobDeps, persona: ResolvedPersona): string | null {
+  const cap = Number(process.env.AGNI_MAX_BG_TURNS_PER_DAY || 200);
+  if (!Number.isFinite(cap) || cap <= 0) return null;
+  if (backgroundTurnsToday(deps.db, persona.id) < cap) return null;
+  const key = `${persona.id}:${new Date().toDateString()}`;
+  if (!capNotified.has(key)) {
+    capNotified.add(key);
+    deps.emit({
+      type: "notify",
+      title: `${persona.name} · background work paused`,
+      body: `${persona.name} reached ${cap} background turns today; further background turns are skipped until tomorrow.`,
+      sound: false,
+    });
+  }
+  return `daily background-turn cap reached (${cap})`;
 }
 
 function firstLine(text: string): string {
@@ -261,7 +355,7 @@ function buildWakeLogText(results: Array<{ taskID: string; agentID: string; summ
  * leave a task claimed but never woken. Several completions for the same
  * parent thread are coalesced into one wake turn.
  */
-function wakeParent(deps: TurnJobDeps, taskID: string, summary: string): void {
+function wakeParent(deps: TurnJobDeps, taskID: string, summary: string, parentDepth: number): void {
   const task = getTask(deps.db, taskID);
   if (!task) return;
   const parentThreadID = task.parent_thread_id;
@@ -292,6 +386,7 @@ function wakeParent(deps: TurnJobDeps, taskID: string, summary: string): void {
         notify: false,
         inputRole: "system",
         wakeKey,
+        depth: parentDepth,
         chainID: briefChainID(task.brief),
         results: [item],
       },
@@ -322,6 +417,7 @@ async function runTurn(
   threadID: string,
   conversation: ConversationRow | undefined,
   text: string,
+  retry = false,
 ): Promise<{ turnID: string; text: string; stopReason: string }> {
   const signal = new AbortController().signal;
   const delegationTaskID = payload.delegationTaskID?.trim() || null;
@@ -334,10 +430,12 @@ async function runTurn(
     signal,
     conversationID: conversation?.id,
     carrySummary: conversation?.summary ?? null,
-    guardrail: rootGuardrail(persona.id, payload.chainID),
+    // H23: the depth travels in the payload, so a delegated job does not restart at 1.
+    guardrail: { ...rootGuardrail(persona.id, payload.chainID), depth: Math.max(1, Math.trunc(payload.depth ?? 1)) },
     facts: payload.facts,
     ...(payload.channelID ? { channelID: payload.channelID } : {}),
     ...(payload.inputRole ? { inputRole: payload.inputRole } : {}),
+    ...(retry ? { reuseInput: true } : {}),
     ...(payload.peer ? { peer: payload.peer } : {}),
     ...(payload.wakeKey && payload.results ? { inputText: buildWakeLogText(payload.results) } : {}),
     ...(delegationTaskID && task

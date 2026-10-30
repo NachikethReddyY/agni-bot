@@ -39,7 +39,7 @@ enqueued at startup and runs daily at 04:00.
    | `demote_core` | A core tool was never used in the window. |
    | `tool_failing` | A tool failed at least 30% of its calls, with at least 10 calls. |
    | `turn_timeouts` | At least 10% of turns timed out. |
-3. **Storing.** `saveProposals` writes to `harness_proposals` (migration 42):
+3. **Storing.** `saveProposals` writes to `harness_proposals` (migration 44):
    - There is one row per kind and subject.
    - A pending row gets fresh evidence on each run.
    - A row the owner approved or rejected is never changed or raised again.

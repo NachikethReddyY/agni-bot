@@ -18,6 +18,7 @@ import { registerTaggerJob } from "./tagger";
 import { registerMemoryJobs } from "./memory";
 import { registerRolloverJob } from "./rollover";
 import { registerTaskReminderJob } from "./task-reminders";
+import { registerBackupJob } from "./backup";
 import { registerRoutineJob } from "./routine";
 import { registerHarnessReviewJob } from "./harness-review";
 
@@ -33,6 +34,7 @@ export interface AllJobsDeps {
 export function registerAllJobs(runner: JobRunner, deps: AllJobsDeps): void {
   registerTurnJob(runner, { db: deps.db, router: deps.router, settings: deps.settings, emit: deps.emit });
   registerRoutineJob(runner, { db: deps.db, router: deps.router, settings: deps.settings, emit: deps.emit });
+  registerBackupJob(runner, { db: deps.db });
   registerBriefJob(runner, { db: deps.db, emit: deps.emit });
   registerTaskReminderJob(runner, { db: deps.db, emit: deps.emit });
   // TAG-001: memory is extracted in batches, never on the path of a turn.

@@ -96,10 +96,10 @@ replay, and model prompts never receive those credentials. Remote sign-out is
 attempted before the disconnect completes; a warning explains when revocation
 could not be confirmed.
 
-This uses the official [Sign in with ChatGPT open-source flow](https://developers.openai.com/siwc/token-sharing-open-source).
-It targets local/open-source installations; commercial or hosted distribution
-has separate OpenAI access requirements. `provider.auth.*` frames are additive
-to protocol v2.
+Optional ChatGPT sign-in is off by default. Set `AGNI_CHATGPT=1` to enable it.
+It uses OpenAI's [Sign in with ChatGPT token-sharing documentation](https://developers.openai.com/siwc/token-sharing-open-source).
+Eligibility under OpenAI's terms is unconfirmed; that is an owner decision still pending.
+`provider.auth.*` frames are additive to protocol v2.
 
 ### Background work (the daemon doing things on its own)
 

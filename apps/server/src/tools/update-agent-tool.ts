@@ -13,7 +13,7 @@
 import type { Database } from "bun:sqlite";
 import type { ServerFrameBody } from "@agni/protocol";
 import type { ToolRegistry, ToolDefinition } from "./registry";
-import { getPersona, personaInfo, mentionRoster, updatePersona } from "../agent/personas";
+import { canonicalAgentID, getPersona, personaInfo, mentionRoster, updatePersona } from "../agent/personas";
 import type { Visibility } from "../agent/visibility";
 
 export interface UpdateAgentDeps {
@@ -69,16 +69,21 @@ export function createUpdateAgentTool(deps: UpdateAgentDeps): ToolDefinition<Upd
       "The change is durable and every client sees it immediately.",
     kind: "static",
     schema: objectSchema({
-      agent_id: stringProp,
+      agent_id: { ...stringProp, description: "Must be your own id; defaults to you." },
       role: { type: "string", minLength: 1, maxLength: 500 },
       prompt: { type: "string", minLength: 1, maxLength: 4_000 },
       visibility: { type: "string", enum: ["private", "summary", "shared"], description: "What other agents may see of this agent's work." },
-    }, ["agent_id"]),
+    }, []),
     timeoutMs: 2_000,
     handler: async (args, ctx) => {
       if (ctx.peerInput) return { error: "not done: this turn started from another agent's message" };
-      // The schema names the field agent_id; the store reads agentID.
-      const result = updateAgent(deps.db, { ...args, agentID: args.agent_id ?? args.agentID });
+      // C3: a bot may change only itself; the owner changes others via frames.
+      const caller = ctx.chain?.currentAgentID;
+      const target = args.agent_id ?? args.agentID ?? caller;
+      if (!caller || !target || canonicalAgentID(target) !== canonicalAgentID(caller)) {
+        return { error: "not done: an agent may only update itself" };
+      }
+      const result = updateAgent(deps.db, { ...args, agentID: target });
       // The roster follows, so the app shows the new role straight away.
       deps.emit({ type: "agents.update", agents: personaInfo(deps.db), mentions: mentionRoster(deps.db) });
       return result;

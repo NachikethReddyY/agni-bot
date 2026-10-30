@@ -39,18 +39,33 @@ export interface PrivilegedRunResult {
   usedOSAuth: boolean;
 }
 
+/** Shell chaining, pipes, substitution and newlines: one command only in os-mode. */
+export function isCompoundCommand(command: string): boolean {
+  return /[;|`\n\r]|&&|\$\(/.test(command);
+}
+
+const PROMPT_MAX = 300;
+
+/** The dialog text: escaped for an AppleScript string, long commands keep head and tail. */
+export function osAuthPrompt(command: string): string {
+  let c = command.replace(/\s+/g, " ").trim();
+  if (c.length > PROMPT_MAX) c = `${c.slice(0, 180)} ... ${c.slice(-100)}`;
+  return `Agni wants to run as root: ${c}`.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 /**
  * The AppleScript that runs the script file's contents with administrator
- * privileges. The path arrives as an argument, so the command never appears
- * in a command line.
+ * privileges. The path arrives as an argument; the prompt shows the command.
  */
-const APPLE_SCRIPT = [
-  "on run argv",
-  "  set scriptPath to item 1 of argv",
-  "  set scriptText to read (POSIX file scriptPath) as «class utf8»",
-  "  do shell script scriptText with administrator privileges",
-  "end run",
-].join("\n");
+export function buildAppleScript(command: string): string {
+  return [
+    "on run argv",
+    "  set scriptPath to item 1 of argv",
+    "  set scriptText to read (POSIX file scriptPath) as «class utf8»",
+    `  do shell script scriptText with prompt "${osAuthPrompt(command)}" with administrator privileges`,
+    "end run",
+  ].join("\n");
+}
 
 /**
  * Write the command into a private script and hand back the paths. The
@@ -90,12 +105,20 @@ export function runPrivilegedWithOSAuth(
   command: string,
   options: { timeoutMs?: number } = {},
 ): Promise<PrivilegedRunResult> {
+  if (isCompoundCommand(command)) {
+    return Promise.resolve({
+      stdout: "",
+      stderr: "os-mode runs one simple command only (no ; && || | backticks, $( ) or newlines). Split it into separate commands.",
+      exitCode: 1,
+      usedOSAuth: false,
+    });
+  }
   const timeoutMs = Math.min(options.timeoutMs ?? 120_000, 120_000);
   const { dir, scriptPath } = writePrivilegedScript(command);
   return new Promise<PrivilegedRunResult>((resolve) => {
     execFile(
       "osascript",
-      ["-e", APPLE_SCRIPT, scriptPath],
+      ["-e", buildAppleScript(command), scriptPath],
       { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 },
       (error, stdout, stderr) => {
         removePrivilegedScript(dir, scriptPath);
@@ -136,7 +159,7 @@ export function resolveAuthMode(mode: AuthMode | undefined, command: string): "o
   // auto: the machine-level commands go to the OS, the rest to the prompt.
   if (!isMacOS()) return "password";
   const first = command.trim().split(/\s+/)[0] ?? "";
-  if (["sudo", "doas", "dscl", "systemsetup", "visudo"].includes(first)) return "os";
+  if (!isCompoundCommand(command) && ["sudo", "doas", "dscl", "systemsetup", "visudo"].includes(first)) return "os";
   return "password";
 }
 
