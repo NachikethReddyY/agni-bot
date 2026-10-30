@@ -387,6 +387,10 @@ export class Conversation {
       case "plugin.state":
       case "appearance.list.ok":
       case "appearance.updated":
+      // Group channels are a roster concern; a group's messages arrive as msg.new.
+      case "channel.created":
+      case "channel.list.ok":
+      case "channel.history.ok":
         return [];
 
       case "presence":

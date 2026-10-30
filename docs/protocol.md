@@ -50,6 +50,9 @@ never reason about thread ids.
 | `agent.rename` | `{agentId, name}` | Renames an agent and completes primary-agent onboarding. |
 | `agent.profile` | `{agentId, role?, visibility?, model?}` | Edits an agent's profile from the app: `role` is the tag the roster shows ("chief of staff"), `visibility` is what other agents may see of its work (`private \| summary \| shared`), `model` is the bot's own model (`provider`, `provider:model` or a model id; `null` or `""` clears it), which the router tries first and falls back from when that provider is unavailable. At least one field is required. The answer is an `agent.updated` carrying the new `role` and `visibility`; the same change the `update_agent` chat tool makes, so the two cannot drift apart. |
 | `agent.create` | `{name, prompt, role?, id?, color?}` | Creates an agent from the app's roster — the "+" button. `prompt` is its system prompt, `role` its tag. The same creation the `create_agent` chat tool performs, so a bot made here and a bot made in chat are the same kind of thing; the roster comes back in an `agents.update`. |
+| `channel.create` | `{name, agentIds}` | Phase 4. Creates a group channel: the owner and 2–8 bots. The first id is the primary bot. Answered (to every client) by `channel.created`. |
+| `channel.list` | `{}` | Phase 4. The group channels; answered by `channel.list.ok`. |
+| `channel.history` | `{channelId, limit?}` | Phase 4. A group channel's messages, last N chronological (default 200, max 500); answered by `channel.history.ok`. |
 | `form.answer` | `{requestID, answer}` | The owner answered a question the agent asked — the option they chose, or their own words if they typed instead of choosing. The answer lands on the `forms` row and the turn waiting on it carries on with it. |
 | `msg.cancel` | `{turnID}` | Interrupts the turn: providers abort, partial output is kept. |
 | `approve.reply` | `{requestID, decision}` | `decision`: `once \| always \| reject`. |
@@ -152,6 +155,9 @@ accountLabel?, error?, connectedAt?}`.
 | `status.update` | `{channelId, agentId?, text, transient}` | Activity text; transient updates clear on the next message. |
 | `msg.new` | `{id, channelId, fromType, fromId, senderName, senderColor?, text, internal, uiHint?, intent?, toAgentId?, taskId?, questionId?, createdAt}` | Durable channel message; `uiHint` can be `onboarding_name_prompt`, `handoff_notice`, `progress`, `needs_input`, or `normal`. `intent` says what an agent-to-agent message is for (`request`, `result`, `question`, `status`, `fyi`); it is absent on ordinary messages. The live frame for a handoff notice always carries one, defaulting to `request`; a notice reloaded from history has none, because channel rows do not store intent. `toAgentId` names the agent a handoff notice is about, so the client can render the name as a link to that agent's chat. `taskId` + `questionId` mark a question from a delegated task: the client renders an answer field that sends `task.answer`. |
 | `agent.updated` | `{agentId, displayName, onboarded, role?, visibility?}` | Agent rename/onboarding state changed. `role` and `visibility` are present when the change touched them (an `agent.profile` edit). |
+| `channel.created` | `{channel: ChannelInfo}` | Phase 4. A group channel exists. `ChannelInfo` is `{id, name, type: "group", agentIds, createdAt}`; `agentIds[0]` is the primary bot. |
+| `channel.list.ok` | `{channels: ChannelInfo[]}` | Phase 4. Answer to `channel.list`. |
+| `channel.history.ok` | `{channelId, messages: MessageInfo[]}` | Phase 4. Answer to `channel.history`. |
 | `error` | `{code, message, retryAfter?}` | See codes below. |
 
 A task turn speaks in messages, not one growing reply: each completed assistant
@@ -261,3 +267,21 @@ routine's `allowedDomains` (at most 20 bare hosts, no scheme, slash or port).
 Malformed input returns `invalid_domains`. Only the owner's connection can send
 it; a bot's tools cannot, so a bot cannot widen its own egress. The reply is
 `job.list.ok`, as for `job.set`.
+
+
+## Group channels (Phase 4)
+
+A group channel holds the owner and two or more bots. Send into it with
+`msg.send {channelId}`. Floor rule: a message that starts with a member
+bot's `@name` goes to that bot; anything else goes to the primary bot
+(`agentIds[0]`), which may hand off. A mention of a bot outside the group
+does not move the message out of the room. Every message and every reply
+is a `msg.new` on the group's `channelId`.
+
+Each bot answers from its own conversation, so its memory stays its own.
+It sees the room as a short block of recent group messages in its model
+input; every other bot's line passes through the visibility filter, so a
+`private` bot shows as "(replied; private)" and a `summary` bot as one
+line. The group has no shared summary and is not compacted, and the tagger
+batches each bot's exchanges separately. These frames are additive and
+optional: `PROTOCOL_VERSION` stays 2.

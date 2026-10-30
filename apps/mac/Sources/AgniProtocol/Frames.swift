@@ -136,6 +136,16 @@ public struct MessageInfo: Sendable, Equatable, Decodable {
   public var uiHint: String?
 }
 
+/// Phase 4: a group channel — the owner and two or more bots. The first
+/// agent id is the primary, who answers unless another bot is @named.
+public struct ChannelInfo: Sendable, Equatable, Decodable, Identifiable {
+  public var id: String
+  public var name: String
+  public var type: String
+  public var agentIds: [String]
+  public var createdAt: String
+}
+
 public struct JobInfo: Sendable, Equatable, Decodable, Identifiable {
   public var id: String
   public var kind: String
@@ -341,6 +351,10 @@ public enum ClientFrame: Sendable, Equatable {
   case pluginDisconnect(connectionID: String)
   case agentRename(agentId: String, name: String)
   case userTyping(channelId: String?, isTyping: Bool)
+  // Phase 4: group channels.
+  case channelCreate(name: String, agentIds: [String])
+  case channelList
+  case channelHistory(channelId: String, limit: Int?)
 
   public var type: String {
     switch self {
@@ -375,6 +389,9 @@ public enum ClientFrame: Sendable, Equatable {
   case .pluginDisconnect: "plugin.disconnect"
   case .agentRename: "agent.rename"
   case .userTyping: "user.typing"
+  case .channelCreate: "channel.create"
+  case .channelList: "channel.list"
+  case .channelHistory: "channel.history"
     }
   }
 
@@ -469,6 +486,14 @@ public enum ClientFrame: Sendable, Equatable {
     case .userTyping(let channelId, let isTyping):
       if let channelId { object["channelId"] = channelId }
       object["isTyping"] = isTyping
+    case .channelCreate(let name, let agentIds):
+      object["name"] = name
+      object["agentIds"] = agentIds
+    case .channelList:
+      break
+    case .channelHistory(let channelId, let limit):
+      object["channelId"] = channelId
+      if let limit { object["limit"] = limit }
     }
     return object
   }
@@ -581,6 +606,13 @@ public enum ClientFrame: Sendable, Equatable {
       self = .userTyping(
         channelId: object["channelId"] as? String,
         isTyping: try Require.bool(object, "isTyping"))
+    case "channel.create":
+      guard let agentIds = object["agentIds"] as? [String] else { throw ProtocolError.encoding("missing agentIds") }
+      self = .channelCreate(name: try Require.string(object, "name"), agentIds: agentIds)
+    case "channel.list":
+      self = .channelList
+    case "channel.history":
+      self = .channelHistory(channelId: try Require.string(object, "channelId"), limit: object["limit"] as? Int)
     default:
       throw ProtocolError.unknownFrameType(type)
     }
@@ -627,6 +659,10 @@ public enum ServerFrame: Sendable, Equatable {
   case msgNew(MsgNew)
   case agentUpdated(AgentUpdated)
   case error(ErrorFrame)
+  // Phase 4: group channels.
+  case channelCreated(ChannelCreated)
+  case channelListOK(ChannelListOK)
+  case channelHistoryOK(ChannelHistoryOK)
   /// A frame this build does not know. Ignored, never fatal.
   case unknown(type: String, seq: Int)
 
@@ -666,6 +702,9 @@ public enum ServerFrame: Sendable, Equatable {
     case .msgNew(let f): f.seq
     case .agentUpdated(let f): f.seq
     case .error(let f): f.seq
+    case .channelCreated(let f): f.seq
+    case .channelListOK(let f): f.seq
+    case .channelHistoryOK(let f): f.seq
     case .unknown(_, let seq): seq
     }
   }
@@ -706,6 +745,9 @@ public enum ServerFrame: Sendable, Equatable {
     case .msgNew: "msg.new"
     case .agentUpdated: "agent.updated"
     case .error: "error"
+    case .channelCreated: "channel.created"
+    case .channelListOK: "channel.list.ok"
+    case .channelHistoryOK: "channel.history.ok"
     case .unknown(let type, _): type
     }
   }
@@ -830,6 +872,22 @@ public enum ServerFrame: Sendable, Equatable {
     public var conversationID: String
     public var sessionID: String
     public var reason: String
+  }
+
+  public struct ChannelCreated: Sendable, Equatable, Decodable {
+    public var seq: Int
+    public var channel: ChannelInfo
+  }
+
+  public struct ChannelListOK: Sendable, Equatable, Decodable {
+    public var seq: Int
+    public var channels: [ChannelInfo]
+  }
+
+  public struct ChannelHistoryOK: Sendable, Equatable, Decodable {
+    public var seq: Int
+    public var channelId: String
+    public var messages: [MessageInfo]
   }
 
   public struct ConversationHistoryOK: Sendable, Equatable, Decodable {
@@ -998,6 +1056,9 @@ public enum ServerFrame: Sendable, Equatable {
     case "msg.new": self = .msgNew(try Decode.frame(MsgNew.self, object))
     case "agent.updated": self = .agentUpdated(try Decode.frame(AgentUpdated.self, object))
     case "error": self = .error(try Decode.frame(ErrorFrame.self, object))
+    case "channel.created": self = .channelCreated(try Decode.frame(ChannelCreated.self, object))
+    case "channel.list.ok": self = .channelListOK(try Decode.frame(ChannelListOK.self, object))
+    case "channel.history.ok": self = .channelHistoryOK(try Decode.frame(ChannelHistoryOK.self, object))
     default: self = .unknown(type: type, seq: (object["seq"] as? Int) ?? 0)
     }
   }

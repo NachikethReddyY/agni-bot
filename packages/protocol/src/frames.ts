@@ -139,6 +139,17 @@ export const MessageInfoSchema = z.object({
 });
 export type MessageInfo = z.infer<typeof MessageInfoSchema>;
 
+/** Phase 4: a group channel — the owner and two or more bots in one room. */
+export const ChannelInfoSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  type: z.literal("group"),
+  /** Member bots; the first is the primary, who answers unless another is @named. */
+  agentIds: z.array(z.string()).min(2),
+  createdAt: z.string(),
+});
+export type ChannelInfo = z.infer<typeof ChannelInfoSchema>;
+
 /** Why a session block boundary exists. */
 export const SESSION_REASONS = ["manual", "context", "background"] as const;
 export const SessionReasonSchema = z.enum(SESSION_REASONS);
@@ -581,6 +592,17 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
     requestID: z.string().min(1),
     answer: z.string().min(1).max(4_000),
   }),
+  // --- Phase 4: group channels -------------------------------------------
+  /** Create a group channel with two or more bots; answered by `channel.created`. */
+  z.object({
+    type: z.literal("channel.create"),
+    name: z.string().trim().min(1).max(64),
+    agentIds: z.array(z.string().min(1)).min(2).max(8),
+  }),
+  /** List the group channels; answered by `channel.list.ok`. */
+  z.object({ type: z.literal("channel.list") }),
+  /** A group channel's messages, last N chronological (default 200, max 500). */
+  z.object({ type: z.literal("channel.history"), channelId: z.string().min(1), limit: z.number().int().positive().max(500).optional() }),
 ]);
 export type ClientFrame = z.infer<typeof ClientFrameSchema>;
 export type ClientFrameType = ClientFrame["type"];
@@ -839,6 +861,11 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     visibility: z.enum(["private", "summary", "shared"]).optional(),
   }),
   z.object({ type: z.literal("error"), seq, code: z.string(), message: z.string(), retryAfter: z.number().optional() }),
+  // --- Phase 4: group channels -------------------------------------------
+  /** A group channel was created; sent to every client. */
+  z.object({ type: z.literal("channel.created"), seq, channel: ChannelInfoSchema }),
+  z.object({ type: z.literal("channel.list.ok"), seq, channels: z.array(ChannelInfoSchema) }),
+  z.object({ type: z.literal("channel.history.ok"), seq, channelId: z.string(), messages: z.array(MessageInfoSchema) }),
 ]);
 export type ServerFrame = z.infer<typeof ServerFrameSchema>;
 export type ServerFrameType = ServerFrame["type"];

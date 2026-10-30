@@ -101,21 +101,25 @@ export function registerTaggerJob(runner: JobRunner, deps: TaggerJobDeps): void 
       )
       .get()?.channel_id;
     if (!channelID) return { result: "nothing to tag" };
+    const channel = deps.db
+      .query<{ agent_id: string; type: string }, [string]>("SELECT agent_id, type FROM channels WHERE id = ?")
+      .get(channelID);
+    if (!channel) return { result: "the channel is gone" };
+    // A group holds several bots: each batch is one bot's exchanges (its
+    // replies and the owner's messages to it), written as that bot's memory.
+    const groupAgent = channel.type === "group" ? (payload.agentID ?? groupBatchAgent(deps.db, channelID)) : null;
+    const agentID = groupAgent ?? channel.agent_id;
     const messages = deps.db
-      .query<{ id: string; from_type: string; from_id: string; text: string; created_at: string; channel_id: string }, [string, number]>(
+      .query<{ id: string; from_type: string; from_id: string; text: string; created_at: string; channel_id: string }, [string, string | null, string | null, number]>(
         `SELECT id, from_type, from_id, text, created_at, channel_id
          FROM channel_messages
          WHERE channel_id = ? AND tagged_at IS NULL AND salience <> 'temp' AND from_type <> 'system' AND peer_influenced = 0
+           AND (? IS NULL OR (CASE WHEN from_type = 'agent' THEN from_id ELSE to_agent_id END) = ?)
          ORDER BY created_at ASC, rowid ASC
          LIMIT ?`,
       )
-      .all(channelID, TAGGER_BATCH_MESSAGES);
+      .all(channelID, groupAgent, groupAgent, TAGGER_BATCH_MESSAGES);
     if (messages.length === 0) return { result: "nothing to tag" };
-
-    const agentID = deps.db
-      .query<{ agent_id: string }, [string]>("SELECT agent_id FROM channels WHERE id = ?")
-      .get(channelID)?.agent_id;
-    if (!agentID) return { result: "the channel is gone" };
     const transcript = messages
       .map((message) => `[${message.id}] ${message.from_type}/${message.from_id}: ${message.text.slice(0, TAGGER_MAX_MESSAGE_CHARS)}`)
       .join("\n");
@@ -163,6 +167,18 @@ export function registerTaggerJob(runner: JobRunner, deps: TaggerJobDeps): void 
         (applied.refused > 0 ? `, ${applied.refused} refused` : ""),
     };
   });
+}
+
+/** The bot of the oldest untagged message in a group channel. */
+function groupBatchAgent(db: Database, channelID: string): string | null {
+  return db
+    .query<{ agent_id: string | null }, [string]>(
+      `SELECT CASE WHEN from_type = 'agent' THEN from_id ELSE to_agent_id END AS agent_id
+       FROM channel_messages
+       WHERE channel_id = ? AND tagged_at IS NULL AND salience <> 'temp' AND from_type <> 'system' AND peer_influenced = 0
+       ORDER BY created_at ASC, rowid ASC LIMIT 1`,
+    )
+    .get(channelID)?.agent_id ?? null;
 }
 
 function markTagged(db: Database, ids: string[]): void {

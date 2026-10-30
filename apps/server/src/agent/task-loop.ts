@@ -84,6 +84,13 @@ export interface TaskTurnRun {
   /** The durable channel that owns this turn, when using the channel model. */
   channelID?: string;
   /**
+   * Phase 4: a group-channel turn. The block (recent room messages, already
+   * filtered by visibility) opens the model input; the durable log keeps the
+   * owner's plain text. The group's shared summary is not used and the room
+   * is not compacted, so no bot's words reach another bot unfiltered.
+   */
+  groupContext?: string;
+  /**
    * How the request is written to the durable log. A delegated brief is a
    * system note ("Vision messaged you: …"), not the owner speaking.
    */
@@ -307,7 +314,9 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   // row (above) keeps the plain text so the UI stays readable.
   messages.push({
     role: "user",
-    content: run.peer ? peerEnvelope(run.peer, run.text) : run.text,
+    content: run.peer
+      ? peerEnvelope(run.peer, run.text)
+      : run.groupContext ? `${run.groupContext}\n\nThe owner now says:\n${run.text}` : run.text,
     attachmentIDs: run.attachmentIDs,
   });
   run.emit({
@@ -350,7 +359,7 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   // Sorted so an update to one fact does not reshuffle the cached prefix.
   const factRows = run.facts === false ? [] : recallFact(db, { limit: 6, callerAgentID: persona.id }).facts;
   const facts = factRows.map((row) => row.fact).sort();
-  const channelSummary = run.channelID ? getChannelSummary(db, run.channelID)?.summary : null;
+  const channelSummary = run.channelID && run.groupContext === undefined ? getChannelSummary(db, run.channelID)?.summary : null;
   // ASM-002: a short, always-present note of the current topic. It holds the
   // latest question, so the compiler places it after the per-block slots.
   const anchor = deriveAnchor({
@@ -717,7 +726,7 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
     if (runningTurns.get(threadID)?.turnID === turnID) runningTurns.delete(threadID);
   }
 
-  if (run.channelID) void compactChannelHistory(db, router, run.channelID, persona.id, peerInput);
+  if (run.channelID && run.groupContext === undefined) void compactChannelHistory(db, router, run.channelID, persona.id, peerInput);
   finishTurn(db, { id: turnID, stopReason, ...usage });
   touchThread(db, threadID);
   // A turn waiting for the owner's answer is not a failed turn: the session

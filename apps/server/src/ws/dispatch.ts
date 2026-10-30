@@ -62,7 +62,8 @@ import { scheduleTagger, turnsSinceTag } from "../jobs/tagger";
 import type { TurnJobPayload } from "../jobs/turn";
 import { newID, nowISO } from "../util/ids";
 import { putAgentMemory, listAgentMemories, type AgentMemoryRow } from "../stores/agent-memories";
-import { appendChannelMessage, ensureDMChannel, getChannel } from "../stores/channels";
+import { appendChannelMessage, channelAgentIDs, createGroupChannel, ensureDMChannel, getChannel, listGroupChannels, type ChannelRow } from "../stores/channels";
+import { groupContextBlock, groupHistory, groupResponder } from "../agent/group";
 import { canonicalURL, saveLink, searchLinks } from "../stores/links";
 import { buildShareDocument, publishShare, shareBaseURL } from "../share/document";
 import { createTask, createTaskList, editTask, getTask, listTaskActivity, listTaskLists, listTasks, setTaskStatus, snoozeTask, cancelDelegation, clearPendingQuestion, setDelegationJob, setDelegationState, taskInfo, briefChainID } from "../stores/tasks";
@@ -257,6 +258,13 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleAgentProfile(deps, session, frame);
     case "agent.create":
       return handleAgentCreate(deps, session, frame);
+    case "channel.create":
+      return handleChannelCreate(deps, session, frame);
+    case "channel.list":
+      if (!requireAuth(deps, session)) return;
+      return void deps.reply({ type: "channel.list.ok", channels: listGroupChannels(deps.db).map((row) => channelInfo(deps.db, row)) });
+    case "channel.history":
+      return handleChannelHistory(deps, session, frame);
   }
 }
 
@@ -438,7 +446,8 @@ function targetThread(
     const conversation = getConversation(deps.db, frame.conversationID);
     return conversation ? activeSession(deps.db, conversation) : null;
   }
-  const mention = resolveAgentMention(deps.db, text);
+  const group = groupOf(deps.db, frame.channelId);
+  const mention = group ? groupResponder(deps.db, group, text) : resolveAgentMention(deps.db, text);
   const channelAgent = frame.channelId === "main"
     ? "ea"
     : frame.channelId?.startsWith("dm:")
@@ -596,8 +605,12 @@ async function runUserMessage(
   // `@friday write the email` is a message to Friday, not to whatever chat
   // is open. Routing happens before the turn starts: the text is appended to
   // that agent's DM and the executive assistant never sees it.
-  const mention = resolveAgentMention(deps.db, text);
-  const routedText = mention?.text ?? text;
+  // Phase 4: in a group the floor rule picks the bot, and the message stays
+  // in the room instead of moving to that bot's DM.
+  const groupChannel = groupOf(deps.db, frame.channelId);
+  const group = groupChannel ? groupResponder(deps.db, groupChannel, text) : null;
+  const mention = group ? null : resolveAgentMention(deps.db, text);
+  const routedText = group?.text ?? mention?.text ?? text;
   // The executive assistant's surface is `main`, not a DM channel; an
   // `@agni` mention must not create a second, invisible room.
   const mentionChannelID = mention
@@ -612,7 +625,7 @@ async function runUserMessage(
     channel = ensureDMChannel(deps.db, channelAgentID);
   }
   if (frame.channelId && !channel && !mention) return sendError(deps, session, "unknown_channel", `no channel ${frame.channelId}`);
-  const requestedAgentID = mention?.agentID ?? frame.toAgentId ?? (frame.channelId ? channel?.agent_id : session.agentID) ?? session.agentID;
+  const requestedAgentID = group?.agentID ?? mention?.agentID ?? frame.toAgentId ?? (frame.channelId ? channel?.agent_id : session.agentID) ?? session.agentID;
 
   // While the primary assistant is waiting for its first name, an ordinary
   // main-channel message is treated as the answer to the inline prompt.
@@ -675,15 +688,19 @@ async function runUserMessage(
   // salience. Temp turns stay visible in the transcript and the recent window
   // but are skipped by compaction (GATE-002, MEM/TAG).
   const gate = classifyTurn(routedText);
+  let userMessageID: string | undefined;
   if (channel) {
     const userMessage = appendChannelMessage(deps.db, {
       channelID,
       fromType: "user",
       fromID: session.device?.id ?? "user",
-      toAgentID: mention?.agentID ?? frame.toAgentId ?? null,
+      // In a group the row names the bot that took the floor, so the tagger
+      // batches each bot's exchanges separately.
+      toAgentID: group?.agentID ?? mention?.agentID ?? frame.toAgentId ?? null,
       text: routedText,
       salience: gate.salience,
     });
+    userMessageID = userMessage.id;
     linkAttachments(deps.db, userMessage.id, attachments.map((file) => file.id));
     deps.emit({
       attachments,
@@ -716,6 +733,7 @@ async function runUserMessage(
     emit: deps.emit,
     signal: controller.signal,
     channelID: channel ? channelID : undefined,
+    ...(groupChannel ? { groupContext: groupContextBlock(groupChannel, groupHistory(deps.db, channelID, persona.id, userMessageID)) } : {}),
   });
 
   void turn
@@ -1658,6 +1676,51 @@ function handleAgentProfile(
   } catch (error) {
     sendError(deps, session, "bad_frame", error instanceof Error ? error.message : "could not update the agent");
   }
+}
+
+/** The group channel a frame targets, or null for main, DMs and threads. */
+function groupOf(db: Database, channelID: string | undefined): ChannelRow | null {
+  if (!channelID || channelID === "main" || channelID.startsWith("dm:")) return null;
+  const channel = getChannel(db, channelID);
+  return channel?.type === "group" ? channel : null;
+}
+
+function channelInfo(db: Database, row: ChannelRow) {
+  return { id: row.id, name: row.name, type: "group" as const, agentIds: channelAgentIDs(db, row), createdAt: row.created_at };
+}
+
+function handleChannelCreate(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "channel.create" }>): void {
+  if (!requireAuth(deps, session)) return;
+  const agentIDs = [...new Set(frame.agentIds.map(canonicalAgentID))];
+  const unknown = agentIDs.find((id) => !getPersona(id));
+  if (unknown) return sendError(deps, session, "unknown_agent", `no agent with id ${unknown}`);
+  if (agentIDs.length < 2) return sendError(deps, session, "bad_frame", "a group needs two or more different bots");
+  const row = createGroupChannel(deps.db, frame.name.trim(), agentIDs);
+  deps.emit({ type: "channel.created", channel: channelInfo(deps.db, row) });
+}
+
+function handleChannelHistory(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "channel.history" }>): void {
+  if (!requireAuth(deps, session)) return;
+  if (!groupOf(deps.db, frame.channelId)) return sendError(deps, session, "unknown_channel", `no group channel ${frame.channelId}`);
+  const rows = deps.db.query<{
+    id: string; text: string; created_at: string; turn_id: string | null; from_id: string; from_type: string;
+    sender_name: string | null; sender_color: string | null; device_name: string | null; ui_hint: string | null; to_agent_id: string | null;
+  }, [string, number]>(`SELECT * FROM (SELECT cm.id, cm.text, cm.created_at, cm.turn_id, cm.from_id, cm.from_type, cm.rowid AS rid,
+      a.display_name AS sender_name, a.avatar_color AS sender_color, d.name AS device_name, cm.ui_hint, cm.to_agent_id
+      FROM channel_messages cm LEFT JOIN agents a ON a.id = cm.from_id LEFT JOIN devices d ON d.id = cm.from_id
+      WHERE cm.channel_id = ? AND cm.internal = 0 ORDER BY cm.created_at DESC, cm.rowid DESC LIMIT ?) ORDER BY created_at, rid`)
+    .all(frame.channelId, frame.limit ?? 200);
+  const messages = rows.map((row) => {
+    const role = row.from_type === "user" ? "user" : row.from_type === "system" ? "system" : "assistant";
+    return {
+      attachments: messageAttachments(deps.db, row.id),
+      id: row.id, role, text: row.text, createdAt: row.created_at, turnID: row.turn_id ?? undefined,
+      senderName: role === "user" ? row.device_name ?? "You" : row.sender_name ?? row.from_id,
+      senderColor: row.sender_color ?? undefined, uiHint: row.ui_hint ?? undefined,
+      ...(row.to_agent_id ? { toAgentId: row.to_agent_id } : {}),
+    };
+  });
+  deps.reply({ type: "channel.history.ok", channelId: frame.channelId, messages });
 }
 
 function handleAgentCreate(
