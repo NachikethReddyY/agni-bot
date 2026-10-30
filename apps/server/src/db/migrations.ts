@@ -970,4 +970,20 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX routine_runs_routine_started ON routine_runs(routine_id, started_at);
     `,
   },
+  {
+    id: 42,
+    name: "harness_proposals",
+    sql: `
+      CREATE TABLE harness_proposals (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,               -- promote_core | demote_core | tool_failing | turn_timeouts
+        subject TEXT NOT NULL,            -- a tool name, or '*' for the whole lane
+        evidence TEXT NOT NULL,           -- JSON counts only, never transcript text
+        status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX harness_proposals_subject ON harness_proposals(kind, subject);
+    `,
+  },
 ];

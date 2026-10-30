@@ -34,6 +34,7 @@ import { setSlotBudgets } from "./context/compiler";
 import { JobRunner } from "./jobs/runner";
 import { registerTurnJob, type TurnJobPayload } from "./jobs/turn";
 import { registerAllJobs } from "./jobs/registry";
+import { nextDailyRun } from "./jobs/schedule";
 import { scheduleTagger } from "./jobs/tagger";
 import { log } from "./log";
 import { HealthTracker } from "./models/health";
@@ -103,6 +104,9 @@ async function serve(): Promise<void> {
   // something left to embed.
   if (!listJobs(db, { limit: 50 }).some((job) => job.kind === "memory.consolidate")) {
     enqueueJob(db, { kind: "memory.consolidate", payload: {} });
+  }
+  if (!listJobs(db, { limit: 50 }).some((job) => job.kind === "harness.review")) {
+    enqueueJob(db, { kind: "harness.review", payload: {}, runAt: nextDailyRun("04:00", undefined).toISOString() });
   }
   if (!listJobs(db, { limit: 50 }).some((job) => job.kind === "summary.rollup")) {
     enqueueJob(db, {
