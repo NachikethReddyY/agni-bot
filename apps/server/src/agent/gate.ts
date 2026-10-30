@@ -95,6 +95,11 @@ export function classifyTurn(text: string, previousText?: string | null): GateRe
   return { category: "durable_candidate", salience: "recent_turns", deictic: false, reason: "substantial turn, may carry durable content" };
 }
 
+/** A greeting or an acknowledgement: nothing worth a vector search. */
+export function isSmallTalk(text: string): boolean {
+  return !text.trim() || THANKS.test(text);
+}
+
 /** Explicit remembers bypass batching and are processed immediately (GATE-003). */
 export function bypassesBatch(category: TurnCategory): boolean {
   return category === "explicit_remember";

@@ -451,17 +451,18 @@ export function searchMemoriesByVector(
   }
   clauses.push("(m.visibility <> 'private' OR COALESCE(m.agent_id, 'ea') = ?)");
   params.push(caller ?? "");
-  params.push(limit * 4);
 
   const rows = db
     .query<AgentMemoryRow & { embedding: Uint8Array | null }, (string | number)[]>(
       `SELECT ${MEMORY_COLUMNS.split(", ").map((column) => `m.${column}`).join(", ")}, m.embedding AS embedding
        FROM agent_memories m
-       WHERE ${clauses.join(" AND ")}
-       LIMIT ?`,
+       WHERE ${clauses.join(" AND ")}`,
     )
     .all(...params);
 
+  // Every embedded row is scored: SQL cannot rank by cosine, so a LIMIT here
+  // would keep arbitrary rows, not the nearest ones.
+  // shortcut: a linear scan, fine to a few thousand facts; move to sqlite-vec past that.
   const now = Date.now();
   const hits: MemoryHit[] = [];
   for (const row of rows) {

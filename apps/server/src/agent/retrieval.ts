@@ -33,6 +33,12 @@ export const DEFAULT_MIN_SCORE = 0.15;
 export const VECTOR_MIN_RELEVANCE = 0.75;
 
 /**
+ * The embedder's timeout on the turn path. A slow or cold embedder costs the
+ * turn its vector half (FTS still runs), never the owner's wait (TUNABLE).
+ */
+export const TURN_EMBED_TIMEOUT_MS = 750;
+
+/**
  * ASM-003: rewrite a message that refers to earlier context.
  *
  * "explain this" means nothing to a search index. The anchor says what the

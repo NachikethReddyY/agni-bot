@@ -254,10 +254,53 @@ export function taskToolSpecs(registry: ToolRegistry, allowlist: string[], kind:
   }));
 }
 
-export function taskToolHints(registry: ToolRegistry, allowlist: string[]): string[] {
-  return registry
-    .allowlistByKind(allowlist, "dynamic")
-    .map((tool) => `- ${tool.name}: ${tool.description}`);
+/**
+ * The tools whose schemas go out on every model call. The rest of an agent's
+ * tools are listed by name and loaded with `load_tools` when a turn needs
+ * them: the full schemas were ~70% of every request.
+ */
+export const CORE_TOOLS = new Set([
+  "say", "ask", "memory_search", "recall_fact", "remember_fact", "web_search", "web_fetch",
+  "tasks_list", "task_create", "handoff", "delegate_task",
+]);
+
+/** An agent with this many tools or fewer gets every schema; deferring would cost a step. */
+export const DEFER_TOOLS_ABOVE = 12;
+
+/** The tools of this allowlist that are listed by name instead of sent. */
+export function deferredTools(registry: ToolRegistry, allowlist: string[]): string[] {
+  if (allowlist.length <= DEFER_TOOLS_ABOVE) return [];
+  return allowlist.filter((name) => !CORE_TOOLS.has(name) && registry.get(name));
+}
+
+/** One short line per deferred tool: its name and the first sentence of what it does. */
+export function deferredToolHints(registry: ToolRegistry, names: string[]): string[] {
+  return names.map((name) => {
+    const description = registry.get(name)?.description ?? "";
+    const first = description.split(/(?<=\.)\s/)[0] ?? "";
+    return `- ${name}: ${first.length > 100 ? `${first.slice(0, 99)}…` : first}`;
+  });
+}
+
+/** `load_tools`: make deferred tools callable for the rest of this turn. */
+export function registerLoadTools(registry: ToolRegistry, deferred: string[], loaded: Set<string>): void {
+  const available = new Set(deferred);
+  registry.register({
+    name: "load_tools",
+    description: "Load tools listed under 'More tools' so you can call them. Pass their names; they stay loaded for this turn.",
+    kind: "static",
+    schema: objectSchema({ names: { type: "array", minItems: 1, maxItems: 20, items: stringProp } }, ["names"]),
+    timeoutMs: 1_000,
+    handler: async (args) => {
+      const names = parseObject(args, (v) => {
+        if (!Array.isArray(v.names) || v.names.some((name) => typeof name !== "string")) throw new Error("names must be an array of tool names");
+        return v.names.map((name: string) => name.trim());
+      });
+      const unknown = names.filter((name) => !available.has(name));
+      for (const name of names) if (available.has(name)) loaded.add(name);
+      return { loaded: names.filter((name) => available.has(name)), ...(unknown.length ? { unknown } : {}) };
+    },
+  });
 }
 
 function parseObject<T>(input: unknown, parse: (value: Record<string, unknown>) => T): T {

@@ -72,7 +72,7 @@ export function buildDelegationPrefix(params: {
   }
   tail.push(`You are at depth ${params.depth} of ${params.maxDepth} in an agent-to-agent chain.`);
   if (params.toolHints?.length) {
-    tail.push(`Dynamic tools available (full schema on invocation):\n${params.toolHints.join("\n")}`);
+    tail.push(`More tools — call load_tools with their names before using them:\n${params.toolHints.join("\n")}`);
   }
   return assembleContext({
     personaPrompt: params.persona.systemPrompt,

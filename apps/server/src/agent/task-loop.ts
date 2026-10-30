@@ -13,7 +13,7 @@ import { Router, RouterBusyError, RouterError } from "../models/router";
 import { appendMessage, createTurn, finishTurn, recentMessages, titleThreadFromFirstMessage, touchThread } from "../stores/threads";
 import { recordUsage } from "../stores/usage";
 import { newID, nowISO } from "../util/ids";
-import { buildTaskToolRegistry, taskToolHints, taskToolSpecs } from "../tools/task-registry";
+import { buildTaskToolRegistry, deferredToolHints, deferredTools, registerLoadTools, taskToolSpecs } from "../tools/task-registry";
 import { teamRoster } from "./personas";
 import { deriveAnchor } from "../context/compiler";
 import { registerHandoffTool } from "../tools/handoff-tool";
@@ -27,9 +27,10 @@ import { registerRenameTool } from "../tools/rename-tool";
 import { registerCreateAgentTool } from "../tools/create-agent-tool";
 import { createUpdateAgentTool } from "../tools/update-agent-tool";
 import { recallFact } from "../tools/facts";
-import { retrieveFacts, rewriteForRetrieval, previousBlockTail } from "./retrieval";
+import { retrieveFacts, rewriteForRetrieval, previousBlockTail, TURN_EMBED_TIMEOUT_MS } from "./retrieval";
 import type { MemoryHit } from "../stores/agent-memories";
-import { embedderConfig } from "./embeddings";
+import { embedderConfig, type EmbedderConfig } from "./embeddings";
+import { isSmallTalk } from "./gate";
 import { registerExpandTool } from "../tools/expand-tool";
 import { buildDelegationPrefix } from "./prompts";
 import { getThread } from "../stores/threads";
@@ -191,6 +192,12 @@ function openedTail(db: Database, threadID: string): string[] {
   return raw.split("\n").filter((line) => line.trim().length > 0);
 }
 
+/** The embedder for this turn: none for small talk, and a short timeout. */
+export function turnEmbedder(text: string, config = embedderConfig()): EmbedderConfig | null {
+  if (!config || isSmallTalk(text)) return null;
+  return { ...config, timeoutMs: Math.min(config.timeoutMs, TURN_EMBED_TIMEOUT_MS) };
+}
+
 /**
  * Recalled memories for the prompt: skip what the pinned facts already say,
  * and tag each with its id and date so the model can `expand` it.
@@ -328,12 +335,6 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // Most turns have no generated-token ceiling. Scheduled routines may set an
   // explicit per-run cap so their own cost bound survives the shared loop.
   const tokenLimit = run.maxTokens === undefined ? null : Math.max(1, run.maxTokens);
-  const dynamicHints = taskToolHints(registry, effectiveTools);
-  if (dynamicHints.length > 0) {
-    (globalThis as any).__AGNI_DYNAMIC_TOOL_HINTS__ = dynamicHints;
-  } else {
-    delete (globalThis as any).__AGNI_DYNAMIC_TOOL_HINTS__;
-  }
   // Agent-to-agent guardrails: root turn is depth 1; a delegated child turn
   // inherits the parent's state via run.guardrail. Facts ride in the prefix.
   let guardrail = run.guardrail ?? rootGuardrail(persona.id);
@@ -360,7 +361,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
     callerAgentID: persona.id,
     limit: 6,
     minScore: settings.minRecallScore,
-    embedder: embedderConfig(),
+    embedder: turnEmbedder(run.text),
   });
   const recall = recallLines(retrieved?.hits ?? [], new Set(factRows.map((row) => row.id)));
   const previousTail = openedTail(db, threadID);
@@ -368,29 +369,6 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   if ((!retrieved || retrieved.belowThreshold) && previousTail.length === 0) {
     recall.push(...previousBlockTail(db, { conversationID: run.conversationID ?? null, threadID }));
   }
-  const delegationPrefix = buildDelegationPrefix({
-    persona,
-    facts,
-    // carrySummary is the conversation's own summary. Peer context travels in
-    // the user message inside the envelope, never through this prefix.
-    carrySummary: [run.carrySummary, channelSummary].filter(Boolean).join("\n\n") || null,
-    depth: guardrail.depth,
-    maxDepth: 5,
-    toolHints: dynamicHints,
-    anchor,
-    // ASM-004: what this turn needs, retrieved rather than carried.
-    recall,
-    // ROL-006: the new block opens with the last turns of the old one, so
-    // the boundary does not lose the stretch the summary has not caught up
-    // with.
-    previousTail,
-    // CMP-001: the day and epoch summaries, when this conversation has them.
-    rollups: run.conversationID
-      ? listSummaries(db, { conversationID: run.conversationID, level: "day", limit: 3 }).map((summary) => summary.text)
-      : [],
-    // Only an agent that can actually hand off needs to know the roster.
-    team: persona.tools.includes("handoff") ? teamRoster(db, { exclude: persona.id }) : [],
-  });
   const broker = new ApprovalBroker({
     db,
     emit: (frame) => run.emit(frame as ServerFrameBody),
@@ -468,7 +446,35 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
   // agent's role and prompt, durably.
   registry.register(createUpdateAgentTool({ db, emit: run.emit }));
   registerCreateAgentTool(registry, { db, emit: run.emit });
-  const tools = taskToolSpecs(registry, effectiveTools, "static"); // includes the per-turn tools registered above
+  // Large toolsets send core schemas only; the rest are listed by name and
+  // loaded on demand. Computed after per-turn registration so those tools have descriptions.
+  const deferred = deferredTools(registry, effectiveTools);
+  const loadedTools = new Set<string>();
+  if (deferred.length > 0) registerLoadTools(registry, deferred, loadedTools);
+  const callableTools = deferred.length > 0 ? [...effectiveTools, "load_tools"] : effectiveTools;
+  const delegationPrefix = buildDelegationPrefix({
+    persona,
+    facts,
+    // carrySummary is the conversation's own summary. Peer context travels in
+    // the user message inside the envelope, never through this prefix.
+    carrySummary: [run.carrySummary, channelSummary].filter(Boolean).join("\n\n") || null,
+    depth: guardrail.depth,
+    maxDepth: 5,
+    toolHints: deferredToolHints(registry, deferred),
+    anchor,
+    // ASM-004: what this turn needs, retrieved rather than carried.
+    recall,
+    // ROL-006: the new block opens with the last turns of the old one, so
+    // the boundary does not lose the stretch the summary has not caught up
+    // with.
+    previousTail,
+    // CMP-001: the day and epoch summaries, when this conversation has them.
+    rollups: run.conversationID
+      ? listSummaries(db, { conversationID: run.conversationID, level: "day", limit: 3 }).map((summary) => summary.text)
+      : [],
+    // Only an agent that can actually hand off needs to know the roster.
+    team: persona.tools.includes("handoff") ? teamRoster(db, { exclude: persona.id }) : [],
+  });
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, settings.turnTimeoutMs);
   const abort = (): void => controller.abort();
@@ -533,6 +539,8 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
         ...messages,
       ];
       activeStepText = "";
+      // Allowlist order is kept so the tool prefix stays stable across steps.
+      const tools = taskToolSpecs(registry, callableTools.filter((name) => !deferred.includes(name) || loadedTools.has(name)), "static");
       const result = await router.route({
         messages: await withAttachmentContent(db, requestMessages),
         signal: controller.signal,
@@ -599,7 +607,7 @@ export async function runTaskTurn(db: Database, router: Router, settings: TaskTu
           continue;
         }
         recentCalls.set(signature, stepCount);
-        const callResult = await executeTool(db, threadID, turnID, call, effectiveTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail, peerInput, run.allowedDomains);
+        const callResult = await executeTool(db, threadID, turnID, call, callableTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail, peerInput, run.allowedDomains);
         let content = callResult.content;
         if (looking && offRoadSteps === OFF_ROAD_NUDGE_AT && !offRoadNudged && !acted) {
           offRoadNudged = true;
@@ -905,14 +913,6 @@ async function executeTool(  db: Database, threadID: string, turnID: string, cal
   }
 }
 
-function stableSystemPrompt(personaPrompt: string): string { 
-  let base = `${TASK_SYSTEM_PROMPT}\n${personaPrompt}`; 
-  const hints = (globalThis as any).__AGNI_DYNAMIC_TOOL_HINTS__ as string[] | undefined;
-  if (hints && hints.length > 0) {
-    base += `\n\nDynamic tools (full schema provided only when invoked):\n${hints.join("\n")}`;
-  }
-  return base; 
-}
 function parseSessionMessages(raw: string): ChatMessage[] {
   try {
     const value: unknown = JSON.parse(raw);

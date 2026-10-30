@@ -91,6 +91,19 @@ describe("vector search", () => {
     expect(hits[0]!.row.id).toBe(near.id);
   });
 
+  test("the nearest fact is found past the first few dozen rows", () => {
+    db = openDatabase(":memory:");
+    for (let index = 0; index < 30; index += 1) {
+      const row = putAgentMemory(db, { scope: "global_user", keySlug: `far-${index}`, content: `Unrelated fact ${index}.` });
+      setMemoryEmbedding(db, row.id, Float32Array.from([0, 1, 0]), "test-model");
+    }
+    const near = putAgentMemory(db, { scope: "global_user", keySlug: "near", content: "Deployments happen on Tuesday." });
+    setMemoryEmbedding(db, near.id, Float32Array.from([1, 0, 0]), "test-model");
+
+    const hits = searchMemoriesByVector(db, { vector: Float32Array.from([1, 0, 0]), callerAgentID: "ea", limit: 6 });
+    expect(hits[0]!.row.id).toBe(near.id);
+  });
+
   test("a private fact is not a neighbour of another agent", () => {
     db = openDatabase(":memory:");
     const priv = putAgentMemory(db, {
