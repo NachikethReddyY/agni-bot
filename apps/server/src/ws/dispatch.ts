@@ -590,7 +590,7 @@ function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<Clie
     existing.deps = deps;
     existing.rowIDs.push(rowID);
     clearTimeout(existing.timer);
-    existing.timer = setTimeout(() => flushMessageBatch(deps, key), 800);
+    existing.timer = setTimeout(() => flushMessageBatch(deps, key), deps.config.messageBatchMs ?? 800);
     return;
   }
 
@@ -602,7 +602,7 @@ function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<Clie
     firstAt: Date.now(),
     typing: false,
     rowIDs: [rowID],
-    timer: setTimeout(() => flushMessageBatch(deps, key), 800),
+    timer: setTimeout(() => flushMessageBatch(deps, key), deps.config.messageBatchMs ?? 800),
   };
   batches.set(key, pending);
   deps.emit({
@@ -635,7 +635,7 @@ function flushMessageBatch(deps: DispatchDeps, key: string): void {
   if (!batches || !batch) return;
   const elapsed = Date.now() - batch.firstAt;
   if (batch.typing && elapsed < 2_000) {
-    batch.timer = setTimeout(() => flushMessageBatch(deps, key), Math.min(800, 2_000 - elapsed));
+    batch.timer = setTimeout(() => flushMessageBatch(deps, key), Math.min(deps.config.messageBatchMs ?? 800, 2_000 - elapsed));
     return;
   }
   batches.delete(key);
