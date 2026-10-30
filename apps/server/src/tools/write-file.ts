@@ -7,17 +7,18 @@
  */
 import { lstatSync, mkdirSync, realpathSync, writeFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
+import { homePath } from "../home";
 
 const MAX_BYTES = 1024 * 1024;
 
 /**
  * The tree the owner has declared safe for ungated writes. Defaults to
- * `<cwd>/scratch`; `AGNI_SCRATCH_DIR` overrides it (bb-1 keeps scratch on a
+ * `~/.agni/scratch`; `AGNI_SCRATCH_DIR` overrides it (bb-1 keeps scratch on a
  * separate volume). An absolute `AGNI_SCRATCH_DIR` is used as given.
  */
 export function scratchDir(): string {
   const configured = process.env.AGNI_SCRATCH_DIR;
-  return resolve(configured && configured.length > 0 ? configured : join(process.cwd(), "scratch"));
+  return resolve(configured && configured.length > 0 ? configured : homePath("scratch"));
 }
 
 /**

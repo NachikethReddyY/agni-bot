@@ -1,0 +1,27 @@
+{
+  "name": "agni-bot",
+  "version": "0.1.1",
+  "description": "Agni Bot: message your own named AI bots from the browser. Self-hosted, runs on Bun.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "bin": {
+    "agni": "apps/server/src/index.ts"
+  },
+  "engines": {
+    "bun": ">=1.3"
+  },
+  "os": ["darwin", "linux"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NachikethReddyY/agni-bot.git"
+  },
+  "homepage": "https://github.com/NachikethReddyY/agni-bot#readme",
+  "files": [
+    "apps",
+    "infra/env.example",
+    "README.md"
+  ],
+  "bundleDependencies": [
+    "@agni/protocol"
+  ]
+}

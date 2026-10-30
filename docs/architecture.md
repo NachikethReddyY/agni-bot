@@ -18,7 +18,7 @@ source-available, not open source.
 Web app (React)  ───┐
 Mac app (SwiftUI) ──┤
 Tauri app (planned)─┼── WebSocket (typed frames, seq'd, resumable) ── over Tailscale
-CLI (tools/cli) ────┘                                                │
+CLI (apps/cli)  ────┘                                                │
                                                                      ▼
                                                       apps/server  (Bun + TypeScript)
                                                       ├─ ws: server / dispatch / frame log

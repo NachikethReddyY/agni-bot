@@ -53,7 +53,7 @@ assistant" framing. Treat those as history, not as current status.
   Cerebras, NIM, Gemini free tier, OpenRouter `:free`, LM Studio). Never
   reintroduce a dependency on another product's app-locked free tier.
 - Secrets (provider keys, Gmail app password, device tokens) live server-side
-  only: `.env` on Mac, mode-600 file on bb-1. Never in code, tests, docs, or
+  only: `~/.agni/config.env` (mode 600) on Mac and bb-1. Never in code, tests, docs, or
   the apps. Owner-typed secrets (sudo/ssh passwords) go through the one-time
   `run_privileged` prompt; they are never returned to the model, written to a
   transcript, or logged.
@@ -77,11 +77,12 @@ assistant" framing. Treat those as history, not as current status.
 - `bun test apps/server packages` (the root `test` script) and `bun run typecheck`
   must pass before committing. Plain `bun test` also picks up the untracked
   `apps/firecrawl` checkout, whose dependencies are not installed here, and fails.
-  Web tests: `pnpm --filter @agni/web test` and `pnpm --filter @agni/client test`.
+  Web tests: `bun run test:web` (client + web Vitest), or `bun run --filter @agni/web test` and `bun run --filter @agni/client test`.
+- Package manager is Bun only. `bun run typecheck` runs `bun run --filter '*' typecheck`.
 - Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, …), body wrapped
   at 72 characters.
 - Store schemas and migrations live in `apps/server/src/db/migrations.ts` —
-  append numbered migrations, never edit applied ones. There are currently 44.
+  append numbered migrations, never edit applied ones. There are currently 45.
 - Generated artifacts and evidence stay local (`artifacts/`, `.evidence/` are
   gitignored).
 
@@ -95,22 +96,25 @@ assistant" framing. Treat those as history, not as current status.
 - Plugins catalog, OAuth, credentials: `apps/server/src/plugins/`
 - Stores: `apps/server/src/stores/` + schema in `apps/server/src/db/`
 - Shared client core: `packages/client/`
-- Web client: `apps/web/` (React/Vite, pnpm). Mac client: `apps/mac/` (SwiftUI, `AgniKit` + `AgniProtocol`).
+- Web client: `apps/web/` (React/Vite). Mac client: `apps/mac/` (SwiftUI, `AgniKit` + `AgniProtocol`).
+- Install, service, and deploy material: `infra/` (`install.sh`, `launchd/`, `systemd/`, `env.example`, `firecrawl.compose.yml`, `wrangler.toml`). `tools/` is dev tools only.
 - Tauri scaffold: `apps/app/` — README only; no runnable code yet (P1).
 - Public and marketing pages: `apps/public/`, `apps/landing/`
-- P0 proof client: `tools/cli/src/index.ts` (`bench`). Read-only audit: `tools/audit/`.
+- P0 proof client: `apps/cli/src/index.ts` (`bench`). Read-only audit: `tools/audit/`.
 - Acceptance evals: `evals/` (`bun run eval`). Seven checks, EVAL-001..007.
 - Out-of-scope and superseded material (do not treat as product docs): `legacy/`
 
 ## Known traps (verified against code)
 
-- **State lives in `~/.agni/`.** The DB, pid, log, and plugins file default
-  there (`apps/server/src/config.ts`). `providers.json` is the exception: it
-  still defaults to `data/providers.json` relative to the working directory
-  (`models/providers.ts`, `models/provider-settings.ts`). Check the code before
-  stating a path. A `.env` that still sets `AGNI_DB_PATH=data/...` keeps the
-  old location.
-- **Timeouts.** First token 30000 ms, turn 120000 ms. `.env.example` now
+- **State lives in `AGNI_HOME` (default `~/.agni`).** Config, providers,
+  plugins, the DB (`data/agni.sqlite`), scratch, skills, logs, and the pid file
+  all default there. Per-file overrides (`AGNI_DB_PATH`, `AGNI_PID_PATH`,
+  `AGNI_LOG_PATH`, `AGNI_PLUGINS_PATH`, `AGNI_PROVIDER_CONFIG_PATH`,
+  `AGNI_SCRATCH_DIR`, `AGNI_SHARE_DIR`) still work. Old files move there on
+  first run. The old `data/providers.json` relative-to-cwd default is gone.
+  A repo `.env` that still sets `AGNI_DB_PATH=data/...` keeps the old location.
+  Check the code before stating a path.
+- **Timeouts.** First token 30000 ms, turn 120000 ms. `infra/env.example` now
   matches the code.
 - **Plugins are partly built.** The catalog, the plugin store and service, and
   the OAuth and credentials code exist. The generic loader described in

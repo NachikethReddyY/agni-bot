@@ -23,7 +23,7 @@ export function openDatabase(path: string): Database {
  * behind this build is refused with a message that says how to fix it.
  */
 export function openDatabaseForCLI(path: string): Database {
-  if (!existsSync(path)) throw new Error(`no database at ${path} — run \`bun run migrate\` (or start the server) first`);
+  if (!existsSync(path)) throw new Error(`no database at ${path} — run \`agni setup\` (or \`agni migrate\`) first`);
   const db = new Database(path, { readwrite: true, create: false });
   db.exec("PRAGMA busy_timeout = 5000;");
   db.exec("PRAGMA foreign_keys = ON;");
@@ -37,7 +37,7 @@ export function openDatabaseForCLI(path: string): Database {
   if (current < latest) {
     db.close();
     throw new Error(
-      `database ${path} is at schema ${current}, this build needs ${latest} — run \`bun run migrate\` (or start the server) first`,
+      `database ${path} is at schema ${current}, this build needs ${latest} — run \`agni setup\` (or \`agni migrate\`) first`,
     );
   }
   return db;

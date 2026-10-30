@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { homePath } from "../home";
 import { resolve } from "node:path";
 
 /**
@@ -117,7 +118,7 @@ export function providerModelTarget(id: string): { id: string; envModel: string 
 
 /** The provider config file: chosen models plus the custom endpoints. */
 export function providerConfigPath(env: Record<string, string | undefined> = Bun.env): string {
-  return resolve(env.AGNI_PROVIDER_CONFIG_PATH?.trim() || "data/providers.json");
+  return resolve(env.AGNI_PROVIDER_CONFIG_PATH?.trim() || homePath("providers.json"));
 }
 
 interface ProviderConfigFile {

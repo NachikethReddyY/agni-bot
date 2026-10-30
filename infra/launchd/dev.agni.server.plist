@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.agni.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/you/.bun/bin/bun</string>
+    <string>/Users/you/.agni/app/apps/server/src/index.ts</string>
+    <string>serve</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/you/.agni</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AGNI_HOME</key>
+    <string>/Users/you/.agni</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/you/.agni/logs/agni.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/you/.agni/logs/agni.log</string>
+</dict>
+</plist>

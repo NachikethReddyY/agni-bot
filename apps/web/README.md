@@ -9,16 +9,17 @@ a port, not a redesign.
 From the repository root:
 
 ```sh
-pnpm install
+bun install
 bun run daemon start
-bun run pair --name Web     # copy the one-time token
-pnpm web                    # Vite on http://127.0.0.1:5173
+bun run open                # opens the browser already paired (one-time code, 10 min)
+bun run web                 # Vite on http://127.0.0.1:5173 (proxies to the daemon on 8787)
 ```
 
-Enter the daemon address (for example `127.0.0.1:8787` or its Tailscale
-address) and the token. The browser stores the device token in `localStorage`
-(`"browser"` secret kind, with an in-memory fallback). **Forget this device**
-removes it.
+Outside development the daemon serves this app at `http://127.0.0.1:8787`.
+Pairing uses a one-time code (`ABCD-EFGH`); `agni open` fills it in. The browser
+then holds an HttpOnly, SameSite=Strict cookie, so the token is no longer kept
+in `localStorage`. Enter the daemon address and the code if you are not using
+`agni open`.
 
 The pairing form checks `GET /health` before opening the socket, so a daemon on
 a different origin must send CORS headers; the server's `/health` does.
@@ -41,16 +42,16 @@ conversation reducer. `packages/protocol` remains the wire contract.
 ## Test
 
 ```sh
-pnpm check                                  # all typechecks + client/web + server tests
-pnpm --filter @agni/web test                # UI smoke tests
-pnpm --filter @agni/web smoke:ui            # browser E2E (see below)
+bun run check                               # all typechecks + client/web + server tests
+bun run --filter @agni/web test             # UI smoke tests
+bun run --filter @agni/web smoke:ui         # browser E2E (see below)
 ```
 
 `smoke:ui` needs a running daemon, a running Vite dev server, and a one-time
 token:
 
 ```sh
-AGNI_URL=127.0.0.1:8788 AGNI_TOKEN=agni_… pnpm --filter @agni/web smoke:ui
+AGNI_URL=127.0.0.1:8788 AGNI_TOKEN=agni_… bun run --filter @agni/web smoke:ui
 ```
 
 It pairs a fresh browser profile, completes first-run onboarding, sends a

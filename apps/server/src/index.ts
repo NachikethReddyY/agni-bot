@@ -15,13 +15,17 @@
  *   bun run job list         queued and running jobs (--all includes finished)
  *   bun run job rm|run <id>  cancel a job / make it due now
  */
+import { chmodSync, copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { hostname } from "node:os";
+import { join, resolve } from "node:path";
 import { PROTOCOL_VERSION } from "@agni/protocol";
-import { listDevices, mintToken, revokeDevice } from "./auth/tokens";
+import { listDevices, mintPairCode, mintToken, revokeDevice } from "./auth/tokens";
+import { serviceCommand } from "./service";
 import { loadConfig, type Config } from "./config";
 import { pluginMailResolver } from "./plugins/credentials";
 import {
   daemonStatus,
+  fetchHealth,
   followLog,
   healthURL,
   startDaemon,
@@ -42,17 +46,35 @@ import { Router } from "./models/router";
 import { deleteJob, enqueueJob, getJobByPrefix, listJobs, requeueStuckJobs, setJobEnabled, wakeJob } from "./stores/jobs";
 import { formatDuration, parseDurationMs, parseWhen } from "./util/time";
 import { startServer, type HealthReport, type RunningServer } from "./ws/server";
+import { agniHome, loadHomeEnv, migrateHomeLayout } from "./home";
 
-const [command = "serve", ...args] = Bun.argv.slice(2);
+const [command = "help", ...args] = Bun.argv.slice(2);
+
+loadHomeEnv();
+const layout = migrateHomeLayout();
+if (layout.blockedByPid !== undefined) {
+  console.error(`An older Agni daemon is still running (pid ${layout.blockedByPid}) with the old file layout.`);
+  console.error(`Stop it with \`kill ${layout.blockedByPid}\`, then run this command again.`);
+  process.exit(1);
+}
+for (const from of layout.movedFrom) console.error(`moved ${from} into ${agniHome()}`);
 
 if (command === "serve") await serve();
 else if (command === "daemon") await daemonCommand(args);
 else if (command === "job") await jobCommand(args);
 else if (command === "pair") await pair(args);
+else if (command === "open") await openBrowser(args);
+else if (command === "service") await service(args);
+else if (command === "setup") await setup(args);
 else if (command === "migrate") migrate();
 else if (command === "devices") devices();
 else if (command === "revoke") revoke(args);
-else usage();
+else if (command === "help" || command === "--help" || command === "-h") usage();
+else if (command === "version" || command === "--version" || command === "-v") console.log(agniVersion());
+else {
+  console.error(`unknown command "${command}"\n`);
+  usage(1);
+}
 
 // --- server ------------------------------------------------------------------
 
@@ -80,7 +102,7 @@ async function serve(): Promise<void> {
     running = startServer(config, db, router);
   } catch (error) {
     if (isAddressInUse(error)) {
-      log.error(`port ${config.port} is already in use — another Agni server? run \`bun run daemon status\``);
+      log.error(`port ${config.port} is already in use — another Agni server? run \`agni daemon status\``);
       process.exit(1);
     }
     throw error;
@@ -129,7 +151,7 @@ async function serve(): Promise<void> {
   log.info(`agni server v${PROTOCOL_VERSION} listening on ${running.url} (pid ${process.pid})`);
   log.info(`db: ${config.dbPath}`);
   if (config.providers.length === 0) {
-    log.warn("no providers configured — set GROQ_API_KEY / CEREBRAS_API_KEY / NVIDIA_API_KEY in .env (see .env.example)");
+    log.warn("no providers configured — set GROQ_API_KEY / CEREBRAS_API_KEY / NVIDIA_API_KEY in ~/.agni/config.env (see infra/env.example)");
   } else {
     for (const provider of router.status()) {
       log.info(`provider ${provider.id.padEnd(11)} ${provider.model}`);
@@ -179,6 +201,9 @@ async function daemonCommand(args: string[]): Promise<void> {
     const outcome = await stopDaemon(config);
     console.log(outcome.message);
     if (!outcome.ok) process.exit(1);
+    if (!outcome.pid && (await fetchHealth(config))) {
+      console.log(`  but a server is answering on ${config.host}:${config.port} — the login service? see \`agni service status\`, stop it with \`agni service uninstall\``);
+    }
     return;
   }
 
@@ -244,7 +269,7 @@ function printHealth(health: HealthReport | undefined, config: Config): void {
     console.log(`    ${provider.id.padEnd(11)} ${provider.model} ${state}`);
   }
   if (health.providers.length === 0) {
-    console.log(`    (no providers configured — set a key in .env; server ${config.host}:${config.port} is up)`);
+    console.log(`    (no providers configured — set a key in ~/.agni/config.env; server ${config.host}:${config.port} is up)`);
   }
 }
 
@@ -315,7 +340,7 @@ function jobAdd(db: ReturnType<typeof openDatabase>, args: string[]): void {
   const job = enqueueJob(db, { kind: flag(args, "--kind") ?? "turn", payload, runAt });
   console.log(`${job.id}  ${job.kind}  first run ${job.run_at}${everyMs ? ` then every ${formatDuration(everyMs)}` : ""}`);
   console.log(`  "${truncate(text, 100)}"`);
-  console.log("  the daemon runs it; start it with `bun run daemon start` if it is not running");
+  console.log("  the daemon runs it; start it with `agni daemon start` if it is not running");
 }
 
 function jobList(db: ReturnType<typeof openDatabase>, args: string[]): void {
@@ -402,6 +427,7 @@ function safePayload(payload: string | null): string {
 // --- devices -----------------------------------------------------------------
 
 async function pair(args: string[]): Promise<void> {
+  if (hasFlag(args, "--code")) return await openBrowser([...args, "--no-browser"]);
   const name = flag(args, "--name") ?? args.find((arg) => !arg.startsWith("--")) ?? hostname();
   const config = loadConfig();
   const db = cliDatabase(config.dbPath);
@@ -415,6 +441,62 @@ async function pair(args: string[]): Promise<void> {
   db.close();
 }
 
+/** Mint a browser pairing code, print the URL(s), and open the browser unless --no-browser. */
+async function openBrowser(args: string[]): Promise<void> {
+  const config = loadConfig();
+  const db = cliDatabase(config.dbPath);
+  const code = await mintPairCode(db);
+  db.close();
+  const urls = [`http://${config.host}:${config.port}/#code=${code}`];
+  if (config.publicOrigin) urls.push(`${config.publicOrigin.replace(/\/+$/, "")}/#code=${code}`);
+  for (const url of urls) console.log(url);
+  console.log(`or type this code: ${code}, valid 10 minutes`);
+  if (hasFlag(args, "--no-browser")) return;
+  const opener = process.platform === "darwin" ? "open" : "xdg-open";
+  try {
+    Bun.spawn([opener, urls[0] as string], { stdout: "ignore", stderr: "ignore" });
+  } catch {
+    // no browser available; the URL above is enough
+  }
+}
+
+/**
+ * First run (and upgrade) in one command: AGNI_HOME + config.env, the login
+ * service (or the detached daemon with --no-service), then a paired browser.
+ */
+async function setup(args: string[]): Promise<void> {
+  const home = agniHome();
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  // An older ~/.agni may be 755; the DB and logs inside rely on this being private.
+  chmodSync(home, 0o700);
+  const envPath = join(home, "config.env");
+  if (!existsSync(envPath)) {
+    copyFileSync(resolve(import.meta.dir, "../../../infra/env.example"), envPath);
+    chmodSync(envPath, 0o600);
+    console.log(`created ${envPath} — add a model provider key there (or in the web app's settings)`);
+    loadHomeEnv();
+  }
+  const config = loadConfig();
+  if (hasFlag(args, "--no-service")) await daemonCommand(["start"]);
+  else await service(["install"]);
+  const deadline = Date.now() + 20_000;
+  while (!(await fetchHealth(config)) && Date.now() < deadline) await Bun.sleep(500);
+  if (!(await fetchHealth(config))) {
+    console.error(`the server did not answer within 20s; see ${config.logPath}`);
+    process.exit(1);
+  }
+  await openBrowser(hasFlag(args, "--no-open") ? ["--no-browser"] : []);
+}
+
+async function service(args: string[]): Promise<void> {
+  try {
+    await serviceCommand(args[0], loadConfig());
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
+
 function migrate(): void {
   const config = loadConfig();
   const db = openDatabase(config.dbPath);
@@ -426,7 +508,7 @@ function devices(): void {
   const config = loadConfig();
   const db = cliDatabase(config.dbPath);
   const rows = listDevices(db);
-  if (rows.length === 0) console.log("no devices paired — run `bun run pair`");
+  if (rows.length === 0) console.log("no devices paired — run `agni open` (browser) or `agni pair` (Mac app, CLI)");
   for (const device of rows) {
     const status = device.revoked_at ? "revoked" : "active";
     const seen = device.last_seen_at ? `last seen ${device.last_seen_at}` : "never connected";
@@ -503,10 +585,22 @@ function truncate(text: string, max: number): string {
   return cleaned.length > max ? `${cleaned.slice(0, max)}…` : cleaned;
 }
 
-function usage(code = 0): void {
-  console.log(`agni server
+/** The npm package's version; a repo checkout has none and says "dev". */
+function agniVersion(): string {
+  try {
+    return (require(resolve(import.meta.dir, "../../../package.json")) as { version?: string }).version ?? "dev";
+  } catch {
+    return "dev";
+  }
+}
 
-  serve              start the HTTP/WebSocket server in the foreground (default)
+function usage(code = 0): void {
+  (code === 0 ? console.log : console.error)(`agni ${agniVersion()}
+
+  setup              first run / upgrade: config.env, login service, open a paired browser
+                     (--no-service: detached daemon instead; --no-open: just print the link)
+  open [--no-browser]  mint a pairing code and open the web app
+  serve              start the HTTP/WebSocket server in the foreground
   daemon start       start it detached; waits for /health
   daemon stop        stop the detached server
   daemon restart     stop then start
@@ -514,11 +608,14 @@ function usage(code = 0): void {
   daemon logs        tail the daemon log (--n 40 --follow)
   migrate            apply pending database migrations
   pair [--name X]    mint a device token for a client (shown once)
+  pair --code        print a browser pairing code without opening a browser
+  service install|uninstall|status   run \`serve\` under launchd (macOS) / systemd --user (Linux)
   devices            list paired devices
   revoke <id>        revoke a device token
   job add "text"     schedule a background turn (--in 10m --at ISO --every 1h --thread thr_x --quiet)
   job list [--all]   show queued and running jobs
   job rm <id>        cancel a job
-  job run <id>       make a job due now`);
+  job run <id>       make a job due now
+  version            print the version`);
   process.exit(code);
 }

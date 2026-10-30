@@ -81,6 +81,8 @@ export interface Session {
   authed: boolean;
   local?: boolean;
   device?: { id: string; name: string };
+  /** Set at upgrade when a paired browser's session cookie came with the request. */
+  cookieDevice?: { id: string; name: string };
   agentID: string;
   openThreadID?: string;
   /** In-flight turns owned by this connection, cancellable via msg.cancel. */
@@ -267,7 +269,10 @@ function handleHello(deps: DispatchDeps, session: Session, frame: Extract<Client
     deps.close(4002, "version mismatch");
     return;
   }
-  detach(deps, session, "hello", verifyToken(deps.db, frame.token).then((device) => {
+  const authenticate = frame.token
+    ? verifyToken(deps.db, frame.token)
+    : Promise.resolve(session.cookieDevice && !isDeviceRevoked(deps.db, session.cookieDevice.id) ? session.cookieDevice : null);
+  detach(deps, session, "hello", authenticate.then((device) => {
     if (!device) {
       sendError(deps, session, "unauthorized", "unknown or revoked token — pair a device first");
       deps.close(4003, "unauthorized");

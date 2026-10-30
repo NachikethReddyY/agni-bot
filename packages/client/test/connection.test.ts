@@ -121,6 +121,17 @@ describe("connection", () => {
     expect(states.some(ready)).toBe(true);
   });
 
+  test("hello omits the token when the cookie authenticates", async () => {
+    const transport = new FakeTransport([
+      { text: JSON.stringify({ type: "hello.ok", seq: 1, v: 1, serverTime: "now", lastSeq: 1 }) },
+    ]);
+    const connection = new AgniConnection({ settings: settings(), token: "", makeTransport: () => transport });
+    connection.start();
+    expect(await settle(() => ready(connection.state))).toBe(true);
+    connection.stop();
+    expect(transport.decodedSent()[0]).toEqual({ type: "hello", v: PROTOCOL_VERSION, device: "Test Mac" });
+  });
+
   test("lastSeq advances with the stream and is reported", async () => {
     const transport = new FakeTransport([
       { text: JSON.stringify({ type: "hello.ok", seq: 1, v: 1, serverTime: "now", lastSeq: 1 }) },

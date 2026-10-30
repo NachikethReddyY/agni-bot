@@ -308,7 +308,8 @@ public struct ProviderInfo: Sendable, Equatable, Decodable, Identifiable {
 // MARK: - client → server
 
 public enum ClientFrame: Sendable, Equatable {
-  case hello(v: Int, token: String, device: String)
+  /// `token` is nil only for a browser paired by cookie; native clients always send one.
+  case hello(v: Int, token: String?, device: String)
   case resync(lastSeq: Int)
   case msgSend(threadID: String?, text: String, files: [String]?, conversationID: String?, channelId: String?, toAgentId: String?, texts: [String]?)
   case msgCancel(turnID: String)
@@ -383,7 +384,7 @@ public enum ClientFrame: Sendable, Equatable {
     switch self {
     case .hello(let v, let token, let device):
       object["v"] = v
-      object["token"] = token
+      if let token { object["token"] = token }
       object["device"] = device
     case .resync(let lastSeq):
       object["lastSeq"] = lastSeq
@@ -491,7 +492,7 @@ public enum ClientFrame: Sendable, Equatable {
     case "hello":
       self = .hello(
         v: try Require.int(object, "v"),
-        token: try Require.string(object, "token"),
+        token: object["token"] as? String,
         device: try Require.string(object, "device"))
     case "resync":
       self = .resync(lastSeq: try Require.int(object, "lastSeq"))

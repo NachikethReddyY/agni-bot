@@ -2,16 +2,16 @@
   "name": "agni",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@12.14.0",
+  "packageManager": "bun@1.4.3",
   "workspaces": [
     "apps/*",
     "packages/*",
     "tools/*"
   ],
   "scripts": {
-    "web": "pnpm --filter @agni/web dev",
-    "web:build": "pnpm --filter @agni/web build",
-    "web:preview": "pnpm --filter @agni/web preview",
+    "web": "bun run --filter @agni/web dev",
+    "web:build": "bun run --filter @agni/web build",
+    "web:preview": "bun run --filter @agni/web preview",
     "dev": "bun --watch apps/server/src/index.ts serve",
     "serve": "bun apps/server/src/index.ts serve",
     "daemon": "bun apps/server/src/index.ts daemon",
@@ -20,26 +20,29 @@
     "pair": "bun apps/server/src/index.ts pair",
     "devices": "bun apps/server/src/index.ts devices",
     "revoke": "bun apps/server/src/index.ts revoke",
-    "chat": "bun tools/cli/src/index.ts chat",
-    "ask": "bun tools/cli/src/index.ts ask",
-    "bench": "bun tools/cli/src/index.ts bench",
-    "ping": "bun tools/cli/src/index.ts ping",
+    "chat": "bun apps/cli/src/index.ts chat",
+    "ask": "bun apps/cli/src/index.ts ask",
+    "bench": "bun apps/cli/src/index.ts bench",
+    "ping": "bun apps/cli/src/index.ts ping",
     "mock": "bun tools/mock-provider/src/index.ts",
     "fixtures": "bun run --filter @agni/protocol fixtures",
     "mac": "swift build --package-path apps/mac",
     "mac-app": "apps/mac/scripts/bundle.sh",
     "landing": "bun --cwd apps/landing dev",
     "test": "bun test apps/server packages/protocol",
-    "test:web": "pnpm --filter @agni/client test && pnpm --filter @agni/web test",
+    "test:web": "bun run --filter @agni/client test && bun run --filter @agni/web test",
     "scan:canary": "bun scripts/canary-scan.ts",
     "eval": "bun evals/run.ts",
     "eval:nightly": "AGNI_EVAL_NIGHTLY=1 bun evals/run.ts",
-    "check": "pnpm typecheck && pnpm test:web && bun test apps/server packages/protocol && bun run eval",
-    "typecheck": "turbo run typecheck"
+    "check": "bun run typecheck && bun run test:web && bun run test && bun run eval",
+    "typecheck": "bun run --filter '*' typecheck",
+    "service": "bun apps/server/src/index.ts service",
+    "open": "bun apps/server/src/index.ts open",
+    "setup": "bun apps/server/src/index.ts setup",
+    "npm:build": "bun run web:build && bun infra/npm/build.ts"
   },
   "devDependencies": {
     "@types/bun": "1.4.3",
-    "turbo": "^2.11.9",
     "typescript": "^7"
   }
 }

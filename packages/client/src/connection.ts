@@ -220,7 +220,7 @@ export class AgniConnection {
         encodeClientFrame({
           type: "hello",
           v: PROTOCOL_VERSION,
-          token: this.token,
+          ...(this.token ? { token: this.token } : {}),
           device: this.settings.deviceName,
         }),
       );
@@ -325,7 +325,7 @@ function refusalFor(closeCode: number): string {
     case 4002:
       return "Server speaks a different protocol version. Update the app or the server.";
     case 4003:
-      return "This device token was revoked or is unknown. Pair again with bun run pair.";
+      return "This device token was revoked or is unknown. Run `agni open` on the server to pair again.";
     default:
       return `Connection refused by the server (${closeCode}).`;
   }

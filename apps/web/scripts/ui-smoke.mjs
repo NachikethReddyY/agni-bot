@@ -2,7 +2,7 @@
 /**
  * Browser smoke test against a running daemon and Vite server.
  *
- *   AGNI_URL=127.0.0.1:8788 AGNI_TOKEN=… pnpm smoke:ui
+ *   AGNI_URL=127.0.0.1:8788 AGNI_TOKEN=… bun run smoke:ui
  *
  * Pairs a fresh browser profile, sends a message, waits for the streamed reply,
  * then opens the agent switcher and settings. Screenshots land in artifacts/.
@@ -42,10 +42,11 @@ try {
   await page.getByRole("heading", { name: "Connect to Agni" }).waitFor({ timeout: 10_000 });
   await page.screenshot({ path: resolve(evidence, "01-pairing.png") });
 
+  await page.getByText("Connect to a different server with a device token").click();
   await page.getByLabel("Agni server address").fill(server);
   await page.getByPlaceholder("Paste the token shown by the command").fill(token);
-  await page.getByPlaceholder("This Browser").fill("Playwright");
-  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await page.getByPlaceholder("This Browser").first().fill("Playwright");
+  await page.getByRole("button", { name: "Connect with token", exact: true }).click();
 
   const composer = page.locator(".composer-input");
   await composer.waitFor({ timeout: 20_000 });
