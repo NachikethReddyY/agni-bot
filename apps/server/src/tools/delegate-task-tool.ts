@@ -25,13 +25,14 @@ import { enqueueJob } from "../stores/jobs";
 import { readFacts } from "./expand-tool";
 import { checkPeerRequest, fingerprintPeerRequest } from "../stores/peer-chains";
 import { appendChannelMessage } from "../stores/channels";
+import { MAX_DEPTH } from "../agent/guardrails";
 
 const objectSchema = (properties: Record<string, unknown>, required: string[]): Record<string, unknown> => ({
   type: "object", properties, required, additionalProperties: false,
 });
 const stringProp = { type: "string", minLength: 1 };
-/** H23: a turn at this depth may not delegate further (root = 1, so two hops at most). */
-export const MAX_DELEGATION_DEPTH = 3;
+/** H23: a turn at this depth may not delegate further; the same cap as `handoff`. */
+export const MAX_DELEGATION_DEPTH = MAX_DEPTH;
 
 export interface DelegateTaskToolDeps {
   db: Database;

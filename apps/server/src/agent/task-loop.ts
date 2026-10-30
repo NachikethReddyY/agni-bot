@@ -37,7 +37,7 @@ import { getThread } from "../stores/threads";
 import { listSummaries } from "../stores/summaries";
 import { appendChannelMessage, getChannelSummary } from "../stores/channels";
 import { compactChannelHistory } from "./compactor";
-import { GuardrailError, enterDelegation, rootGuardrail, stepGuardrail, type GuardrailState } from "./guardrails";
+import { GuardrailError, MAX_DEPTH, enterDelegation, rootGuardrail, stepGuardrail, type GuardrailState } from "./guardrails";
 import type { MailAccountResolver } from "../plugins/credentials";
 import { domainAllowed } from "../routines/egress";
 
@@ -402,7 +402,7 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   registerHandoffTool(registry, {
     db, router, settings, emit: run.emit, signal: controller.signal,
     threadID, channelID: run.channelID, currentAgentID: persona.id,
-    conversationID: run.conversationID, carrySummary: run.carrySummary, guardrail,
+    conversationID: run.conversationID, guardrail,
   });
   // The agent can put a question to the owner, and can put an email draft up
   // for approval. Both wait for the owner, so both are registered per turn.
@@ -464,7 +464,7 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
     // the user message inside the envelope, never through this prefix.
     carrySummary: [run.carrySummary, channelSummary].filter(Boolean).join("\n\n") || null,
     depth: guardrail.depth,
-    maxDepth: 5,
+    maxDepth: MAX_DEPTH,
     toolHints: deferredToolHints(registry, deferred),
     anchor,
     // ASM-004: what this turn needs, retrieved rather than carried.

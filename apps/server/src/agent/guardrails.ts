@@ -14,8 +14,11 @@
  */
 import { newID } from "../util/ids";
 
-/** How deep a chain of delegated turns may run. Root turn is depth 1. */
-export const MAX_DEPTH = 5;
+/**
+ * How deep a chain of delegated turns may run. Root turn is depth 1, so two
+ * hops at most (H23). The one cap for both `handoff` and `delegate_task`.
+ */
+export const MAX_DEPTH = 3;
 /** Maximum tool steps a single turn in the chain may take. */
 export const MAX_CHAIN_STEPS = 24;
 /** Maximum tool steps a delegated (depth > 1) turn may take. */

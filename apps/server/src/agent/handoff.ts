@@ -61,7 +61,6 @@ export interface HandoffDeps {
   /** The parent turn's thread + conversation context. */
   threadID: string;
   conversationID?: string;
-  carrySummary?: string | null;
   /** The parent's guardrail state. */
   guardrail: GuardrailState;
   /** Optional persona override for the child (defaults to the target agent's persona). */
@@ -105,11 +104,15 @@ export async function handoff(deps: HandoffDeps, request: HandoffRequest): Promi
     // like a conversation rather than a transcript of someone else's brief.
     inputRole: "system",
     inputText: `${parent} messaged you: ${text}`,
-    carrySummary: deps.carrySummary ?? null,
+    // B5: the child's own conversation summary, never the parent's — one
+    // bot's summary must not reach another bot's prompt.
+    carrySummary: conversation.summary ?? null,
     // Child work is internal; the parent receives the result through the tool
     // response and remains the only agent writing to the user-facing stream.
+    // B4: prompts that wait on the owner (approval, form, password) must
+    // reach the owner too, or a gated tool in the child hangs.
     emit: (frame) => {
-      if (frame.type === "status.update") deps.emit(frame);
+      if (CHILD_FORWARDED_FRAMES.has(frame.type)) deps.emit(frame);
     },
     signal: deps.signal,
     guardrail: child,
@@ -126,6 +129,11 @@ export async function handoff(deps: HandoffDeps, request: HandoffRequest): Promi
     depth: child.depth,
   };
 }
+
+/** Child frames that reach the owner: progress, and prompts that wait on them. */
+export const CHILD_FORWARDED_FRAMES: ReadonlySet<string> = new Set([
+  "status.update", "approval.request", "form.request", "secret.request", "secret.cancel",
+]);
 
 /** The delegating agent's live display name, for the note the child reads. */
 function parentName(db: Database, agentID: string): string {
