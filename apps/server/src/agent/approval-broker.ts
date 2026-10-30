@@ -70,7 +70,7 @@ export interface ApprovalBrokerDeps {
 
 /** Tools that cannot destroy state or reach outside scratch. Everything else asks. */
 const FREE_TOOLS = new Set([
-  "ask", "say", "request_owner_input", "expand", "draft_email", "read_artifact",
+  "ask", "say", "request_owner_input", "expand", "draft_email", "read_artifact", "scratch_read", "scratch_append",
   // Only unlocks tools already on the agent's allowlist; each of those still gates on its own.
   "load_tools",
   "memory_search", "memory_write", "transcript_search", "links_search", "link_save",

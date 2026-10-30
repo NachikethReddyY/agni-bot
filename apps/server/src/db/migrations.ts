@@ -1033,4 +1033,21 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    id: 58,
+    name: "task_notes",
+    sql: `
+      -- Phase 4: a shared scratchpad per delegated task. Bots working the
+      -- task append notes; the delegating bot reads them through task_status,
+      -- filtered by the writer's visibility like every other cross-bot read.
+      CREATE TABLE task_notes (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_task_notes_task ON task_notes(task_id, created_at);
+    `,
+  },
 ];

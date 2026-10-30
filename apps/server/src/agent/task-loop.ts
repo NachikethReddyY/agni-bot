@@ -23,6 +23,7 @@ import { registerRequestOwnerInputTool } from "../tools/needs-input-tool";
 import { registerArtifactTool } from "../tools/artifact-tool";
 import { registerSecureExecTool } from "../tools/secure-exec-tool";
 import { registerSayTool } from "../tools/say-tool";
+import { SCRATCH_TOOLS, registerScratchTools } from "../tools/scratch-tool";
 import { registerRenameTool } from "../tools/rename-tool";
 import { registerCreateAgentTool } from "../tools/create-agent-tool";
 import { createUpdateAgentTool } from "../tools/update-agent-tool";
@@ -332,6 +333,8 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   const effectiveTools = run.toolAllowlist
     ? [...new Set(run.toolAllowlist.filter((name) => memoryTools.includes(name)))]
     : [...new Set([
+      // A delegated task's bots share its scratchpad.
+      ...(run.delegation ? SCRATCH_TOOLS : []),
       ...memoryTools,
       "say",
       "ask",
@@ -419,6 +422,7 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   // `needs_input` once the question is asked.
   let needsInput = false;
   if (run.delegation) {
+    registerScratchTools(registry, { db, taskID: run.delegation.taskID, agentID: persona.id });
     registerRequestOwnerInputTool(registry, {
       db,
       emit: run.emit,
@@ -821,7 +825,7 @@ function withNote(content: string, note: string): string {
 /** Free, read-only tools whose calls in one step may run at the same time. */
 export const PARALLEL_READ_TOOLS = new Set([
   "memory_search", "transcript_search", "recall_fact", "expand", "links_search", "tasks_list", "job_list",
-  "web_fetch", "web_search", "read_file", "grep", "glob", "delegate_wait", "task_status",
+  "web_fetch", "web_search", "read_file", "grep", "glob", "delegate_wait", "task_status", "scratch_read",
 ]);
 
 /**
