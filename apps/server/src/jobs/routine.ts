@@ -7,6 +7,8 @@ import { nextRun } from "../routines/cron";
 import { getRoutine } from "../stores/routines";
 import { parseJobPayload, type JobRow } from "../stores/jobs";
 import type { JobRunner } from "./runner";
+import { seedCheckAppsRoutine } from "../routines/templates";
+import { resolveTimeZone } from "../config";
 
 export interface RoutineJobDeps {
   db: Database;
@@ -16,6 +18,7 @@ export interface RoutineJobDeps {
 }
 
 export function registerRoutineJob(runner: JobRunner, deps: RoutineJobDeps): void {
+  seedCheckAppsRoutine(deps.db, resolveTimeZone());
   runner.register("routine", async (job: JobRow) => {
     const payload = parseJobPayload<{ routineID?: string }>(job);
     if (!payload.routineID) throw new Error("routine job payload has no routineID");

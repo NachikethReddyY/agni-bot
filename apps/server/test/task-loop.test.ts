@@ -310,7 +310,7 @@ describe("task lane loop", () => {
     expect(durable.map((row) => row.text)).toEqual(["You have no open tasks."]);
   });
 
-  test("a channel turn buffers step narration and streams only the answer", async () => {
+  test("a channel turn streams live and clears tool-step narration", async () => {
     db = openDatabase(":memory:");
     const thread = createThread(db, taskPersona.id);
     const channel = ensureDMChannel(db, taskPersona.id);
@@ -334,12 +334,13 @@ describe("task lane loop", () => {
     });
 
     expect(result.text).toBe("You have no open tasks.");
-    const deltas = emitted.filter((frame) => frame.type === "token").map((frame) => frame.delta);
-    expect(deltas).toEqual(["You have no open tasks."]);
+    const tokens = emitted.filter((frame) => frame.type === "token").map((frame) => [frame.delta, frame.reset ?? false]);
+    // Narration streams, is cleared once the step turns out to call a tool, then the answer streams.
+    expect(tokens).toEqual([["Checking the list.", false], ["", true], ["You have no open tasks.", false]]);
     const published = emitted.filter((frame) => frame.type === "msg.new").map((frame) => frame.text);
     expect(published).toEqual(["You have no open tasks."]);
-    // The token fills the bubble the durable message then seals.
-    const tokenAt = emitted.findIndex((frame) => frame.type === "token");
+    // The answer's tokens fill the bubble the durable message then seals.
+    const tokenAt = emitted.findLastIndex((frame) => frame.type === "token");
     const messageAt = emitted.findIndex((frame) => frame.type === "msg.new");
     expect(tokenAt).toBeGreaterThan(-1);
     expect(messageAt).toBeGreaterThan(tokenAt);

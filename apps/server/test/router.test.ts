@@ -88,7 +88,8 @@ describe("router", () => {
     const result = await router.route({ ...baseOptions, onDelta: (delta) => deltas.push(delta) });
 
     expect(result.provider).toBe("nim");
-    expect(result.attempts).toBe(4);
+    expect(result.attempts).toBe(2);
+    expect(calls.filter((url) => url.includes("groq.test"))).toHaveLength(1);
     expect(result.text).toBe("hello world");
     expect(deltas.join("")).toBe("hello world");
     expect(health.isAvailable("groq")).toBe(false);
@@ -98,6 +99,15 @@ describe("router", () => {
     await router.route({ ...baseOptions, onDelta: () => {} });
     expect(calls.some((url) => url.includes("groq.test"))).toBe(false);
     expect(calls.some((url) => url.includes("nim.test"))).toBe(true);
+  });
+
+  test("a lone provider still retries a 429 and recovers", async () => {
+    let calls = 0;
+    const fetchFn = (async () => (++calls === 1 ? new Response("slow down", { status: 429 }) : sseResponse("ok"))) as unknown as typeof fetch;
+    const router = new Router([groq], new HealthTracker(), fetchFn);
+    const result = await router.route({ ...baseOptions, onDelta: () => {} });
+    expect(result.text).toBe("ok");
+    expect(calls).toBe(2);
   });
 
   test("fails over on first-token timeout", async () => {

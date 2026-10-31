@@ -338,8 +338,10 @@ public struct Conversation: Sendable, Equatable {
   public mutating func apply(_ frame: ServerFrame) -> [ConversationEffect] {
     switch frame {
     case .helloOK, .conversationOK, .conversationHistoryOK, .threadExportOK, .threadListOK, .threadHistoryOK,
-      .jobListOK, .taskListOK, .taskUpdateOK, .memoryListOK, .providerAddOK, .providerModelsOK,
-      .pluginListOK, .pluginConnectOK, .pluginState, .appearanceListOK, .appearanceUpdated, .unknown:
+      .jobListOK, .taskListOK, .taskUpdateOK, .memoryListOK, .memoryUpdateOK, .memoryPinOK, .memoryForgetOK,
+      .memoryConflictsListOK, .memoryConflictResolveOK, .providerAddOK, .providerModelsOK,
+      .pluginListOK, .pluginConnectOK, .pluginState, .appearanceListOK, .appearanceUpdated,
+      .channelCreated, .channelListOK, .channelHistoryOK, .unknown:
       return []
 
     case .presence(let presence):
@@ -437,7 +439,7 @@ public struct Conversation: Sendable, Equatable {
       guard belongsTo(threadID: token.threadID, conversationID: nil) || adopted else { return [] }
       let id = Self.assistantID(turnID: token.turnID)
       if let index = messages.firstIndex(where: { $0.id == id }) {
-        messages[index].text += token.delta
+        messages[index].text = token.reset == true ? token.delta : messages[index].text + token.delta
       } else {
         // Replayed deltas without their turn.start: rebuild the bubble.
         inFlightTurnID = token.turnID

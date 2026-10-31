@@ -62,16 +62,17 @@ export function enqueueJob(
 }
 
 /** Atomically pick the oldest due job and mark it running. Paused jobs wait. */
-export function claimDueJob(db: Database, now = nowISO()): JobRow | null {
+export function claimDueJob(db: Database, now = nowISO(), excludeKinds: readonly string[] = []): JobRow | null {
   return db.transaction((): JobRow | null => {
     const row = db
-      .query<JobRow, [string]>(
+      .query<JobRow, [string, string]>(
         `SELECT ${COLUMNS} FROM jobs
          WHERE state = 'queued' AND enabled = 1 AND run_at <= ?
+           AND kind NOT IN (SELECT value FROM json_each(?))
          ORDER BY run_at ASC, rowid ASC
          LIMIT 1`,
       )
-      .get(now);
+      .get(now, JSON.stringify(excludeKinds));
     if (!row) return null;
     db.run("UPDATE jobs SET state = 'running', attempts = attempts + 1, updated_at = ? WHERE id = ?", [
       nowISO(),

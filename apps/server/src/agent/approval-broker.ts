@@ -17,6 +17,7 @@ import type { Database } from "bun:sqlite";
 import { newID, nowISO } from "../util/ids";
 import { isReadOnlyCommand } from "../tools/bash";
 import { isOutsideScratch } from "../tools/write-file";
+import { MCP_FREE_TOOLS } from "../plugins/mcp";
 
 export type Decision = "once" | "always" | "reject";
 
@@ -70,7 +71,7 @@ export interface ApprovalBrokerDeps {
 
 /** Tools that cannot destroy state or reach outside scratch. Everything else asks. */
 const FREE_TOOLS = new Set([
-  "ask", "say", "request_owner_input", "expand", "draft_email", "read_artifact",
+  "ask", "say", "request_owner_input", "expand", "draft_email", "read_artifact", "scratch_read", "scratch_append",
   // Only unlocks tools already on the agent's allowlist; each of those still gates on its own.
   "load_tools",
   "memory_search", "memory_write", "transcript_search", "links_search", "link_save",
@@ -78,7 +79,7 @@ const FREE_TOOLS = new Set([
   "remember_fact", "recall_fact", "get_fact", "forget_fact",
   // Confined to the scratch tree by the tools themselves.
   "read_file", "grep", "glob",
-  "web_search", "web_fetch", "deep_research", "mail_search", "mail_read",
+  "web_search", "web_fetch", "deep_research", "mail_search", "mail_read", "calendar_list", "drive_search", "drive_read",
   "skills_list", "skills_load", "skills_resource",
   "handoff", "delegate_task", "delegate_wait", "rename_agent", "create_agent", "update_agent", "share_thread",
   "job_schedule", "job_list", "job_cancel", "routine_create", "routine_list", "routine_pause", "routine_delete",
@@ -131,8 +132,12 @@ export class ApprovalBroker {
         // Agni's own mailbox ("agent", also the default when omitted) is
         // ungated (AGENTS.md amendment 2026-10-17); every other value gates.
         return !(args.account === undefined || args.account === null || args.account === "agent");
+      case "calendar_create":
+      case "calendar_update":
+        // Same rule: Agni's own calendar is free, the owner's asks.
+        return !(args.account === undefined || args.account === null || args.account === "agent");
       default:
-        return !FREE_TOOLS.has(toolName);
+        return !FREE_TOOLS.has(toolName) && !MCP_FREE_TOOLS.has(toolName);
     }
   }
 }

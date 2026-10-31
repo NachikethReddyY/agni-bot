@@ -1033,4 +1033,63 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    id: 46,
+    name: "push_subscriptions",
+    sql: `
+      -- Web Push subscriptions, one per browser endpoint. Server-side only.
+      CREATE TABLE push_subscriptions (
+        endpoint TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    id: 47,
+    name: "agent_proactivity",
+    sql: `
+      -- Quiet hours and a daily cap on unprompted pushes, per bot.
+      CREATE TABLE agent_proactivity (
+        agent_id TEXT PRIMARY KEY,
+        quiet_start TEXT,                 -- "HH:MM" in the server time zone
+        quiet_end TEXT,
+        max_per_day INTEGER
+      );
+      CREATE TABLE proactive_sent (
+        agent_id TEXT NOT NULL,
+        day TEXT NOT NULL,                -- local date
+        count INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (agent_id, day)
+      );
+    `,
+  },
+  {
+    id: 48,
+    name: "task_notes",
+    sql: `
+      -- Phase 4: a shared scratchpad per delegated task. Bots working the
+      -- task append notes; the delegating bot reads them through task_status,
+      -- filtered by the writer's visibility like every other cross-bot read.
+      CREATE TABLE task_notes (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_task_notes_task ON task_notes(task_id, created_at);
+    `,
+  },
+  {
+    id: 49,
+    name: "agent_critic",
+    sql: `
+      -- Phase 4: opt-in critic. When set, this bot's outbound email drafts
+      -- are reviewed by the named bot before the owner's approval card.
+      ALTER TABLE agents ADD COLUMN critic_agent_id TEXT;
+    `,
+  },
 ];

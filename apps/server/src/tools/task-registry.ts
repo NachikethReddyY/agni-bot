@@ -16,6 +16,8 @@ import { webSearch, webFetch, deepResearch } from "./web";
 import { runBash } from "./bash";
 import { skillsList, skillsLoad, skillsResource } from "./skills";
 import { createMailTools } from "./mail";
+import { createGoogleTools } from "./google";
+import { mcpHub } from "../plugins/mcp";
 import { createJobTools } from "./jobs-tool";
 import { createRoutineTools } from "./routines-tool";
 import type { MailAccountResolver } from "../plugins/credentials";
@@ -29,9 +31,9 @@ const stringProp = { type: "string", minLength: 1 };
 const limitProp = { type: "integer", minimum: 1, maximum: 20 };
 const pathProp = { type: "string", minLength: 1 };
 
-export const TASK_TOOL_NAMES = ["memory_search", "memory_write", "transcript_search", "links_search", "link_save", "tasks_list", "task_create", "task_update", "grep", "glob", "read_file", "write_file", "web_search", "web_fetch", "deep_research", "bash", "skills_list", "skills_load", "skills_resource", "mail_search", "mail_read", "mail_send", "remember_fact", "recall_fact", "forget_fact", "handoff", "share_thread", "job_schedule", "job_list", "job_cancel", "routine_create", "routine_list", "routine_pause", "routine_delete"];
+export const TASK_TOOL_NAMES = ["memory_search", "memory_write", "transcript_search", "links_search", "link_save", "tasks_list", "task_create", "task_update", "grep", "glob", "read_file", "write_file", "web_search", "web_fetch", "deep_research", "bash", "skills_list", "skills_load", "skills_resource", "mail_search", "mail_read", "mail_send", "calendar_list", "calendar_create", "calendar_update", "drive_search", "drive_read", "remember_fact", "recall_fact", "forget_fact", "handoff", "share_thread", "job_schedule", "job_list", "job_cancel", "routine_create", "routine_list", "routine_pause", "routine_delete"];
 
-export function buildTaskToolRegistry(db: Database, mailAccounts?: MailAccountResolver): ToolRegistry {
+export function buildTaskToolRegistry(db: Database, mailAccounts?: MailAccountResolver, pluginsPath = ""): ToolRegistry {
   const registry = new ToolRegistry();
   const register = <A, R>(tool: ToolDefinition<A, R>): void => registry.register(tool);
   register({
@@ -237,6 +239,10 @@ export function buildTaskToolRegistry(db: Database, mailAccounts?: MailAccountRe
   }
   // Scheduling: the agent's own clock. Without it, "every weekday at 9:05"
   // had no tool and the model went looking for one in the source tree.
+  // Calendar and Drive (OAuth from the Plugins pane) and any connected MCP servers.
+  for (const tool of [...createGoogleTools(pluginsPath), ...mcpHub.tools()]) {
+    register(tool);
+  }
   for (const tool of createJobTools(db)) {
     register(tool);
   }

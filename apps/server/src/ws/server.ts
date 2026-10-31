@@ -25,6 +25,8 @@ import { webAppRequest } from "./web-app";
 import { FrameLog } from "./frame-log";
 import { dirname, resolve } from "node:path";
 import { ChatGPTAuth } from "../models/chatgpt-auth";
+import { PushService } from "../push/web-push";
+import { homePath } from "../home";
 
 export interface RunningServer {
   readonly port: number;
@@ -84,11 +86,21 @@ export function startServer(config: Config, db: Database, router: Router, starte
     else socket.send(encodeFrame(frame));
   };
 
+  const push = new PushService(db, {
+    vapidPath: config.dbPath === ":memory:" ? ":memory:" : homePath("push-vapid.json"),
+    timeZone: config.timeZone,
+  });
+
   const emit = (body: ServerFrameBody): ServerFrame => {
     const frame = frameLog.next(body);
+    const connected = new Set<string>();
     for (const [socket, session] of sessions) {
-      if (session.authed) deliver(socket, frame);
+      if (!session.authed) continue;
+      deliver(socket, frame);
+      if (session.device) connected.add(session.device.id);
     }
+    // A closed app is reached by Web Push; a device with a live socket already saw it.
+    if (body.type === "notify") void push.notify(body, connected).catch((error) => log.warn("push notify failed", error));
     return frame;
   };
 
@@ -198,6 +210,7 @@ export function startServer(config: Config, db: Database, router: Router, starte
               emit,
               plugins,
               chatgpt,
+              push,
               reply: (body) => {
                 const frame = frameLog.next(body, { replay: false });
                 deliver(socket, frame);

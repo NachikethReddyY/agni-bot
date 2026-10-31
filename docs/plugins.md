@@ -11,7 +11,11 @@ Bot to outside services.
 | Catalog of connectable accounts and their policy grid | Built | `apps/server/src/plugins/catalog.ts` |
 | Store, service, `plugin_connections` table | Built | `apps/server/src/plugins/store.ts`, `service.ts`, migrations |
 | OAuth flow and credentials | Built | `apps/server/src/plugins/oauth.ts`, `credentials.ts`, `config.ts` |
-| Gmail mail tools (search, read, draft, send, labels) | Built | `apps/server/src/tools/mail.ts`, `apps/server/src/mail/` |
+| Gmail mail tools (`mail_search`, `mail_read`, `mail_send`) | Built | `apps/server/src/tools/mail.ts`, `apps/server/src/mail/` |
+| Calendar tools (`calendar_list`, `calendar_create`, `calendar_update`): Agni calendar free, owner calendar writes ask | Built | `apps/server/src/tools/google.ts` |
+| Drive tools (`drive_search`, `drive_read`): read-only, text, size-capped, untrusted | Built | `apps/server/src/tools/google.ts` |
+| Generic MCP client (streamable HTTP, bearer token); tools appear as `mcp_<plugin>_<tool>`, deferred. Read-only tools follow the catalog `read` mode, all others `modify` (default approval). Granola and Notion use it | Built; no stdio, no MCP-side OAuth yet | `apps/server/src/plugins/mcp.ts` |
+| Firecrawl key or URL saved in Settings → Plugins is used by `web_search`/`web_fetch` (env vars win) | Built | `apps/server/src/tools/web.ts` |
 | Settings → Plugins pane in the clients | Built (web and Mac) | `apps/web`, `apps/mac` |
 | Generic extension loader (`extensions/`, `plugins.json`) | **Not built** | `extensions/README.md` is a placeholder |
 | Slack, Discord, and other messaging integrations | **Planned, not built** | none |
@@ -31,7 +35,7 @@ pair is one row in the settings pane and one potential `plugin_connections` row.
 | Agni's Calendar | agent | OAuth | read, create, share, modify: `free` |
 | Your Calendar | owner | OAuth | read: `free`; create, share, modify: `approval` |
 | Your Drive | owner | OAuth | read: `free`; create, share, modify: `approval` |
-| Granola | owner | MCP | read: `free` |
+| Granola | owner | MCP | read: `free` (write tools ask) |
 | Firecrawl | owner | API key | read: `free` |
 | Notion | owner | MCP | read: `free`; modify: `approval` |
 

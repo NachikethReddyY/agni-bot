@@ -183,7 +183,6 @@ async function startTestServer(fetchMock?: typeof fetch): Promise<void> {
     frameLogCapacity: 100,
     jobPollMs: 1000,
     maxConcurrentTurns: 4,
-    messageBatchMs: 50,
     pluginsPath: "",
   };
   server = startServer(config, db, router);
@@ -213,6 +212,38 @@ describe("websocket end-to-end", () => {
     ).get(userMessage.id);
     expect(stored?.text).toBe("say hi");
     expect(stored?.from_id).toBe(userMessage.fromId);
+  });
+
+  test("a lone message dispatches without the batch debounce", async () => {
+    await startTestServer();
+    client!.send({ type: "agent.rename", agentId: "ea", name: "Agni" });
+    await client!.next("agent.updated");
+    client!.send({ type: "msg.send", channelId: "main", text: "hi" });
+    await client!.next("turn.start");
+    await client!.next("turn.end");
+    expect(client!.seen().some((frame) => frame.type === "status.update" && String(frame.text).startsWith("Got it"))).toBe(false);
+  });
+
+  test("a burst sent during a turn merges into one follow-up turn", async () => {
+    const bodies: string[] = [];
+    await startTestServer((async (_url: string, init?: RequestInit) => {
+      bodies.push(String(init?.body ?? ""));
+      // Slow enough that the rest of the burst arrives while this turn runs.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return sseResponse("ok");
+    }) as unknown as typeof fetch);
+    client!.send({ type: "agent.rename", agentId: "ea", name: "Agni" });
+    await client!.next("agent.updated");
+    client!.send({ type: "msg.send", channelId: "main", text: "first part" });
+    client!.send({ type: "msg.send", channelId: "main", text: "second part" });
+    client!.send({ type: "msg.send", channelId: "main", text: "third part" });
+    await client!.next("turn.end");
+    await client!.next("turn.end");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const userTurns = bodies.filter((body) => body.includes("part"));
+    expect(userTurns.length).toBe(2);
+    expect(userTurns[1]).toContain("second part\\n\\nthird part");
+    expect(client!.seen().filter((frame) => frame.type === "turn.end").length).toBe(0);
   });
 
   test("a secret request crosses the socket and never reaches the transcript", async () => {
@@ -646,6 +677,40 @@ describe("websocket end-to-end", () => {
     const texts = listed.memories.map((memory) => memory.text);
     expect(texts).toContain("The shared note.");
     expect(texts).not.toContain("The private note.");
+
+    // Editable memory: an edit, a pin, a forget, and another bot's private
+    // row is out of reach.
+    client!.send({ type: "memory.update", id: "mem_shared", text: "The shared note, edited." });
+    const updated = await client!.next("memory.update.ok");
+    expect(updated.memory.text).toBe("The shared note, edited.");
+    client!.send({ type: "memory.pin", id: updated.memory.id, pinned: true });
+    expect((await client!.next("memory.pin.ok")).memory.salience).toBe(1);
+    client!.send({ type: "memory.forget", id: "mem_private" });
+    expect((await client!.next("error")).code).toBe("unknown_memory");
+    client!.send({ type: "memory.forget", id: updated.memory.id });
+    expect((await client!.next("memory.forget.ok")).deleted).toBe(true);
+  });
+
+  test("a memory conflict can be listed and resolved by keeping the old value", async () => {
+    await startTestServer();
+    const { applyTaggerItems } = await import("../src/agent/tagger");
+    const item = {
+      kind: "fact" as const, key: "home-city", scope: "user" as const, visibility: "shared" as const, source: "user" as const,
+      salience: 0.6, confidence: 0.9, entities: [], ttl: null, source_turn_ids: [],
+    };
+    applyTaggerItems(db!, { items: [{ ...item, text: "The owner lives in NYC." }], agentID: "ea" });
+    applyTaggerItems(db!, { items: [{ ...item, text: "The owner lives in SF." }], agentID: "ea" });
+
+    client!.send({ type: "memory.conflicts.list" });
+    const { conflicts } = await client!.next("memory.conflicts.list.ok");
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]!.previousContent).toBe("The owner lives in NYC.");
+
+    client!.send({ type: "memory.conflict.resolve", id: conflicts[0]!.id, keepId: conflicts[0]!.previousId });
+    const resolved = await client!.next("memory.conflict.resolve.ok");
+    expect(resolved.memory.text).toBe("The owner lives in NYC.");
+    client!.send({ type: "memory.conflicts.list" });
+    expect((await client!.next("memory.conflicts.list.ok")).conflicts).toHaveLength(0);
   });
 
   test("bind.direct answers with the agent's conversation and channel", async () => {
@@ -726,3 +791,69 @@ function createThreadFor(db: Database, agentID: string): string {
   );
   return id;
 }
+
+describe("group channels (Phase 4)", () => {
+  async function startGroupServer(bodies: string[]): Promise<void> {
+    await startTestServer((async (_url: string, init?: RequestInit) => {
+      const body = String(init?.body ?? "");
+      if (!body.includes("The owner now says:")) return sseResponse("{}");
+      bodies.push(body);
+      return sseResponse(body.includes("reveal the code") ? "The code is SECRET-XYZ." : "Noted.");
+    }) as unknown as typeof fetch);
+  }
+
+  test("the owner creates and lists a group of two or more bots", async () => {
+    await startTestServer();
+    client!.send({ type: "channel.create", name: "Launch", agentIds: ["ea", "researcher"] });
+    const created = await client!.next("channel.created");
+    expect(created.channel).toMatchObject({ name: "Launch", type: "group", agentIds: ["ea", "researcher"] });
+    client!.send({ type: "channel.list" });
+    const listed = await client!.next("channel.list.ok");
+    expect(listed.channels.map((channel) => channel.id)).toEqual([created.channel.id]);
+    client!.send({ type: "channel.create", name: "Solo", agentIds: ["ea", "ea"] });
+    expect((await client!.next("error")).code).toBe("bad_frame");
+  });
+
+  test("floor rule: the primary answers, an @named member takes the floor, and the room stays the room", async () => {
+    const bodies: string[] = [];
+    await startGroupServer(bodies);
+    client!.send({ type: "channel.create", name: "Launch", agentIds: ["ea", "researcher"] });
+    const { channel } = await client!.next("channel.created");
+
+    client!.send({ type: "msg.send", channelId: channel.id, text: "plan the launch" });
+    expect((await client!.next("turn.start")).agentID).toBe("ea");
+    await client!.next("turn.end");
+
+    client!.send({ type: "msg.send", channelId: channel.id, text: "@Researcher find venues" });
+    expect((await client!.next("turn.start")).agentID).toBe("researcher");
+    await client!.next("turn.end");
+    // The researcher sees the room: the owner's first message and the primary's reply.
+    expect(bodies[1]).toContain("owner: plan the launch");
+    expect(bodies[1]).toContain("Noted.");
+    // Every message, both bots' answers included, lives in the group channel.
+    const rows = db!.query<{ from_id: string; to_agent_id: string | null }, [string]>(
+      "SELECT from_id, to_agent_id FROM channel_messages WHERE channel_id = ? ORDER BY rowid",
+    ).all(channel.id);
+    expect(rows.filter((row) => row.from_id === "researcher")).toHaveLength(1);
+    expect(rows.some((row) => row.to_agent_id === "researcher")).toBe(true);
+    client!.send({ type: "channel.history", channelId: channel.id });
+    const history = await client!.next("channel.history.ok");
+    expect(history.messages.map((message) => message.text)).toContain("find venues");
+  });
+
+  test("a private bot's words in the room do not reach the other bots", async () => {
+    const bodies: string[] = [];
+    await startGroupServer(bodies);
+    db!.run("UPDATE agents SET visibility = 'private' WHERE id = 'researcher'");
+    client!.send({ type: "channel.create", name: "Ops", agentIds: ["ea", "researcher"] });
+    const { channel } = await client!.next("channel.created");
+    client!.send({ type: "msg.send", channelId: channel.id, text: "@Researcher reveal the code" });
+    await client!.next("turn.end");
+    client!.send({ type: "msg.send", channelId: channel.id, text: "what did it say?" });
+    expect((await client!.next("turn.start")).agentID).toBe("ea");
+    await client!.next("turn.end");
+    const eaBody = bodies.at(-1)!;
+    expect(eaBody).toContain("(replied; private)");
+    expect(eaBody).not.toContain("SECRET-XYZ");
+  });
+});

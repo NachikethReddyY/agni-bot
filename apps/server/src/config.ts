@@ -21,10 +21,10 @@ export interface Config {
   frameLogCapacity: number;
   /** How often the job runner looks for due work. */
   jobPollMs: number;
+  /** Background jobs that may run at once (AGNI_JOB_CONCURRENCY, default 2). */
+  jobConcurrency?: number;
   /** Maximum simultaneous model streams across chat and background turns. */
   maxConcurrentTurns: number;
-  /** How long a burst of chat messages is merged before its turn starts. Default 800. */
-  messageBatchMs?: number;
   /** IANA zone schedules ("09:05") are read in. AGNI_TZ, else the server's zone. */
   timeZone?: string;
   /** Where `db.backup` writes daily copies, and how many it keeps. */
@@ -95,6 +95,7 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): C
     helloTimeoutMs: int(env, "AGNI_HELLO_TIMEOUT_MS", 5000),
     frameLogCapacity: int(env, "AGNI_FRAME_LOG_CAPACITY", 1000),
     jobPollMs: int(env, "AGNI_JOB_POLL_MS", 3000),
+    jobConcurrency: int(env, "AGNI_JOB_CONCURRENCY", 2),
     maxConcurrentTurns: int(env, "AGNI_MAX_CONCURRENT_TURNS", 4),
     timeZone: resolveTimeZone(env),
     backupDir: env.AGNI_BACKUP_DIR?.trim() || undefined,
@@ -103,6 +104,6 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): C
     pluginsPath: env.AGNI_PLUGINS_PATH?.trim() || homePath("plugins.json"),
     userFirstName: env.AGNI_USER_FIRST_NAME?.trim() || undefined,
     slotBudgets: slotBudgets(env),
-    minRecallScore: float(env, "AGNI_MIN_RECALL_SCORE", 0.15),
+    minRecallScore: float(env, "AGNI_MIN_RECALL_SCORE", 0.2),
   };
 }

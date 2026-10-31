@@ -61,8 +61,19 @@ import { bypassesBatch, classifyTurn } from "../agent/gate";
 import { scheduleTagger, turnsSinceTag } from "../jobs/tagger";
 import type { TurnJobPayload } from "../jobs/turn";
 import { newID, nowISO } from "../util/ids";
-import { putAgentMemory, listAgentMemories, type AgentMemoryRow } from "../stores/agent-memories";
-import { appendChannelMessage, ensureDMChannel, getChannel } from "../stores/channels";
+import {
+  deleteAgentMemory,
+  getAgentMemory,
+  listAgentMemories,
+  memoryVisibleTo,
+  putAgentMemory,
+  rewriteAgentMemory,
+  setMemoryPinned,
+  type AgentMemoryRow,
+} from "../stores/agent-memories";
+import { getConflict, listConflicts, resolveConflict } from "../stores/conflicts";
+import { appendChannelMessage, channelAgentIDs, createGroupChannel, ensureDMChannel, getChannel, listGroupChannels, type ChannelRow } from "../stores/channels";
+import { groupContextBlock, groupHistory, groupResponder } from "../agent/group";
 import { canonicalURL, saveLink, searchLinks } from "../stores/links";
 import { buildShareDocument, publishShare, shareBaseURL } from "../share/document";
 import { createTask, createTaskList, editTask, getTask, listTaskActivity, listTaskLists, listTasks, setTaskStatus, snoozeTask, cancelDelegation, clearPendingQuestion, setDelegationJob, setDelegationState, taskInfo, briefChainID } from "../stores/tasks";
@@ -75,6 +86,8 @@ import { activateAppearanceProfile, deleteAppearanceProfile, listAppearanceProfi
 import { getRoutineByJobID, listRuns, updateRoutineState } from "../stores/routines";
 import { normalizeAllowedDomains } from "../routines/egress";
 import { deleteRoutineJob } from "../tools/routines-tool";
+import { removeSubscription, saveSubscription, type PushService } from "../push/web-push";
+import { getProactivity, setProactivity } from "../stores/proactivity";
 
 export interface Session {
   id: string;
@@ -134,6 +147,8 @@ export interface DispatchDeps {
   /** Plugin connections (catalog, connect flows, OAuth callbacks). */
   plugins?: PluginService;
   chatgpt?: ChatGPTAuth;
+  /** Web Push (VAPID key, delivery). */
+  push?: PushService;
 }
 
 export async function dispatch(deps: DispatchDeps, session: Session, raw: string): Promise<void> {
@@ -205,6 +220,12 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleTaskActivity(deps, session, frame);
     case "memory.list":
       return handleMemoryList(deps, session, frame);
+    case "memory.update":
+    case "memory.pin":
+    case "memory.forget":
+    case "memory.conflicts.list":
+    case "memory.conflict.resolve":
+      return handleMemoryEdit(deps, session, frame);
     case "task.update":
       return handleTaskUpdate(deps, session, frame);
     case "task.answer":
@@ -257,6 +278,28 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleAgentProfile(deps, session, frame);
     case "agent.create":
       return handleAgentCreate(deps, session, frame);
+    case "push.subscribe":
+      if (!requireAuth(deps, session)) return;
+      saveSubscription(deps.db, session.device!.id, frame.subscription);
+      return;
+    case "push.unsubscribe":
+      if (!requireAuth(deps, session)) return;
+      removeSubscription(deps.db, frame.endpoint);
+      return;
+    case "push.vapid.get":
+      if (!requireAuth(deps, session)) return;
+      if (!deps.push) return sendError(deps, session, "internal", "push is not available");
+      deps.reply({ type: "push.vapid", publicKey: deps.push.publicKey() });
+      return;
+    case "agent.proactivity":
+      return handleAgentProactivity(deps, session, frame);
+    case "channel.create":
+      return handleChannelCreate(deps, session, frame);
+    case "channel.list":
+      if (!requireAuth(deps, session)) return;
+      return void deps.reply({ type: "channel.list.ok", channels: listGroupChannels(deps.db).map((row) => channelInfo(deps.db, row)) });
+    case "channel.history":
+      return handleChannelHistory(deps, session, frame);
   }
 }
 
@@ -356,27 +399,6 @@ function handleResync(deps: DispatchDeps, session: Session, frame: Extract<Clien
   releaseHeld(deps, session, frames);
 }
 
-interface PendingMessageBatch {
-  texts: string[];
-  frame: Extract<ClientFrame, { type: "msg.send" }>;
-  session: Session;
-  /** The latest frame's deps: flushing replies on the connection that sent last. */
-  deps: DispatchDeps;
-  firstAt: number;
-  typing: boolean;
-  /** Durable `queued_messages` rows behind this batch (H22). */
-  rowIDs: string[];
-  timer: ReturnType<typeof setTimeout>;
-}
-
-/** Keyed by the database, like `threadQueues`: `DispatchDeps` is rebuilt per frame. */
-const messageBatches = new WeakMap<Database, Map<string, PendingMessageBatch>>();
-
-function batchKey(frame: Extract<ClientFrame, { type: "msg.send" }>, session: Session): string {
-  return `${frame.channelId ?? frame.conversationID ?? frame.threadID ?? session.agentID}:${frame.toAgentId ?? session.agentID}`;
-}
-
-/** A message the owner sent while its thread was mid-turn: run it next. */
 interface QueuedMessage {
   deps: DispatchDeps;
   frame: Extract<ClientFrame, { type: "msg.send" }>;
@@ -459,7 +481,8 @@ function targetThread(
     const conversation = getConversation(deps.db, frame.conversationID);
     return conversation ? activeSession(deps.db, conversation) : null;
   }
-  const mention = resolveAgentMention(deps.db, text);
+  const group = groupOf(deps.db, frame.channelId);
+  const mention = group ? groupResponder(deps.db, group, text) : resolveAgentMention(deps.db, text);
   const channelAgent = frame.channelId === "main"
     ? "ea"
     : frame.channelId?.startsWith("dm:")
@@ -519,11 +542,21 @@ function drainThreadQueue(deps: DispatchDeps, threadID: string): void {
   const queues = threadQueues.get(deps.db);
   const queue = queues?.get(threadID);
   if (!queues || !queue || queue.length === 0) return;
-  const next = queue.shift()!;
+  let next = queue.shift()!;
+  // A burst sent while the last turn ran becomes one turn, not one per message.
+  while (mergeable(next) && queue[0] && mergeable(queue[0])) {
+    const more = queue.shift()!;
+    next = { ...more, text: `${next.text}\n\n${more.text}`, rowIDs: [...next.rowIDs, ...more.rowIDs] };
+  }
   if (queue.length === 0) queues.delete(threadID);
   // A stop that somehow landed in the queue still means "stop", not a turn.
   if (isStopCommand(next.text)) return forgetOwnerMessages(deps.db, next.rowIDs);
   dispatchUserMessage(next.deps, next.session, next.frame, next.text, next.rowIDs);
+}
+
+/** Plain chat merges; files, stops and explicit remembers stay their own turn (GATE-003). */
+function mergeable(message: QueuedMessage): boolean {
+  return !message.frame.files?.length && !isStopCommand(message.text) && !bypassesBatch(classifyTurn(message.text).category);
 }
 
 /** Forget everything waiting on a thread; returns how many messages. */
@@ -576,75 +609,15 @@ function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<Clie
       return;
     }
   }
-  // GATE-003: explicit remember/task commands are processed immediately — the
-  // debounce exists to merge a burst of chat, not to delay a direct command.
+  // Every message starts at once; one sent while a turn runs waits in the
+  // thread queue, where a burst merges into a single follow-up turn.
   const rowID = persistOwnerMessage(deps, session, frame, combined);
-  const gate = classifyTurn(combined);
-  if (frame.files?.length || bypassesBatch(gate.category)) {
-    dispatchUserMessage(deps, session, frame, combined, [rowID]);
-    return;
-  }
-  const batches = messageBatches.get(deps.db) ?? new Map<string, PendingMessageBatch>();
-  messageBatches.set(deps.db, batches);
-  const key = batchKey(frame, session);
-  const existing = batches.get(key);
-  if (existing) {
-    existing.texts.push(...parts);
-    existing.frame = frame;
-    existing.session = session;
-    existing.deps = deps;
-    existing.rowIDs.push(rowID);
-    clearTimeout(existing.timer);
-    existing.timer = setTimeout(() => flushMessageBatch(deps, key), deps.config.messageBatchMs ?? 800);
-    return;
-  }
-
-  const pending: PendingMessageBatch = {
-    texts: [...parts],
-    frame,
-    session,
-    deps,
-    firstAt: Date.now(),
-    typing: false,
-    rowIDs: [rowID],
-    timer: setTimeout(() => flushMessageBatch(deps, key), deps.config.messageBatchMs ?? 800),
-  };
-  batches.set(key, pending);
-  deps.emit({
-    type: "status.update",
-    channelId: frame.channelId ?? "main",
-    agentId: frame.toAgentId,
-    text: "Got it, looking into this…",
-    transient: true,
-  });
+  dispatchUserMessage(deps, session, frame, combined, [rowID]);
 }
 
-function handleUserTyping(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "user.typing" }>): void {
-  if (!requireAuth(deps, session)) return;
-  const batches = messageBatches.get(deps.db);
-  if (!batches) return;
-  const prefix = `${frame.channelId ?? session.agentID}:`;
-  for (const [key, batch] of batches) {
-    if (!key.startsWith(prefix)) continue;
-    batch.typing = frame.isTyping;
-    if (!frame.isTyping) {
-      clearTimeout(batch.timer);
-      batch.timer = setTimeout(() => flushMessageBatch(deps, key), 0);
-    }
-  }
-}
-
-function flushMessageBatch(deps: DispatchDeps, key: string): void {
-  const batches = messageBatches.get(deps.db);
-  const batch = batches?.get(key);
-  if (!batches || !batch) return;
-  const elapsed = Date.now() - batch.firstAt;
-  if (batch.typing && elapsed < 2_000) {
-    batch.timer = setTimeout(() => flushMessageBatch(deps, key), Math.min(deps.config.messageBatchMs ?? 800, 2_000 - elapsed));
-    return;
-  }
-  batches.delete(key);
-  dispatchUserMessage(batch.deps, batch.session, batch.frame, batch.texts.join("\n\n"), batch.rowIDs);
+function handleUserTyping(deps: DispatchDeps, session: Session, _frame: Extract<ClientFrame, { type: "user.typing" }>): void {
+  // Accepted for older clients; messages no longer wait on typing.
+  requireAuth(deps, session);
 }
 
 async function runUserMessage(
@@ -667,8 +640,12 @@ async function runUserMessage(
   // `@friday write the email` is a message to Friday, not to whatever chat
   // is open. Routing happens before the turn starts: the text is appended to
   // that agent's DM and the executive assistant never sees it.
-  const mention = resolveAgentMention(deps.db, text);
-  const routedText = mention?.text ?? text;
+  // Phase 4: in a group the floor rule picks the bot, and the message stays
+  // in the room instead of moving to that bot's DM.
+  const groupChannel = groupOf(deps.db, frame.channelId);
+  const group = groupChannel ? groupResponder(deps.db, groupChannel, text) : null;
+  const mention = group ? null : resolveAgentMention(deps.db, text);
+  const routedText = group?.text ?? mention?.text ?? text;
   // The executive assistant's surface is `main`, not a DM channel; an
   // `@agni` mention must not create a second, invisible room.
   const mentionChannelID = mention
@@ -683,7 +660,7 @@ async function runUserMessage(
     channel = ensureDMChannel(deps.db, channelAgentID);
   }
   if (frame.channelId && !channel && !mention) return sendError(deps, session, "unknown_channel", `no channel ${frame.channelId}`);
-  const requestedAgentID = mention?.agentID ?? frame.toAgentId ?? (frame.channelId ? channel?.agent_id : session.agentID) ?? session.agentID;
+  const requestedAgentID = group?.agentID ?? mention?.agentID ?? frame.toAgentId ?? (frame.channelId ? channel?.agent_id : session.agentID) ?? session.agentID;
 
   // While the primary assistant is waiting for its first name, an ordinary
   // main-channel message is treated as the answer to the inline prompt.
@@ -746,15 +723,19 @@ async function runUserMessage(
   // salience. Temp turns stay visible in the transcript and the recent window
   // but are skipped by compaction (GATE-002, MEM/TAG).
   const gate = classifyTurn(routedText);
+  let userMessageID: string | undefined;
   if (channel) {
     const userMessage = appendChannelMessage(deps.db, {
       channelID,
       fromType: "user",
       fromID: session.device?.id ?? "user",
-      toAgentID: mention?.agentID ?? frame.toAgentId ?? null,
+      // In a group the row names the bot that took the floor, so the tagger
+      // batches each bot's exchanges separately.
+      toAgentID: group?.agentID ?? mention?.agentID ?? frame.toAgentId ?? null,
       text: routedText,
       salience: gate.salience,
     });
+    userMessageID = userMessage.id;
     linkAttachments(deps.db, userMessage.id, attachments.map((file) => file.id));
     deps.emit({
       attachments,
@@ -775,6 +756,7 @@ async function runUserMessage(
     turnTimeoutMs: deps.config.turnTimeoutMs,
     // Mailboxes the owner connected in Settings → Plugins.
     mailAccounts: pluginMailResolver(deps.config.pluginsPath),
+    pluginsPath: deps.config.pluginsPath,
   };
   const turn = runTaskTurn(deps.db, deps.router, turnSettings, {
     attachmentIDs: attachments.map((file) => file.id),
@@ -787,6 +769,7 @@ async function runUserMessage(
     emit: deps.emit,
     signal: controller.signal,
     channelID: channel ? channelID : undefined,
+    ...(groupChannel ? { groupContext: groupContextBlock(groupChannel, groupHistory(deps.db, channelID, persona.id, userMessageID)) } : {}),
   });
 
   void turn
@@ -976,21 +959,92 @@ function handleMemoryList(deps: DispatchDeps, session: Session, frame: Extract<C
     callerAgentID: session.agentID,
     limit: frame.limit ?? 100,
   });
-  deps.reply({
-    type: "memory.list.ok",
-    memories: rows.map((row) => ({
-      id: row.id,
-      text: row.content,
-      scope: row.scope,
-      visibility: row.visibility,
-      source: row.source,
-      confidence: row.confidence,
-      salience: row.salience,
-      updatedAt: row.updated_at,
-      lastUsedAt: row.last_used_at,
-      useCount: row.use_count,
-    })),
-  });
+  deps.reply({ type: "memory.list.ok", memories: rows.map(memoryItem) });
+}
+
+function memoryItem(row: AgentMemoryRow) {
+  return {
+    id: row.id,
+    text: row.content,
+    scope: row.scope,
+    visibility: row.visibility,
+    source: row.source,
+    confidence: row.confidence,
+    salience: row.salience,
+    updatedAt: row.updated_at,
+    lastUsedAt: row.last_used_at,
+    useCount: row.use_count,
+  };
+}
+
+type MemoryEditFrame = Extract<ClientFrame, { type: "memory.update" | "memory.pin" | "memory.forget" | "memory.conflicts.list" | "memory.conflict.resolve" }>;
+
+/**
+ * Editable memory (Phase 1). Every edit goes through the same caller-filter
+ * as `memory.list`: a row the view would not show is `unknown_memory`.
+ */
+function handleMemoryEdit(deps: DispatchDeps, session: Session, frame: MemoryEditFrame): void {
+  if (!requireAuth(deps, session)) return;
+  const caller = session.agentID;
+  const visible = (id: string): AgentMemoryRow | null => {
+    const row = getAgentMemory(deps.db, id);
+    return row && memoryVisibleTo(row, caller) ? row : null;
+  };
+  const unknown = (id: string): void => sendError(deps, session, "unknown_memory", `no memory ${id}`);
+  switch (frame.type) {
+    case "memory.update": {
+      if (!visible(frame.id)) return unknown(frame.id);
+      const row = rewriteAgentMemory(deps.db, frame.id, frame.text);
+      if (!row) return unknown(frame.id);
+      deps.reply({ type: "memory.update.ok", memory: memoryItem(row) });
+      return;
+    }
+    case "memory.pin": {
+      if (!visible(frame.id)) return unknown(frame.id);
+      const row = setMemoryPinned(deps.db, frame.id, frame.pinned);
+      if (!row) return unknown(frame.id);
+      deps.reply({ type: "memory.pin.ok", memory: memoryItem(row) });
+      return;
+    }
+    case "memory.forget": {
+      if (!visible(frame.id)) return unknown(frame.id);
+      deps.reply({ type: "memory.forget.ok", id: frame.id, deleted: deleteAgentMemory(deps.db, frame.id) });
+      return;
+    }
+    case "memory.conflicts.list": {
+      // Only conflicts whose live side this caller can see.
+      const conflicts = listConflicts(deps.db, { limit: frame.limit ?? 50 })
+        .filter((conflict) => visible(conflict.memory_id))
+        .map((conflict) => ({
+          id: conflict.id,
+          memoryId: conflict.memory_id,
+          previousId: conflict.previous_id,
+          content: conflict.content,
+          previousContent: conflict.previous_content,
+          createdAt: conflict.created_at,
+        }));
+      deps.reply({ type: "memory.conflicts.list.ok", conflicts });
+      return;
+    }
+    case "memory.conflict.resolve": {
+      const conflict = getConflict(deps.db, frame.id);
+      if (!conflict || conflict.resolved) return sendError(deps, session, "unknown_conflict", `no open conflict ${frame.id}`);
+      if (frame.keepId !== conflict.memory_id && frame.keepId !== conflict.previous_id) {
+        return sendError(deps, session, "bad_frame", "keepId must be the conflict's memoryId or previousId");
+      }
+      // The live side must still be live and visible; a later write made the
+      // conflict stale, and the owner should look at the current list instead.
+      if (!visible(conflict.memory_id)) return unknown(conflict.memory_id);
+      const kept = frame.keepId === conflict.memory_id
+        ? getAgentMemory(deps.db, conflict.memory_id)
+        // Keeping the old value: it supersedes the newer one, as an owner edit.
+        : rewriteAgentMemory(deps.db, conflict.memory_id, conflict.previous_content);
+      if (!kept) return unknown(conflict.memory_id);
+      resolveConflict(deps.db, conflict.id);
+      deps.reply({ type: "memory.conflict.resolve.ok", id: conflict.id, memory: memoryItem(kept) });
+      return;
+    }
+  }
 }
 
 function handleTaskUpdate(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame,{type:"task.update"}>): void {
@@ -1708,12 +1762,12 @@ function handleAgentProfile(
 ): void {
   if (!requireAuth(deps, session)) return;
   const role = frame.role?.trim();
-  if (!role && !frame.visibility) {
-    sendError(deps, session, "bad_frame", "give a role or a visibility to change");
+  if (!role && !frame.visibility && frame.model === undefined && frame.critic === undefined) {
+    sendError(deps, session, "bad_frame", "give a role, a visibility, a model or a critic to change");
     return;
   }
   try {
-    const updated = updatePersona(deps.db, frame.agentId, { role, visibility: frame.visibility });
+    const updated = updatePersona(deps.db, frame.agentId, { role, visibility: frame.visibility, model: frame.model, critic: frame.critic });
     if (!updated) {
       sendError(deps, session, "unknown_agent", `no agent with id ${frame.agentId}`);
       return;
@@ -1729,6 +1783,68 @@ function handleAgentProfile(
   } catch (error) {
     sendError(deps, session, "bad_frame", error instanceof Error ? error.message : "could not update the agent");
   }
+}
+
+function handleAgentProactivity(
+  deps: DispatchDeps,
+  session: Session,
+  frame: Extract<ClientFrame, { type: "agent.proactivity" }>,
+): void {
+  if (!requireAuth(deps, session)) return;
+  try {
+    const { agentId, ...patch } = frame;
+    const current = patch.quietStart === undefined && patch.quietEnd === undefined && patch.maxPerDay === undefined
+      ? getProactivity(deps.db, agentId)
+      : setProactivity(deps.db, agentId, { quietStart: patch.quietStart, quietEnd: patch.quietEnd, maxPerDay: patch.maxPerDay });
+    deps.reply({ type: "agent.proactivity", agentId, ...current });
+  } catch (error) {
+    sendError(deps, session, "bad_frame", error instanceof Error ? error.message : "could not set proactivity");
+  }
+}
+
+/** The group channel a frame targets, or null for main, DMs and threads. */
+function groupOf(db: Database, channelID: string | undefined): ChannelRow | null {
+  if (!channelID || channelID === "main" || channelID.startsWith("dm:")) return null;
+  const channel = getChannel(db, channelID);
+  return channel?.type === "group" ? channel : null;
+}
+
+function channelInfo(db: Database, row: ChannelRow) {
+  return { id: row.id, name: row.name, type: "group" as const, agentIds: channelAgentIDs(db, row), createdAt: row.created_at };
+}
+
+function handleChannelCreate(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "channel.create" }>): void {
+  if (!requireAuth(deps, session)) return;
+  const agentIDs = [...new Set(frame.agentIds.map(canonicalAgentID))];
+  const unknown = agentIDs.find((id) => !getPersona(id));
+  if (unknown) return sendError(deps, session, "unknown_agent", `no agent with id ${unknown}`);
+  if (agentIDs.length < 2) return sendError(deps, session, "bad_frame", "a group needs two or more different bots");
+  const row = createGroupChannel(deps.db, frame.name.trim(), agentIDs);
+  deps.emit({ type: "channel.created", channel: channelInfo(deps.db, row) });
+}
+
+function handleChannelHistory(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "channel.history" }>): void {
+  if (!requireAuth(deps, session)) return;
+  if (!groupOf(deps.db, frame.channelId)) return sendError(deps, session, "unknown_channel", `no group channel ${frame.channelId}`);
+  const rows = deps.db.query<{
+    id: string; text: string; created_at: string; turn_id: string | null; from_id: string; from_type: string;
+    sender_name: string | null; sender_color: string | null; device_name: string | null; ui_hint: string | null; to_agent_id: string | null;
+  }, [string, number]>(`SELECT * FROM (SELECT cm.id, cm.text, cm.created_at, cm.turn_id, cm.from_id, cm.from_type, cm.rowid AS rid,
+      a.display_name AS sender_name, a.avatar_color AS sender_color, d.name AS device_name, cm.ui_hint, cm.to_agent_id
+      FROM channel_messages cm LEFT JOIN agents a ON a.id = cm.from_id LEFT JOIN devices d ON d.id = cm.from_id
+      WHERE cm.channel_id = ? AND cm.internal = 0 ORDER BY cm.created_at DESC, cm.rowid DESC LIMIT ?) ORDER BY created_at, rid`)
+    .all(frame.channelId, frame.limit ?? 200);
+  const messages = rows.map((row) => {
+    const role = row.from_type === "user" ? "user" : row.from_type === "system" ? "system" : "assistant";
+    return {
+      attachments: messageAttachments(deps.db, row.id),
+      id: row.id, role, text: row.text, createdAt: row.created_at, turnID: row.turn_id ?? undefined,
+      senderName: role === "user" ? row.device_name ?? "You" : row.sender_name ?? row.from_id,
+      senderColor: row.sender_color ?? undefined, uiHint: row.ui_hint ?? undefined,
+      ...(row.to_agent_id ? { toAgentId: row.to_agent_id } : {}),
+    };
+  });
+  deps.reply({ type: "channel.history.ok", channelId: frame.channelId, messages });
 }
 
 function handleAgentCreate(

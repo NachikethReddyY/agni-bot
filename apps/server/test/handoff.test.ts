@@ -246,3 +246,59 @@ describe("agent-to-agent handoff", () => {
     expect(defaultNotice?.intent).toBe("request");
   });
 });
+describe("handoff fixes (B4, B5, B7)", () => {
+  const sse = (chunk: unknown): Response => new Response(
+    `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, { status: 200 },
+  );
+
+  test("a child's form prompt reaches the owner, so it can be answered", async () => {
+    db = openDatabase(":memory:");
+    const parent = createThread(db, defaultResolvedPersona(db!).id);
+    let call = 0;
+    const fetchStub = async (): Promise<Response> => call++ === 0
+      ? sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "c-ask", type: "function", function: { name: "ask", arguments: JSON.stringify({ question: "Which day?", options: ["Mon", "Tue"] }) } }] } }] })
+      : sse({ choices: [{ delta: { content: "Booked for Tue." } }] });
+    const router = new Router([provider], new HealthTracker(), fetchStub as unknown as typeof fetch);
+    const forwarded: Array<{ type: string; requestID?: string }> = [];
+    const { answerFormAndWake } = await import("../src/agent/form-broker");
+    const result = await handoff({
+      db: db!, router, settings: { firstTokenTimeoutMs: 1000, turnTimeoutMs: 5000 },
+      emit: (frame) => {
+        forwarded.push(frame as { type: string; requestID?: string });
+        if (frame.type === "form.request") answerFormAndWake(db!, frame.requestID, "Tue");
+      },
+      signal: new AbortController().signal, threadID: parent.id, guardrail: rootGuardrail("ea"),
+    }, { toAgentID: "researcher", task: "Book it.", emit: () => undefined, signal: new AbortController().signal });
+    expect(forwarded.some((frame) => frame.type === "form.request")).toBe(true);
+    expect(result.text).toBe("Booked for Tue.");
+    // Token and tool frames stay inside the child.
+    expect(forwarded.some((frame) => frame.type === "token" || frame.type === "tool.start")).toBe(false);
+  });
+
+  test("the child sees its own conversation summary, never the parent's", async () => {
+    db = openDatabase(":memory:");
+    const parent = createThread(db, defaultResolvedPersona(db!).id);
+    const child = ensureConversation(db!, "researcher");
+    db.run("UPDATE conversations SET summary = ? WHERE id = ?", ["researcher-own-summary", child.id]);
+    const parentConversation = ensureConversation(db!, "ea");
+    db.run("UPDATE conversations SET summary = ? WHERE id = ?", ["ea-private-summary", parentConversation.id]);
+    const bodies: string[] = [];
+    const fetchStub = async (_url: string, init: RequestInit): Promise<Response> => {
+      bodies.push(String(init.body));
+      return sse({ choices: [{ delta: { content: "ok" } }] });
+    };
+    const router = new Router([provider], new HealthTracker(), fetchStub as unknown as typeof fetch);
+    await handoff({
+      db: db!, router, settings: { firstTokenTimeoutMs: 1000, turnTimeoutMs: 5000 },
+      emit: () => undefined, signal: new AbortController().signal, threadID: parent.id,
+      conversationID: parentConversation.id, guardrail: rootGuardrail("ea"),
+    }, { toAgentID: "researcher", task: "Look.", emit: () => undefined, signal: new AbortController().signal });
+    expect(bodies.join("\n")).toContain("researcher-own-summary");
+    expect(bodies.join("\n")).not.toContain("ea-private-summary");
+  });
+
+  test("handoff and delegate_task share one depth cap", async () => {
+    const { MAX_DELEGATION_DEPTH } = await import("../src/tools/delegate-task-tool");
+    expect(MAX_DELEGATION_DEPTH).toBe(MAX_DEPTH);
+  });
+});

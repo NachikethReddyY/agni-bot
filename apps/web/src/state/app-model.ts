@@ -45,6 +45,7 @@ import {
   type ThreadInfo,
 } from "@agni/client";
 import { browserNotifications, type NotificationBridge } from "./notifications";
+import { subscribePush, unsubscribePush } from "./push";
 import {
   loadPreferences,
   savePreferences,
@@ -1397,7 +1398,21 @@ export class AppModel {
     this.preferences = { ...this.preferences, [key]: value };
     savePreferences(this.preferences);
     if (key === "typingIndicator" && !value) this.updateTypingState(false);
+    if (key === "push") this.syncPush();
     this.publish();
+  }
+
+  /** Opt in/out of Web Push: ask the daemon for its key (answered by `push.vapid`), or drop the subscription. */
+  private syncPush(): void {
+    const connection = this.connection;
+    if (!connection) return;
+    if (this.preferences.push) {
+      void connection.send({ type: "push.vapid.get" }).catch(() => undefined);
+    } else {
+      void unsubscribePush()
+        .then(async (endpoint) => { if (endpoint) await connection.send({ type: "push.unsubscribe", endpoint }); })
+        .catch(() => undefined);
+    }
   }
 
   /** Pin an agent to the top of the roster, or unpin it. */
@@ -1500,6 +1515,7 @@ export class AppModel {
             this.refreshTasks();
             this.refreshPlugins();
             this.refreshAppearance();
+            if (this.preferences.push) this.syncPush();
             this.startHealthPolling();
             if (!wasReady) this.openConversation(this.conversation.agentID);
             this.flushUnsent();
@@ -1614,6 +1630,20 @@ export class AppModel {
       this.statusText = null;
       this.run(this.conversation.apply(frame));
       this.publish();
+      return;
+    }
+
+    if (frame.type === "push.vapid") {
+      const connection = this.connection;
+      void subscribePush(frame.publicKey)
+        .then((json) => {
+          if (json?.endpoint && json.keys?.p256dh && json.keys.auth && connection) {
+            return connection.send({ type: "push.subscribe", subscription: { endpoint: json.endpoint, keys: { p256dh: json.keys.p256dh, auth: json.keys.auth } } });
+          }
+          // Blocked or unsupported: the switch must not lie.
+          this.setPreference("push", false);
+        })
+        .catch(() => this.setPreference("push", false));
       return;
     }
 

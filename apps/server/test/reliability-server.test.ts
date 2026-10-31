@@ -79,7 +79,7 @@ function config(dbPath: string): Config {
   return {
     host: "127.0.0.1", port: 0, dbPath, pidPath: "", logPath: "", providers: [provider],
     firstTokenTimeoutMs: 60_000, turnTimeoutMs: 60_000, helloTimeoutMs: 2000, frameLogCapacity: 100,
-    jobPollMs: 1000, maxConcurrentTurns: 4, messageBatchMs: 50, pluginsPath: "",
+    jobPollMs: 1000, maxConcurrentTurns: 4, pluginsPath: "",
   } as Config;
 }
 

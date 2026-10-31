@@ -13,13 +13,18 @@ import { buildRoutinePrompt, parseRoutineState } from "./prompt";
 import { getRoutine, recordRun, updateRoutineState } from "../stores/routines";
 import { ROUTINE_LIMITS, type Routine, type RoutineRun } from "./types";
 
-// No read_file/grep/glob/mail_search: an unattended run must not read files or
+// No read_file/grep/glob: an unattended run must not read files or
 // search the mailbox for something to exfiltrate (bug.md C1, M16).
 export const ROUTINE_TOOL_ALLOWLIST = [
   "memory_search", "transcript_search", "links_search", "tasks_list",
   "web_search", "web_fetch", "mail_read", "recall_fact",
   "skills_list", "skills_load", "skills_resource",
 ];
+
+/** Mailbox and calendar reads only for a routine with no web egress: what it reads has nowhere to go. */
+export function routineTools(routine: Pick<Routine, "allowedDomains">): string[] {
+  return routine.allowedDomains.length === 0 ? [...ROUTINE_TOOL_ALLOWLIST, "mail_search", "calendar_list"] : ROUTINE_TOOL_ALLOWLIST;
+}
 
 export interface RoutineRunDeps {
   db: Database;
@@ -65,7 +70,7 @@ export async function executeRoutine(deps: RoutineRunDeps, routine: Routine): Pr
   const run = startRun(routine.id);
   let preflight: { changed: boolean; hash: string };
   try {
-    preflight = await runPreflight(routine.preflight, deps.db, routine.lastStateHash);
+    preflight = await runPreflight(routine.preflight, deps.db, routine.lastStateHash, deps.settings.mailAccounts);
   } catch (error) {
     run.error = error instanceof Error ? error.message : String(error);
     maybePause(deps, routine, updateStreak(deps, routine, false));
@@ -106,7 +111,7 @@ export async function executeRoutine(deps: RoutineRunDeps, routine: Routine): Pr
       conversationID: conversation?.id,
       carrySummary: conversation?.summary ?? null,
       guardrail: rootGuardrail(persona.id),
-      toolAllowlist: ROUTINE_TOOL_ALLOWLIST,
+      toolAllowlist: routineTools(routine),
       maxTokens: routine.maxTokens,
       allowedDomains: routine.allowedDomains,
     });
@@ -133,7 +138,9 @@ export async function executeRoutine(deps: RoutineRunDeps, routine: Routine): Pr
       updateRoutineState(deps.db, routine.id, { lastStateHash: preflight.hash });
       updateStreak(deps, routine, true);
     }
-    deps.emit({ type: "notify", title: `${persona.name} · ${routine.name}`, body: run.summary ?? "Routine completed", sound: false, threadID });
+    // A routine that has nothing for the owner says so with this marker and stays silent.
+    if (/^\s*NOTHING_TO_REPORT\b/.test(result.text)) return record(deps, run);
+    deps.emit({ type: "notify", title: `${persona.name} · ${routine.name}`, body: run.summary ?? "Routine completed", sound: false, threadID, agentId: persona.id });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     run.outcome = signal.aborted ? "timed_out" : /budget/i.test(message) ? "budget_exceeded" : "failed";

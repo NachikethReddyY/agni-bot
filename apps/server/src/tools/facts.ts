@@ -69,7 +69,7 @@ export interface RecallFactResult {
 }
 
 /** The default confidence floor for automatic injection (TUNABLE). */
-export const DEFAULT_MIN_RECALL_SCORE = 0.15;
+export const DEFAULT_MIN_RECALL_SCORE = 0.2;
 
 export function recallFact(db: Database, args: RecallFactArgs): RecallFactResult {
   const limit = clampLimit(args.limit);
@@ -78,7 +78,7 @@ export function recallFact(db: Database, args: RecallFactArgs): RecallFactResult
   if (query) {
     const hits = searchAgentMemories(db, {
       query,
-      scope,
+      scope: args.scope,
       agentID: args.agentID ?? null,
       callerAgentID: args.callerAgentID ?? null,
       limit,
@@ -107,6 +107,7 @@ export function recallFact(db: Database, args: RecallFactArgs): RecallFactResult
     agentID: args.agentID ?? null,
     limit,
     callerAgentID: args.callerAgentID ?? null,
+    pinned: true,
   });
   return { facts: rows.map((row) => ({ id: row.id, fact: row.content, summary: null, tags: row.tags })) };
 }

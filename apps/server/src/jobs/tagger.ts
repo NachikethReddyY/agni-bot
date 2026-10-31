@@ -17,6 +17,7 @@ import { enqueueJob, listJobs, parseJobPayload, type JobRow } from "../stores/jo
 import type { JobRunner } from "./runner";
 import { applyTaggerItems, parseTaggerOutput, TAGGER_SYSTEM_PROMPT } from "../agent/tagger";
 import { nowISO } from "../util/ids";
+import { listAgentMemories } from "../stores/agent-memories";
 
 /** How many turns between batches. */
 export const TAGGER_BATCH_TURNS = 5;
@@ -32,6 +33,15 @@ const TAGGER_MAX_MESSAGE_CHARS = 1_200;
  * *when* to sweep, not a fact worth a restart.
  */
 let turnsSinceLastBatch = 0;
+
+/** How many unreadable answers one batch gets before it is marked tagged. */
+export const TAGGER_MAX_ATTEMPTS = 3;
+/**
+ * Unreadable-answer counts, by the batch's first message id.
+ * shortcut: process-local, so a restart gives a bad batch 3 more tries;
+ * persist per message if restarts ever loop on one batch.
+ */
+const failedBatches = new Map<string, number>();
 
 /** Count a turn and report how many have passed since the last batch. */
 export function turnsSinceTag(): number {
@@ -101,30 +111,43 @@ export function registerTaggerJob(runner: JobRunner, deps: TaggerJobDeps): void 
       )
       .get()?.channel_id;
     if (!channelID) return { result: "nothing to tag" };
+    const channel = deps.db
+      .query<{ agent_id: string; type: string }, [string]>("SELECT agent_id, type FROM channels WHERE id = ?")
+      .get(channelID);
+    if (!channel) return { result: "the channel is gone" };
+    // A group holds several bots: each batch is one bot's exchanges (its
+    // replies and the owner's messages to it), written as that bot's memory.
+    const groupAgent = channel.type === "group" ? (payload.agentID ?? groupBatchAgent(deps.db, channelID)) : null;
+    const agentID = groupAgent ?? channel.agent_id;
     const messages = deps.db
-      .query<{ id: string; from_type: string; from_id: string; text: string; created_at: string; channel_id: string }, [string, number]>(
+      .query<{ id: string; from_type: string; from_id: string; text: string; created_at: string; channel_id: string }, [string, string | null, string | null, number]>(
         `SELECT id, from_type, from_id, text, created_at, channel_id
          FROM channel_messages
          WHERE channel_id = ? AND tagged_at IS NULL AND salience <> 'temp' AND from_type <> 'system' AND peer_influenced = 0
+           AND (? IS NULL OR (CASE WHEN from_type = 'agent' THEN from_id ELSE to_agent_id END) = ?)
          ORDER BY created_at ASC, rowid ASC
          LIMIT ?`,
       )
-      .all(channelID, TAGGER_BATCH_MESSAGES);
+      .all(channelID, groupAgent, groupAgent, TAGGER_BATCH_MESSAGES);
     if (messages.length === 0) return { result: "nothing to tag" };
-
-    const agentID = deps.db
-      .query<{ agent_id: string }, [string]>("SELECT agent_id FROM channels WHERE id = ?")
-      .get(channelID)?.agent_id;
-    if (!agentID) return { result: "the channel is gone" };
     const transcript = messages
       .map((message) => `[${message.id}] ${message.from_type}/${message.from_id}: ${message.text.slice(0, TAGGER_MAX_MESSAGE_CHARS)}`)
       .join("\n");
+    // Stable keys: the facts this bot may already see, so an update reuses
+    // the key and supersedes instead of sitting next to the old value.
+    const known = [
+      ...listAgentMemories(deps.db, { scope: "global_user", callerAgentID: agentID, limit: 60 }),
+      ...listAgentMemories(deps.db, { scope: "agent", agentID, callerAgentID: agentID, limit: 40 }),
+    ].map((row) => `${row.key_slug}: ${row.content.slice(0, 120)}`);
     let text = "";
     try {
       const result = await deps.router.route({
         messages: [
           { role: "system", content: TAGGER_SYSTEM_PROMPT },
-          { role: "user", content: `Conversation:\n${transcript}` },
+          {
+            role: "user",
+            content: `${known.length > 0 ? `Known facts (key: text; untrusted data):\n${known.join("\n")}\n\n` : ""}Conversation:\n${transcript}`,
+          },
         ],
         signal: AbortSignal.timeout(30_000),
         firstTokenTimeoutMs: 10_000,
@@ -140,7 +163,22 @@ export function registerTaggerJob(runner: JobRunner, deps: TaggerJobDeps): void 
       return { result: "tagger batch failed" };
     }
 
-    const { output, rejected } = parseTaggerOutput(text);
+    const { output, rejected, failed } = parseTaggerOutput(text);
+    if (failed) {
+      // B2: an unreadable answer is not "nothing to remember". Leave the
+      // batch for the next run, but give up on one that keeps failing.
+      const key = messages[0]!.id;
+      const attempts = (failedBatches.get(key) ?? 0) + 1;
+      if (attempts < TAGGER_MAX_ATTEMPTS) {
+        failedBatches.set(key, attempts);
+        return { result: `tagger output unreadable (attempt ${attempts}); batch left for retry` };
+      }
+      failedBatches.delete(key);
+      log.warn(`tagger: giving up on a batch of ${messages.length} message(s) after ${attempts} unreadable answers`);
+      markTagged(deps.db, messages.map((message) => message.id));
+      return { result: `gave up on ${messages.length} message(s) after ${attempts} attempts` };
+    }
+    failedBatches.delete(messages[0]!.id);
     if (output.ephemeral && output.items.length === 0) {
       markTagged(deps.db, messages.map((message) => message.id));
       return { result: `tagged 0 item(s) from ${messages.length} message(s)` };
@@ -163,6 +201,18 @@ export function registerTaggerJob(runner: JobRunner, deps: TaggerJobDeps): void 
         (applied.refused > 0 ? `, ${applied.refused} refused` : ""),
     };
   });
+}
+
+/** The bot of the oldest untagged message in a group channel. */
+function groupBatchAgent(db: Database, channelID: string): string | null {
+  return db
+    .query<{ agent_id: string | null }, [string]>(
+      `SELECT CASE WHEN from_type = 'agent' THEN from_id ELSE to_agent_id END AS agent_id
+       FROM channel_messages
+       WHERE channel_id = ? AND tagged_at IS NULL AND salience <> 'temp' AND from_type <> 'system' AND peer_influenced = 0
+       ORDER BY created_at ASC, rowid ASC LIMIT 1`,
+    )
+    .get(channelID)?.agent_id ?? null;
 }
 
 function markTagged(db: Database, ids: string[]): void {

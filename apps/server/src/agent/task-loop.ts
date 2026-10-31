@@ -23,11 +23,13 @@ import { registerRequestOwnerInputTool } from "../tools/needs-input-tool";
 import { registerArtifactTool } from "../tools/artifact-tool";
 import { registerSecureExecTool } from "../tools/secure-exec-tool";
 import { registerSayTool } from "../tools/say-tool";
+import { criticReview } from "./critic";
+import { SCRATCH_TOOLS, registerScratchTools } from "../tools/scratch-tool";
 import { registerRenameTool } from "../tools/rename-tool";
 import { registerCreateAgentTool } from "../tools/create-agent-tool";
 import { createUpdateAgentTool } from "../tools/update-agent-tool";
 import { recallFact } from "../tools/facts";
-import { retrieveFacts, rewriteForRetrieval, previousBlockTail, TURN_EMBED_TIMEOUT_MS } from "./retrieval";
+import { asksAboutPast, ownerLedger, retrieveFacts, rewriteForRetrieval, previousBlockTail, TURN_EMBED_TIMEOUT_MS } from "./retrieval";
 import type { MemoryHit } from "../stores/agent-memories";
 import { embedderConfig, type EmbedderConfig } from "./embeddings";
 import { isSmallTalk } from "./gate";
@@ -37,7 +39,7 @@ import { getThread } from "../stores/threads";
 import { listSummaries } from "../stores/summaries";
 import { appendChannelMessage, getChannelSummary } from "../stores/channels";
 import { compactChannelHistory } from "./compactor";
-import { GuardrailError, enterDelegation, rootGuardrail, stepGuardrail, type GuardrailState } from "./guardrails";
+import { GuardrailError, MAX_DEPTH, enterDelegation, rootGuardrail, stepGuardrail, type GuardrailState } from "./guardrails";
 import type { MailAccountResolver } from "../plugins/credentials";
 import { domainAllowed } from "../routines/egress";
 
@@ -49,6 +51,8 @@ export interface TaskTurnSettings {
    * them from there, so a connected mailbox is actually usable.
    */
   mailAccounts?: MailAccountResolver;
+  /** plugins.json, for the Calendar and Drive OAuth tokens. */
+  pluginsPath?: string;
   /**
    * ASM-004: the confidence floor for automatic retrieval. Below it,
    * nothing is injected.
@@ -82,6 +86,13 @@ export interface TaskTurnRun {
   facts?: boolean;
   /** The durable channel that owns this turn, when using the channel model. */
   channelID?: string;
+  /**
+   * Phase 4: a group-channel turn. The block (recent room messages, already
+   * filtered by visibility) opens the model input; the durable log keeps the
+   * owner's plain text. The group's shared summary is not used and the room
+   * is not compacted, so no bot's words reach another bot unfiltered.
+   */
+  groupContext?: string;
   /**
    * How the request is written to the durable log. A delegated brief is a
    * system note ("Vision messaged you: …"), not the owner speaking.
@@ -306,7 +317,9 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   // row (above) keeps the plain text so the UI stays readable.
   messages.push({
     role: "user",
-    content: run.peer ? peerEnvelope(run.peer, run.text) : run.text,
+    content: run.peer
+      ? peerEnvelope(run.peer, run.text)
+      : run.groupContext ? `${run.groupContext}\n\nThe owner now says:\n${run.text}` : run.text,
     attachmentIDs: run.attachmentIDs,
   });
   run.emit({
@@ -320,11 +333,12 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   run.emit({ type: "agent.presence", agentId: persona.id, state: "working" });
 
   let summary: string | null = existing?.summary ?? null;
-  const registry = buildTaskToolRegistry(db, settings.mailAccounts);
+  const registry = buildTaskToolRegistry(db, settings.mailAccounts, settings.pluginsPath);
+  const mcpNames = registry.list().map((tool) => tool.name).filter((name) => name.startsWith("mcp_"));
   // DEL-007: a read-only agent still reads user memory but cannot write it.
   const memoryTools = persona.memoryScope === "read"
-    ? persona.tools.filter((tool) => !MEMORY_WRITE_TOOLS.has(tool))
-    : persona.tools;
+    ? persona.tools.filter((tool) => !MEMORY_WRITE_TOOLS.has(tool)).flatMap((tool) => (tool === "mcp_*" ? mcpNames : [tool]))
+    : persona.tools.flatMap((tool) => (tool === "mcp_*" ? mcpNames : [tool]));
   // Universal tools: `say` gives every agent a way to post progress as
   // separate messages; `run_privileged` is only meaningful next to `bash`.
   // `ask` puts a question to the owner — every agent may do that. A draft
@@ -332,6 +346,8 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   const effectiveTools = run.toolAllowlist
     ? [...new Set(run.toolAllowlist.filter((name) => memoryTools.includes(name)))]
     : [...new Set([
+      // A delegated task's bots share its scratchpad.
+      ...(run.delegation ? SCRATCH_TOOLS : []),
       ...memoryTools,
       "say",
       "ask",
@@ -347,7 +363,7 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   // Sorted so an update to one fact does not reshuffle the cached prefix.
   const factRows = run.facts === false ? [] : recallFact(db, { limit: 6, callerAgentID: persona.id }).facts;
   const facts = factRows.map((row) => row.fact).sort();
-  const channelSummary = run.channelID ? getChannelSummary(db, run.channelID)?.summary : null;
+  const channelSummary = run.channelID && run.groupContext === undefined ? getChannelSummary(db, run.channelID)?.summary : null;
   // ASM-002: a short, always-present note of the current topic. It holds the
   // latest question, so the compiler places it after the per-block slots.
   const anchor = deriveAnchor({
@@ -402,12 +418,12 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   registerHandoffTool(registry, {
     db, router, settings, emit: run.emit, signal: controller.signal,
     threadID, channelID: run.channelID, currentAgentID: persona.id,
-    conversationID: run.conversationID, carrySummary: run.carrySummary, guardrail,
+    conversationID: run.conversationID, guardrail,
   });
   // The agent can put a question to the owner, and can put an email draft up
   // for approval. Both wait for the owner, so both are registered per turn.
   registerAskTool(registry, { db, broker: formBroker });
-  registerDraftEmailTool(registry, { db, broker: formBroker });
+  registerDraftEmailTool(registry, { db, broker: formBroker, review: criticReview(db, router, settings.firstTokenTimeoutMs, persona) });
   // DEL-001: the async sibling of handoff. It returns as soon as the task is
   // queued; the specialist runs in a background session with only the brief.
   registerDelegateTaskTool(registry, {
@@ -419,6 +435,7 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   // `needs_input` once the question is asked.
   let needsInput = false;
   if (run.delegation) {
+    registerScratchTools(registry, { db, taskID: run.delegation.taskID, agentID: persona.id });
     registerRequestOwnerInputTool(registry, {
       db,
       emit: run.emit,
@@ -464,7 +481,7 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
     // the user message inside the envelope, never through this prefix.
     carrySummary: [run.carrySummary, channelSummary].filter(Boolean).join("\n\n") || null,
     depth: guardrail.depth,
-    maxDepth: 5,
+    maxDepth: MAX_DEPTH,
     toolHints: deferredToolHints(registry, deferred),
     anchor,
     // ASM-004: what this turn needs, retrieved rather than carried.
@@ -474,9 +491,17 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
     // with.
     previousTail,
     // CMP-001: the day and epoch summaries, when this conversation has them.
+    // Epoch summaries only when the owner asks about the past: they are the
+    // widest view, and most turns do not need it.
     rollups: run.conversationID
-      ? listSummaries(db, { conversationID: run.conversationID, level: "day", limit: 3 }).map((summary) => summary.text)
+      ? [
+        ...(!peerInput && asksAboutPast(run.text)
+          ? listSummaries(db, { conversationID: run.conversationID, level: "epoch", limit: 2 }).map((summary) => summary.text)
+          : []),
+        ...listSummaries(db, { conversationID: run.conversationID, level: "day", limit: 3 }).map((summary) => summary.text),
+      ]
       : [],
+    ledger: ownerLedger(db),
     // Only an agent that can actually hand off needs to know the roster.
     team: persona.tools.includes("handoff") ? teamRoster(db, { exclude: persona.id }) : [],
   });
@@ -505,13 +530,10 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
   let saidSomething = false;
   const offRoadGuard = !persona.id.startsWith("coder") && !CODE_REQUEST.test(run.text) && !FILE_REQUEST.test(run.text);
   let activeStepText = "";
-  // Channel turns show progress where the owner asked for it: `say` messages
-  // and the final answer. A model's between-tool narration is thinking aloud,
-  // so it stays in the model's context instead of becoming a bubble for every
-  // internal step. Direct turns (the CLI) keep streaming live for feedback.
-  const channelBacked = Boolean(run.channelID);
-  const emitToken = (delta: string): void => {
-    if (!peerInput) run.emit({ type: "token", turnID, threadID, delta });
+  // Every step streams live. A step that ends in tool calls was narration,
+  // which stays in the model's context: `reset` clears it from the bubble.
+  const emitToken = (delta: string, reset?: true): void => {
+    if (!peerInput) run.emit({ type: "token", turnID, threadID, delta, ...(reset ? { reset } : {}) });
   };
   const publish = (text: string, uiHint: "normal" | "progress" = "normal"): void => {
     if (text.trim().length === 0) return;
@@ -552,14 +574,14 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
         firstTokenTimeoutMs: settings.firstTokenTimeoutMs,
         tools,
         toolChoice: tools.length ? "auto" : "none",
+        preferredModel: persona.model,
         ...(tokenLimit === null ? {} : { maxTokens: Math.min(2_048, tokenLimit - tokenCount) }),
         onDelta: (delta: string) => {
           activeStepText += delta;
-          // Hold channel turns until the step is known to be the answer: a
-          // step that calls tools is narration, not something to show.
-          if (!channelBacked) emitToken(delta);
+          emitToken(delta);
         },
       });
+      const streamedText = activeStepText;
       activeStepText = "";
       // Counted for the record (the debugger shows it), not enforced.
       tokenCount += result.outputTokens ?? estimateTokens(result.text + JSON.stringify(result.toolCalls ?? []));
@@ -575,20 +597,21 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
         answerText = result.text;
         messages.push(assistantMessage(result.text, result.reasoning));
         consecutiveNonTextSteps = 0;
-        // The buffered answer arrives as one token so the client fills the
-        // bubble it already owns, then the durable message seals it.
-        if (channelBacked && result.text.length > 0) {
-          emitToken(result.text);
-        }
         publish(result.text);
         break;
       }
 
+      if (streamedText) emitToken("", true);
       messages.push({ role: "assistant", content: result.text, toolCalls: result.toolCalls, ...(result.reasoning ? { reasoning: result.reasoning } : {}), ...(result.responseItems ? { responseItems: result.responseItems } : {}) });
       // The narration that introduced these tools is not a message. The model
       // keeps it, the owner sees the tools' activity and the `say` updates.
       persistSession(db, threadID, turnID, "running", messages, summary, stepCount, tokenCount);
       let stepProgressed = false;
+      // Several read-only lookups in one step start together; the loop below
+      // still consumes them in order, so guards and message order are unchanged.
+      const started = startParallelReads(result.toolCalls, recentCalls, stepCount, DUPLICATE_WINDOW,
+        (call) => broker.requiresApproval(call.function.name, callArguments(call.function.arguments)),
+        (call) => executeTool(db, threadID, turnID, call, callableTools, registry, broker, controller.signal, run.emit, () => undefined, persona, guardrail, peerInput, run.allowedDomains));
       for (const call of result.toolCalls) {
         stepCount += 1;
         // Is this step the model going off road — reading the app's own
@@ -612,7 +635,7 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
           continue;
         }
         recentCalls.set(signature, stepCount);
-        const callResult = await executeTool(db, threadID, turnID, call, callableTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail, peerInput, run.allowedDomains);
+        const callResult = await (started.get(call.id) ?? executeTool(db, threadID, turnID, call, callableTools, registry, broker, controller.signal, run.emit, (state) => persistSession(db, threadID, turnID, state, messages, summary, stepCount, tokenCount), persona, guardrail, peerInput, run.allowedDomains));
         let content = callResult.content;
         if (looking && offRoadSteps === OFF_ROAD_NUDGE_AT && !offRoadNudged && !acted) {
           offRoadNudged = true;
@@ -687,7 +710,6 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
         if (activeStepText) {
           answerText = activeStepText;
           messages.push({ role: "assistant", content: activeStepText });
-          if (channelBacked) emitToken(activeStepText);
           publish(activeStepText);
           activeStepText = "";
         }
@@ -700,7 +722,6 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
           // marked failed so the UI never presents an interrupted task as done.
           answerText = activeStepText;
           messages.push({ role: "assistant", content: activeStepText });
-          if (channelBacked) emitToken(activeStepText);
           publish(activeStepText);
         } else if (!answerText && stopReason === "error") {
           // A turn that failed with nothing to say still owes the user a trace:
@@ -717,7 +738,7 @@ async function runTaskTurnLocked(db: Database, router: Router, settings: TaskTur
     if (runningTurns.get(threadID)?.turnID === turnID) runningTurns.delete(threadID);
   }
 
-  if (run.channelID) void compactChannelHistory(db, router, run.channelID, persona.id, peerInput);
+  if (run.channelID && run.groupContext === undefined) void compactChannelHistory(db, router, run.channelID, persona.id, peerInput);
   finishTurn(db, { id: turnID, stopReason, ...usage });
   touchThread(db, threadID);
   // A turn waiting for the owner's answer is not a failed turn: the session
@@ -820,6 +841,35 @@ function withNote(content: string, note: string): string {
     // A result that is not JSON still gets the note in front of it.
   }
   return `${note}\n${content}`;
+}
+
+/** Free, read-only tools whose calls in one step may run at the same time. */
+export const PARALLEL_READ_TOOLS = new Set([
+  "memory_search", "transcript_search", "recall_fact", "expand", "links_search", "tasks_list", "job_list",
+  "web_fetch", "web_search", "read_file", "grep", "glob", "delegate_wait", "task_status", "scratch_read",
+]);
+
+/**
+ * Start a step's calls concurrently when there are several and every one is a
+ * free read. A call the duplicate guard will skip is not started. Anything
+ * else returns an empty map and the step runs in series as before.
+ */
+export function startParallelReads<T>(
+  calls: ToolCall[], recentCalls: ReadonlyMap<string, number>, stepCount: number, window: number,
+  gated: (call: ToolCall) => boolean, run: (call: ToolCall) => Promise<T>,
+): Map<string, Promise<T>> {
+  const started = new Map<string, Promise<T>>();
+  if (calls.length < 2 || !calls.every((call) => PARALLEL_READ_TOOLS.has(call.function.name) && !gated(call))) return started;
+  const seen = new Map(recentCalls);
+  calls.forEach((call, index) => {
+    const signature = `${call.function.name}:${call.function.arguments}`;
+    const step = stepCount + index + 1;
+    const last = seen.get(signature);
+    if (last !== undefined && step - last <= window) return;
+    seen.set(signature, step);
+    started.set(call.id, run(call));
+  });
+  return started;
 }
 
 async function executeTool(  db: Database, threadID: string, turnID: string, call: ToolCall, allowlist: string[],

@@ -139,6 +139,17 @@ export const MessageInfoSchema = z.object({
 });
 export type MessageInfo = z.infer<typeof MessageInfoSchema>;
 
+/** Phase 4: a group channel — the owner and two or more bots in one room. */
+export const ChannelInfoSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  type: z.literal("group"),
+  /** Member bots; the first is the primary, who answers unless another is @named. */
+  agentIds: z.array(z.string()).min(2),
+  createdAt: z.string(),
+});
+export type ChannelInfo = z.infer<typeof ChannelInfoSchema>;
+
 /** Why a session block boundary exists. */
 export const SESSION_REASONS = ["manual", "context", "background"] as const;
 export const SessionReasonSchema = z.enum(SESSION_REASONS);
@@ -178,7 +189,7 @@ export const RoutineInfoSchema = z.object({
   cron: z.string(),
   timezone: z.string(),
   misfire: z.enum(["skip", "run_once"]),
-  preflight: z.enum(["http", "sql", "none"]),
+  preflight: z.enum(["http", "sql", "mail", "none"]),
   maxTokens: z.number().int().positive(),
   maxExecutionMs: z.number().int().positive(),
   allowedDomains: z.array(z.string()),
@@ -233,6 +244,19 @@ export const MemoryItemSchema = z.object({
   useCount: z.number(),
 });
 export type MemoryItem = z.infer<typeof MemoryItemSchema>;
+
+/** A fact that replaced an older, different one, waiting for the owner. */
+export const MemoryConflictSchema = z.object({
+  id: z.string(),
+  /** The memory that won (the live one). */
+  memoryId: z.string(),
+  /** The memory it replaced (closed). */
+  previousId: z.string(),
+  content: z.string(),
+  previousContent: z.string(),
+  createdAt: z.string(),
+});
+export type MemoryConflict = z.infer<typeof MemoryConflictSchema>;
 
 export const TaskInfoSchema = z.object({
   id: z.string().min(1), title: z.string(), dueAt: z.string().nullable(),
@@ -453,6 +477,18 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
    * retrieval could use — and nothing more.
    */
   z.object({ type: z.literal("memory.list"), scope: z.enum(["global_user", "agent"]).optional(), limit: z.number().int().positive().max(200).optional() }),
+  // Editable memory (Phase 1, additive v2). Each acts on a row the caller
+  // can see in `memory.list`; anything else is `unknown_memory`.
+  /** Replace a memory's text. The old text is kept as a superseded version. */
+  z.object({ type: z.literal("memory.update"), id: z.string().min(1), text: z.string().trim().min(1).max(8_000) }),
+  /** Pin (always in the profile) or unpin a memory. */
+  z.object({ type: z.literal("memory.pin"), id: z.string().min(1), pinned: z.boolean() }),
+  /** Forget a memory and its whole version chain (hard delete). */
+  z.object({ type: z.literal("memory.forget"), id: z.string().min(1) }),
+  /** The unresolved conflicts: a fact that replaced an older, different one. */
+  z.object({ type: z.literal("memory.conflicts.list"), limit: z.number().int().positive().max(200).optional() }),
+  /** Settle a conflict by keeping one side: the newer memory or the previous one. */
+  z.object({ type: z.literal("memory.conflict.resolve"), id: z.string().min(1), keepId: z.string().min(1) }),
   z.object({ type: z.literal("task.update"), taskID: z.string().min(1), action: z.enum(["done", "reopen", "snooze", "cancel", "edit"]), until: z.string().datetime().optional(), title: z.string().min(1).max(500).optional(), description: z.string().max(10000).nullable().optional(), dueAt: z.string().datetime().nullable().optional(), reminderAt: z.string().datetime().nullable().optional(), deadlineAt: z.string().datetime().nullable().optional(), labels: z.array(z.string().max(64)).max(20).optional(), workflowStatus: TaskWorkflowStatusSchema.optional(), progressNote: z.string().max(1000).nullable().optional(), repeatRule: z.enum(["none", "daily", "weekly", "monthly"]).optional(), priority: z.enum(["low", "normal", "high", "urgent"]).optional(), listID: z.string().optional() }),
   /**
    * Answer a question a delegated task asked. Its own frame, not a `msg.send`:
@@ -551,6 +587,17 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
     agentId: z.string().min(1),
     role: z.string().max(160).optional(),
     visibility: z.enum(["private", "summary", "shared"]).optional(),
+    /**
+     * The bot's own model: `provider`, `provider:model`, or a model id. The
+     * router tries it first and falls back to the normal list. Null or ""
+     * clears it.
+     */
+    model: z.string().max(200).nullable().optional(),
+    /**
+     * Opt-in critic: the bot that reviews this bot's email drafts before the
+     * owner's approval card. Null or "" turns it off.
+     */
+    critic: z.string().max(64).nullable().optional(),
   }),
   /**
    * Create an agent from the app — the "+" in the roster. The same creation
@@ -575,6 +622,42 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
     requestID: z.string().min(1),
     answer: z.string().min(1).max(4_000),
   }),
+  /**
+   * Phase 2 (proactive delivery), client side. Additive: no version bump.
+   * `push.subscribe` stores this device's Web Push subscription; `push.vapid.get`
+   * asks for the public key to subscribe with (answer: `push.vapid`);
+   * `agent.proactivity` sets a bot's quiet hours / daily cap and is always
+   * answered with the current values (send it with no fields to read them).
+   */
+  z.object({
+    type: z.literal("push.subscribe"),
+    subscription: z.object({
+      endpoint: z.string().url().max(2_048),
+      keys: z.object({ p256dh: z.string().min(1).max(256), auth: z.string().min(1).max(64) }),
+    }),
+  }),
+  z.object({ type: z.literal("push.unsubscribe"), endpoint: z.string().min(1).max(2_048) }),
+  z.object({ type: z.literal("push.vapid.get") }),
+  z.object({
+    type: z.literal("agent.proactivity"),
+    agentId: z.string().min(1),
+    /** "HH:MM" in the server's time zone; null clears quiet hours. Both or neither. */
+    quietStart: z.string().regex(/^\d{1,2}:\d{2}$/).nullable().optional(),
+    quietEnd: z.string().regex(/^\d{1,2}:\d{2}$/).nullable().optional(),
+    /** Max unprompted pushes per local day; null removes the cap. */
+    maxPerDay: z.number().int().min(0).max(1_000).nullable().optional(),
+  }),
+  // --- Phase 4: group channels -------------------------------------------
+  /** Create a group channel with two or more bots; answered by `channel.created`. */
+  z.object({
+    type: z.literal("channel.create"),
+    name: z.string().trim().min(1).max(64),
+    agentIds: z.array(z.string().min(1)).min(2).max(8),
+  }),
+  /** List the group channels; answered by `channel.list.ok`. */
+  z.object({ type: z.literal("channel.list") }),
+  /** A group channel's messages, last N chronological (default 200, max 500). */
+  z.object({ type: z.literal("channel.history"), channelId: z.string().min(1), limit: z.number().int().positive().max(500).optional() }),
 ]);
 export type ClientFrame = z.infer<typeof ClientFrameSchema>;
 export type ClientFrameType = ClientFrame["type"];
@@ -593,7 +676,15 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     /** Highest seq the server has assigned so far. */
     lastSeq: z.number().int().nonnegative(),
   }),
-  z.object({ type: z.literal("token"), seq, turnID: z.string(), threadID: z.string(), delta: z.string() }),
+  z.object({
+    type: z.literal("token"),
+    seq,
+    turnID: z.string(),
+    threadID: z.string(),
+    delta: z.string(),
+    /** The text streamed for the current step was tool-call narration: clear it before applying `delta`. */
+    reset: z.boolean().optional(),
+  }),
   z.object({
     type: z.literal("turn.start"),
     seq,
@@ -665,7 +756,7 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
       })
       .optional(),
   }),
-  z.object({ type: z.literal("notify"), seq, title: z.string(), body: z.string(), sound: z.boolean().optional(), threadID: z.string().optional() }),
+  z.object({ type: z.literal("notify"), seq, title: z.string(), body: z.string(), sound: z.boolean().optional(), threadID: z.string().optional(), agentId: z.string().optional() }),
   z.object({
     type: z.literal("agents.update"),
     seq,
@@ -724,6 +815,12 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("task.list.create.ok"), seq, lists: z.array(TaskListInfoSchema) }),
   z.object({ type: z.literal("task.activity.ok"), seq, taskID: z.string(), activity: z.array(TaskActivityInfoSchema) }),
   z.object({ type: z.literal("memory.list.ok"), seq, memories: z.array(MemoryItemSchema) }),
+  // Editable memory answers (Phase 1, additive v2).
+  z.object({ type: z.literal("memory.update.ok"), seq, memory: MemoryItemSchema }),
+  z.object({ type: z.literal("memory.pin.ok"), seq, memory: MemoryItemSchema }),
+  z.object({ type: z.literal("memory.forget.ok"), seq, id: z.string(), deleted: z.boolean() }),
+  z.object({ type: z.literal("memory.conflicts.list.ok"), seq, conflicts: z.array(MemoryConflictSchema) }),
+  z.object({ type: z.literal("memory.conflict.resolve.ok"), seq, id: z.string(), memory: MemoryItemSchema }),
   z.object({ type: z.literal("task.update.ok"), seq, task: TaskInfoSchema }),
   /** A delegated task changed state; clients refresh their task list. */
   z.object({ type: z.literal("task.updated"), seq, task: TaskInfoSchema }),
@@ -825,6 +922,22 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
     visibility: z.enum(["private", "summary", "shared"]).optional(),
   }),
   z.object({ type: z.literal("error"), seq, code: z.string(), message: z.string(), retryAfter: z.number().optional() }),
+  /** Phase 2 (additive): the VAPID public key a client subscribes to Web Push with. */
+  z.object({ type: z.literal("push.vapid"), seq, publicKey: z.string() }),
+  /** Phase 2 (additive): a bot's proactivity settings (reply to `agent.proactivity`). */
+  z.object({
+    type: z.literal("agent.proactivity"),
+    seq,
+    agentId: z.string(),
+    quietStart: z.string().nullable(),
+    quietEnd: z.string().nullable(),
+    maxPerDay: z.number().int().nullable(),
+  }),
+  // --- Phase 4: group channels -------------------------------------------
+  /** A group channel was created; sent to every client. */
+  z.object({ type: z.literal("channel.created"), seq, channel: ChannelInfoSchema }),
+  z.object({ type: z.literal("channel.list.ok"), seq, channels: z.array(ChannelInfoSchema) }),
+  z.object({ type: z.literal("channel.history.ok"), seq, channelId: z.string(), messages: z.array(MessageInfoSchema) }),
 ]);
 export type ServerFrame = z.infer<typeof ServerFrameSchema>;
 export type ServerFrameType = ServerFrame["type"];

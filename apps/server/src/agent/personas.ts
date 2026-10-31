@@ -56,6 +56,10 @@ export interface Persona {
 /** A persona bound to a live agent row, with a prompt ready to send. */
 export interface ResolvedPersona extends Persona {
   systemPrompt: string;
+  /** The bot's own model (`agents.model`), tried first by the router. */
+  model?: string | null;
+  /** Phase 4: the bot that reviews this bot's email drafts, when opted in. */
+  criticAgentID?: string | null;
 }
 
 /** Used when no owner first name is configured; never inferred from secrets. */
@@ -109,7 +113,7 @@ export const PERSONAS: Persona[] = [
     color: "#f0b95a",
     role: "front desk — replies fast, decides who should do the work, and synthesizes the answers",
     systemPromptTemplate: AGNI_PROMPT_TEMPLATE,
-    tools: ["memory_search", "memory_write", "transcript_search", "links_search", "link_save", "tasks_list", "task_create", "task_update", "grep", "glob", "read_file", "write_file", "web_search", "web_fetch", "deep_research", "bash", "skills_list", "skills_load", "skills_resource", "mail_search", "mail_read", "mail_send", "remember_fact", "recall_fact", "forget_fact", "handoff", "delegate_task", "delegate_wait", "task_status", "task_cancel", "rename_agent", "create_agent", "share_thread", "job_schedule", "job_list", "job_cancel", "update_agent", "routine_create", "routine_list", "routine_pause", "routine_delete"],
+    tools: ["memory_search", "memory_write", "transcript_search", "links_search", "link_save", "tasks_list", "task_create", "task_update", "grep", "glob", "read_file", "write_file", "web_search", "web_fetch", "deep_research", "bash", "skills_list", "skills_load", "skills_resource", "mail_search", "mail_read", "mail_send", "calendar_list", "calendar_create", "calendar_update", "drive_search", "drive_read", "mcp_*", "remember_fact", "recall_fact", "forget_fact", "handoff", "delegate_task", "delegate_wait", "task_status", "task_cancel", "rename_agent", "create_agent", "share_thread", "job_schedule", "job_list", "job_cancel", "update_agent", "routine_create", "routine_list", "routine_pause", "routine_delete"],
     visibility: "shared",
   },
   {
@@ -218,14 +222,21 @@ export function loadRuntimeAgents(db: Database): number {
 export function updatePersona(
   db: Database,
   id: string,
-  changes: { role?: string; prompt?: string; visibility?: Visibility },
+  changes: { role?: string; prompt?: string; visibility?: Visibility; model?: string | null; critic?: string | null },
 ): { id: string; name: string; role: string; prompt: string; visibility: Visibility } | undefined {
   const persona = getPersona(id);
   if (!persona) return undefined;
   const role = changes.role?.trim();
   const prompt = changes.prompt?.trim();
   const visibility = changes.visibility;
-  if (!role && !prompt && !visibility) throw new Error("nothing to change: give a role, a prompt, or a visibility");
+  if (!role && !prompt && !visibility && changes.model === undefined && changes.critic === undefined) throw new Error("nothing to change: give a role, a prompt, a visibility, a model, or a critic");
+  if (changes.critic !== undefined) {
+    const critic = changes.critic?.trim() ? canonicalAgentID(changes.critic.trim()) : null;
+    if (critic && (!getPersona(critic) || critic === persona.id)) throw new Error("the critic must be another existing bot");
+    db.run("UPDATE agents SET critic_agent_id = ?, updated_at = ? WHERE id = ?", [critic, nowISO(), persona.id]);
+  }
+  // An empty or null model clears it: the bot follows the normal provider list.
+  if (changes.model !== undefined) db.run("UPDATE agents SET model = ?, updated_at = ? WHERE id = ?", [changes.model?.trim() || null, nowISO(), persona.id]);
   if (role) {
     db.run("UPDATE agents SET role_detail = ?, updated_at = ? WHERE id = ?", [role, nowISO(), persona.id]);
     persona.role = role;
@@ -305,8 +316,8 @@ export function resolvePersona(db: Database, id: string): ResolvedPersona | unde
   const persona = getPersona(id);
   if (!persona) return undefined;
   const row = db
-    .query<{ display_name: string | null; avatar_color: string | null; system_prompt: string | null; role_detail: string | null; memory_scope: string | null; visibility: string | null }, [string]>(
-      "SELECT display_name, avatar_color, system_prompt, role_detail, memory_scope, visibility FROM agents WHERE id = ?",
+    .query<{ display_name: string | null; avatar_color: string | null; system_prompt: string | null; role_detail: string | null; memory_scope: string | null; visibility: string | null; model: string | null; critic_agent_id: string | null }, [string]>(
+      "SELECT display_name, avatar_color, system_prompt, role_detail, memory_scope, visibility, model, critic_agent_id FROM agents WHERE id = ?",
     )
     .get(persona.id);
   const name = row?.display_name?.trim() || persona.name;
@@ -324,6 +335,8 @@ export function resolvePersona(db: Database, id: string): ResolvedPersona | unde
     memoryScope: (row?.memory_scope ?? persona.memoryScope) === "readwrite" ? "readwrite" : "read",
     systemPrompt: composeSystemPrompt(template, name),
     visibility: normalizeVisibility(row?.visibility ?? persona.visibility ?? DEFAULT_VISIBILITY),
+    model: row?.model?.trim() || null,
+    criticAgentID: row?.critic_agent_id?.trim() || null,
   };
 }
 

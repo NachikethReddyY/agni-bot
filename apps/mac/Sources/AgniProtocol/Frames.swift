@@ -136,6 +136,16 @@ public struct MessageInfo: Sendable, Equatable, Decodable {
   public var uiHint: String?
 }
 
+/// Phase 4: a group channel — the owner and two or more bots. The first
+/// agent id is the primary, who answers unless another bot is @named.
+public struct ChannelInfo: Sendable, Equatable, Decodable, Identifiable {
+  public var id: String
+  public var name: String
+  public var type: String
+  public var agentIds: [String]
+  public var createdAt: String
+}
+
 public struct JobInfo: Sendable, Equatable, Decodable, Identifiable {
   public var id: String
   public var kind: String
@@ -169,6 +179,44 @@ public struct MemoryItem: Sendable, Equatable, Decodable, Identifiable {
   public var updatedAt: String
   public var lastUsedAt: String?
   public var useCount: Int
+}
+
+// Editable memory (Phase 1, additive v2).
+
+/// Answer to `memory.update` and `memory.pin`: the memory as it now stands.
+public struct MemoryItemOK: Sendable, Equatable, Decodable {
+  public var seq: Int
+  public var memory: MemoryItem
+}
+
+/// Answer to `memory.forget`.
+public struct MemoryForgetOK: Sendable, Equatable, Decodable {
+  public var seq: Int
+  public var id: String
+  public var deleted: Bool
+}
+
+/// A fact that replaced an older, different one, waiting for the owner.
+public struct MemoryConflict: Sendable, Equatable, Decodable, Identifiable {
+  public var id: String
+  public var memoryId: String
+  public var previousId: String
+  public var content: String
+  public var previousContent: String
+  public var createdAt: String
+}
+
+/// Answer to `memory.conflicts.list`.
+public struct MemoryConflictsListOK: Sendable, Equatable, Decodable {
+  public var seq: Int
+  public var conflicts: [MemoryConflict]
+}
+
+/// Answer to `memory.conflict.resolve`: the conflict, and the memory kept.
+public struct MemoryConflictResolveOK: Sendable, Equatable, Decodable {
+  public var seq: Int
+  public var id: String
+  public var memory: MemoryItem
 }
 
 public struct TaskInfo: Sendable, Equatable, Decodable, Identifiable {
@@ -328,6 +376,12 @@ public enum ClientFrame: Sendable, Equatable {
   case taskList(status: String?, limit: Int?)
   /// Ask what the agent can remember.
   case memoryList(scope: String?, limit: Int?)
+  // Editable memory (Phase 1, additive v2).
+  case memoryUpdate(id: String, text: String)
+  case memoryPin(id: String, pinned: Bool)
+  case memoryForget(id: String)
+  case memoryConflictsList(limit: Int?)
+  case memoryConflictResolve(id: String, keepId: String)
   case taskUpdate(taskID: String, action: String, until: String?)
   case providerAdd(providerID: String, apiKey: String, model: String?, baseUrl: String?, label: String?)
   case providerModelSet(providerID: String, model: String)
@@ -341,6 +395,10 @@ public enum ClientFrame: Sendable, Equatable {
   case pluginDisconnect(connectionID: String)
   case agentRename(agentId: String, name: String)
   case userTyping(channelId: String?, isTyping: Bool)
+  // Phase 4: group channels.
+  case channelCreate(name: String, agentIds: [String])
+  case channelList
+  case channelHistory(channelId: String, limit: Int?)
 
   public var type: String {
     switch self {
@@ -362,6 +420,11 @@ public enum ClientFrame: Sendable, Equatable {
     case .jobDelete: "job.delete"
     case .taskList: "task.list"
     case .memoryList: "memory.list"
+    case .memoryUpdate: "memory.update"
+    case .memoryPin: "memory.pin"
+    case .memoryForget: "memory.forget"
+    case .memoryConflictsList: "memory.conflicts.list"
+    case .memoryConflictResolve: "memory.conflict.resolve"
     case .taskUpdate: "task.update"
     case .providerAdd: "provider.add"
     case .providerModelSet: "provider.model.set"
@@ -375,6 +438,9 @@ public enum ClientFrame: Sendable, Equatable {
   case .pluginDisconnect: "plugin.disconnect"
   case .agentRename: "agent.rename"
   case .userTyping: "user.typing"
+  case .channelCreate: "channel.create"
+  case .channelList: "channel.list"
+  case .channelHistory: "channel.history"
     }
   }
 
@@ -434,6 +500,19 @@ public enum ClientFrame: Sendable, Equatable {
     case .memoryList(let scope, let limit):
       if let scope { object["scope"] = scope }
       if let limit { object["limit"] = limit }
+    case .memoryUpdate(let id, let text):
+      object["id"] = id
+      object["text"] = text
+    case .memoryPin(let id, let pinned):
+      object["id"] = id
+      object["pinned"] = pinned
+    case .memoryForget(let id):
+      object["id"] = id
+    case .memoryConflictsList(let limit):
+      if let limit { object["limit"] = limit }
+    case .memoryConflictResolve(let id, let keepId):
+      object["id"] = id
+      object["keepId"] = keepId
     case .taskUpdate(let taskID, let action, let until):
       object["taskID"] = taskID
       object["action"] = action
@@ -469,6 +548,14 @@ public enum ClientFrame: Sendable, Equatable {
     case .userTyping(let channelId, let isTyping):
       if let channelId { object["channelId"] = channelId }
       object["isTyping"] = isTyping
+    case .channelCreate(let name, let agentIds):
+      object["name"] = name
+      object["agentIds"] = agentIds
+    case .channelList:
+      break
+    case .channelHistory(let channelId, let limit):
+      object["channelId"] = channelId
+      if let limit { object["limit"] = limit }
     }
     return object
   }
@@ -541,6 +628,16 @@ public enum ClientFrame: Sendable, Equatable {
       self = .taskList(status: object["status"] as? String, limit: object["limit"] as? Int)
     case "memory.list":
       self = .memoryList(scope: object["scope"] as? String, limit: object["limit"] as? Int)
+    case "memory.update":
+      self = .memoryUpdate(id: try Require.string(object, "id"), text: try Require.string(object, "text"))
+    case "memory.pin":
+      self = .memoryPin(id: try Require.string(object, "id"), pinned: try Require.bool(object, "pinned"))
+    case "memory.forget":
+      self = .memoryForget(id: try Require.string(object, "id"))
+    case "memory.conflicts.list":
+      self = .memoryConflictsList(limit: object["limit"] as? Int)
+    case "memory.conflict.resolve":
+      self = .memoryConflictResolve(id: try Require.string(object, "id"), keepId: try Require.string(object, "keepId"))
     case "task.update":
       self = .taskUpdate(taskID: try Require.string(object, "taskID"), action: try Require.string(object, "action"), until: object["until"] as? String)
     case "provider.add":
@@ -581,6 +678,13 @@ public enum ClientFrame: Sendable, Equatable {
       self = .userTyping(
         channelId: object["channelId"] as? String,
         isTyping: try Require.bool(object, "isTyping"))
+    case "channel.create":
+      guard let agentIds = object["agentIds"] as? [String] else { throw ProtocolError.encoding("missing agentIds") }
+      self = .channelCreate(name: try Require.string(object, "name"), agentIds: agentIds)
+    case "channel.list":
+      self = .channelList
+    case "channel.history":
+      self = .channelHistory(channelId: try Require.string(object, "channelId"), limit: object["limit"] as? Int)
     default:
       throw ProtocolError.unknownFrameType(type)
     }
@@ -612,6 +716,12 @@ public enum ServerFrame: Sendable, Equatable {
   case taskListOK(TaskListOK)
   /// The memory view: what the agent can remember.
   case memoryListOK(MemoryListOK)
+  // Editable memory answers (Phase 1, additive v2).
+  case memoryUpdateOK(MemoryItemOK)
+  case memoryPinOK(MemoryItemOK)
+  case memoryForgetOK(MemoryForgetOK)
+  case memoryConflictsListOK(MemoryConflictsListOK)
+  case memoryConflictResolveOK(MemoryConflictResolveOK)
   case taskUpdateOK(TaskUpdateOK)
   case providerAddOK(ProviderAddOK)
   case providerModelsOK(ProviderModelsOK)
@@ -627,6 +737,10 @@ public enum ServerFrame: Sendable, Equatable {
   case msgNew(MsgNew)
   case agentUpdated(AgentUpdated)
   case error(ErrorFrame)
+  // Phase 4: group channels.
+  case channelCreated(ChannelCreated)
+  case channelListOK(ChannelListOK)
+  case channelHistoryOK(ChannelHistoryOK)
   /// A frame this build does not know. Ignored, never fatal.
   case unknown(type: String, seq: Int)
 
@@ -652,6 +766,11 @@ public enum ServerFrame: Sendable, Equatable {
     case .jobListOK(let f): f.seq
     case .taskListOK(let f): f.seq
     case .memoryListOK(let f): f.seq
+    case .memoryUpdateOK(let f): f.seq
+    case .memoryPinOK(let f): f.seq
+    case .memoryForgetOK(let f): f.seq
+    case .memoryConflictsListOK(let f): f.seq
+    case .memoryConflictResolveOK(let f): f.seq
     case .taskUpdateOK(let f): f.seq
     case .providerAddOK(let f): f.seq
     case .providerModelsOK(let f): f.seq
@@ -666,6 +785,9 @@ public enum ServerFrame: Sendable, Equatable {
     case .msgNew(let f): f.seq
     case .agentUpdated(let f): f.seq
     case .error(let f): f.seq
+    case .channelCreated(let f): f.seq
+    case .channelListOK(let f): f.seq
+    case .channelHistoryOK(let f): f.seq
     case .unknown(_, let seq): seq
     }
   }
@@ -692,6 +814,11 @@ public enum ServerFrame: Sendable, Equatable {
     case .jobListOK: "job.list.ok"
     case .taskListOK: "task.list.ok"
     case .memoryListOK: "memory.list.ok"
+    case .memoryUpdateOK: "memory.update.ok"
+    case .memoryPinOK: "memory.pin.ok"
+    case .memoryForgetOK: "memory.forget.ok"
+    case .memoryConflictsListOK: "memory.conflicts.list.ok"
+    case .memoryConflictResolveOK: "memory.conflict.resolve.ok"
     case .taskUpdateOK: "task.update.ok"
     case .providerAddOK: "provider.add.ok"
     case .providerModelsOK: "provider.models.ok"
@@ -706,6 +833,9 @@ public enum ServerFrame: Sendable, Equatable {
     case .msgNew: "msg.new"
     case .agentUpdated: "agent.updated"
     case .error: "error"
+    case .channelCreated: "channel.created"
+    case .channelListOK: "channel.list.ok"
+    case .channelHistoryOK: "channel.history.ok"
     case .unknown(let type, _): type
     }
   }
@@ -722,6 +852,8 @@ public enum ServerFrame: Sendable, Equatable {
     public var turnID: String
     public var threadID: String
     public var delta: String
+    /// The text streamed for the current step was tool-call narration: clear it first.
+    public var reset: Bool?
   }
 
   public struct TurnStart: Sendable, Equatable, Decodable {
@@ -792,6 +924,7 @@ public enum ServerFrame: Sendable, Equatable {
     public var body: String
     public var sound: Bool?
     public var threadID: String?
+    public var agentId: String?
   }
 
   public struct AgentsUpdate: Sendable, Equatable, Decodable {
@@ -828,6 +961,22 @@ public enum ServerFrame: Sendable, Equatable {
     public var conversationID: String
     public var sessionID: String
     public var reason: String
+  }
+
+  public struct ChannelCreated: Sendable, Equatable, Decodable {
+    public var seq: Int
+    public var channel: ChannelInfo
+  }
+
+  public struct ChannelListOK: Sendable, Equatable, Decodable {
+    public var seq: Int
+    public var channels: [ChannelInfo]
+  }
+
+  public struct ChannelHistoryOK: Sendable, Equatable, Decodable {
+    public var seq: Int
+    public var channelId: String
+    public var messages: [MessageInfo]
   }
 
   public struct ConversationHistoryOK: Sendable, Equatable, Decodable {
@@ -982,6 +1131,11 @@ public enum ServerFrame: Sendable, Equatable {
     case "job.list.ok": self = .jobListOK(try Decode.frame(JobListOK.self, object))
     case "task.list.ok": self = .taskListOK(try Decode.frame(TaskListOK.self, object))
     case "memory.list.ok": self = .memoryListOK(try Decode.frame(MemoryListOK.self, object))
+    case "memory.update.ok": self = .memoryUpdateOK(try Decode.frame(MemoryItemOK.self, object))
+    case "memory.pin.ok": self = .memoryPinOK(try Decode.frame(MemoryItemOK.self, object))
+    case "memory.forget.ok": self = .memoryForgetOK(try Decode.frame(MemoryForgetOK.self, object))
+    case "memory.conflicts.list.ok": self = .memoryConflictsListOK(try Decode.frame(MemoryConflictsListOK.self, object))
+    case "memory.conflict.resolve.ok": self = .memoryConflictResolveOK(try Decode.frame(MemoryConflictResolveOK.self, object))
     case "task.update.ok": self = .taskUpdateOK(try Decode.frame(TaskUpdateOK.self, object))
     case "provider.add.ok": self = .providerAddOK(try Decode.frame(ProviderAddOK.self, object))
     case "provider.models.ok": self = .providerModelsOK(try Decode.frame(ProviderModelsOK.self, object))
@@ -996,6 +1150,9 @@ public enum ServerFrame: Sendable, Equatable {
     case "msg.new": self = .msgNew(try Decode.frame(MsgNew.self, object))
     case "agent.updated": self = .agentUpdated(try Decode.frame(AgentUpdated.self, object))
     case "error": self = .error(try Decode.frame(ErrorFrame.self, object))
+    case "channel.created": self = .channelCreated(try Decode.frame(ChannelCreated.self, object))
+    case "channel.list.ok": self = .channelListOK(try Decode.frame(ChannelListOK.self, object))
+    case "channel.history.ok": self = .channelHistoryOK(try Decode.frame(ChannelHistoryOK.self, object))
     default: self = .unknown(type: type, seq: (object["seq"] as? Int) ?? 0)
     }
   }

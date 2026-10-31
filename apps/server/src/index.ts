@@ -23,6 +23,7 @@ import { listDevices, mintPairCode, mintToken, revokeDevice } from "./auth/token
 import { serviceCommand } from "./service";
 import { loadConfig, type Config } from "./config";
 import { pluginMailResolver } from "./plugins/credentials";
+import { setFirecrawlPluginsPath } from "./tools/web";
 import {
   daemonStatus,
   fetchHealth,
@@ -112,13 +113,15 @@ async function serve(): Promise<void> {
   const requeued = requeueStuckJobs(db);
   if (requeued > 0) log.warn(`job queue: requeued ${requeued} job(s) a previous process left running`);
 
+  setFirecrawlPluginsPath(config.pluginsPath);
   const settings = {
     firstTokenTimeoutMs: config.firstTokenTimeoutMs,
     turnTimeoutMs: config.turnTimeoutMs,
     // Mailboxes the owner connected in Settings → Plugins.
     mailAccounts: pluginMailResolver(config.pluginsPath),
+    pluginsPath: config.pluginsPath,
   };
-  const runner = new JobRunner(db, running.emit, { pollMs: config.jobPollMs });
+  const runner = new JobRunner(db, running.emit, { pollMs: config.jobPollMs, concurrency: config.jobConcurrency });
   // Every job kind, in one place: a kind that is enqueued but never
   // registered is a job that silently fails.
   registerAllJobs(runner, {

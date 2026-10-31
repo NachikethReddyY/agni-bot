@@ -4,7 +4,7 @@ import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDatabase } from "../src/db";
-import { executeRoutine, ROUTINE_TOOL_ALLOWLIST } from "../src/routines/run";
+import { executeRoutine, ROUTINE_TOOL_ALLOWLIST, routineTools } from "../src/routines/run";
 import { buildRoutinePrompt } from "../src/routines/prompt";
 import type { Routine } from "../src/routines/types";
 import { insertRoutine, getRoutine } from "../src/stores/routines";
@@ -265,5 +265,11 @@ describe("routine execution", () => {
     expect(ROUTINE_TOOL_ALLOWLIST).not.toContain("mail_send");
     expect(ROUTINE_TOOL_ALLOWLIST).not.toContain("ask");
     expect(ROUTINE_TOOL_ALLOWLIST).not.toContain("write_file");
+  });
+
+  test("mailbox search is offered only to a routine with no web egress (C1, M16)", () => {
+    expect(ROUTINE_TOOL_ALLOWLIST).not.toContain("mail_search");
+    expect(routineTools({ allowedDomains: [] })).toContain("mail_search");
+    expect(routineTools({ allowedDomains: ["example.com"] })).not.toContain("mail_search");
   });
 });
