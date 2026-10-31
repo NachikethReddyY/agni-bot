@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Agni Express</title>
+<style>
+@font-face { font-family: "Geist Serif"; src: url(fonts/GeistSerif-Regular.woff2) format("woff2"); font-weight: 400; }
+@font-face { font-family: "Geist"; src: url(fonts/Geist-Regular.woff2) format("woff2"); font-weight: 400; }
+@font-face { font-family: "Geist"; src: url(fonts/Geist-Medium.woff2) format("woff2"); font-weight: 500; }
+@font-face { font-family: "Geist"; src: url(fonts/Geist-SemiBold.woff2) format("woff2"); font-weight: 600; }
+@font-face { font-family: "Geist Mono"; src: url(fonts/GeistMono-Regular.woff2) format("woff2"); font-weight: 400; }
+@font-face { font-family: "Geist Mono"; src: url(fonts/GeistMono-Medium.woff2) format("woff2"); font-weight: 500; }
+
+:root {
+  --paper: #f4f0e8; --card: #fbf9f4; --ink: #17140f; --ink-2: #57514a; --ink-3: #8c857b;
+  --rule: #d9d2c5; --sun: #EE2E41; --sun-soft: #f9d3d8; --dusk: #2f3a8f; --link: #17807a; --tile: #fbf9f4; --tile-ink: #17140f; --tile-ink-2: #57514a; --tile-rule: #e6e0d4;
+  --serif: "Geist Serif", Georgia, serif;
+  --sans: "Geist", system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.55 var(--sans); -webkit-font-smoothing: antialiased; padding: 0 16px 80px; }
+.page { max-width: 1040px; margin: 0 auto; }
+.mono { font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+
+
+/* ── Masthead ── */
+.mast { padding-top: 44px; }
+.title { position: relative; font: 400 clamp(44px, 8vw, 96px)/.95 var(--serif); letter-spacing: -.045em; text-align: center; padding-bottom: 16px; border-bottom: 3px solid var(--ink); margin-bottom: 3px; }
+.badge { position: absolute; right: 4%; top: -10px; transform: rotate(-9deg); font: 600 11px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; padding: 8px 12px; border-radius: 6px; box-shadow: 0 8px 18px -8px rgb(0 0 0 / .45); white-space: nowrap; }
+.dateline { display: flex; justify-content: space-between; gap: 4px 16px; flex-wrap: wrap; padding: 9px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+
+/* ── Hero image ── */
+.hero { margin: 28px 0 0; }
+.art { position: relative; aspect-ratio: 16 / 8; overflow: hidden; background: var(--ink); }
+.art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.art .over {
+  position: absolute; inset: auto 0 0 0; padding: 80px 36px 32px; color: #fbf6ea;
+  background: linear-gradient(to top, rgb(10 8 6 / .72), rgb(10 8 6 / 0));
+}
+.art .over .mono { color: #fbf6ea; opacity: .85; }
+.art .over .by { font: 400 18px/1.3 var(--serif); margin-top: 12px; opacity: .9; }
+h1 { font: 400 clamp(34px, 6vw, 76px)/1 var(--serif); letter-spacing: -.035em; margin-top: 10px; max-width: 16ch; text-wrap: balance; }
+h1 em { font-style: normal; color: #ff5a6b; }
+.hero figcaption { display: flex; justify-content: space-between; align-items: baseline; gap: 8px 24px; flex-wrap: wrap; padding: 12px 0; border-bottom: 1px solid var(--ink); }
+.hero figcaption p { font: 400 17px/1.4 var(--sans); color: var(--ink-2); }
+.hero figcaption .mono { font-size: 10.5px; text-transform: none; letter-spacing: .02em; }
+.hero figcaption a { color: var(--link); }
+
+/* ── Lead story ── */
+.story { padding: 28px 0 32px; border-bottom: 1px solid var(--rule); column-count: 2; column-gap: 40px; column-rule: 1px solid var(--rule); font: 400 16px/1.6 var(--sans); color: var(--ink-2); text-align: justify; hyphens: auto; }
+.story p + p { text-indent: 1.4em; }
+.story p:first-child::first-letter { float: left; font: 400 68px/.8 var(--serif); color: var(--ink); padding: 6px 8px 0 0; }
+
+/* ── Widgets: one grid, one card shape, many types ── */
+.widgets { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 28px; padding: 32px 0 40px; border-bottom: 1px solid var(--rule); }
+.widget { background: var(--tile); color: var(--tile-ink); border-radius: 22px; padding: 22px; box-shadow: 0 18px 40px -26px rgb(0 0 0 / .45); }
+
+
+
+
+/* task and calendar cards */
+.tasks { list-style: none; padding: 0; }
+.tasks li { display: flex; align-items: center; gap: 12px; padding: 13px 0; border-top: 1px solid var(--tile-rule); cursor: pointer; font-size: 15px; }
+.tasks li:first-child { border-top: 0; }
+.tasks .box { position: relative; width: 22px; height: 22px; flex: none; border-radius: 50%; border: 1.5px solid var(--ink-3); }
+.tasks li.done .box { background: var(--sun); border-color: var(--sun); }
+.tasks li.done .box::after { content: ""; position: absolute; left: 7px; top: 3px; width: 5px; height: 10px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.tasks li.done .t { color: var(--ink-3); text-decoration: line-through; }
+.tasks .m { margin-left: auto; font-size: 12.5px; color: var(--ink-3); white-space: nowrap; }
+
+/* weather card: its own glass-style look, not the newspaper widget shell */
+.wx { color: #fbf7ee; border-radius: 22px; padding: 22px; background: linear-gradient(170deg, #5b8fd0 0%, #3a9bb8 55%, #2fb3a0 100%); box-shadow: 0 18px 40px -20px rgb(20 40 70 / .5); }
+.wx.wet { background: linear-gradient(170deg, #4d5585 0%, #343b68 60%, #252a4f 100%); }
+.wx-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.wx-place { font: 500 15px/1.2 var(--sans); opacity: .9; }
+.wx-temp { font: 300 76px/1 var(--sans); letter-spacing: -.04em; margin-top: 6px; }
+.wx-cond { font: 400 15px/1.2 var(--sans); opacity: .9; margin-top: 4px; }
+.wx-big svg { width: 72px; height: 72px; display: block; }
+.wx-hl { font: 500 13px var(--sans); opacity: .85; margin: 14px 0 16px; }
+.wx-hours { display: grid; grid-template-columns: repeat(auto-fit, minmax(48px, 1fr)); text-align: center; padding-top: 14px; border-top: 1px solid rgb(255 255 255 / .25); }
+.wx-hours span, .wx-hours b { display: block; font: 500 12.5px/1.4 var(--sans); }
+.wx-hours b { font-size: 16px; }
+.wx-hours i svg { width: 24px; height: 24px; display: block; margin: 8px auto; }
+.wx-day { margin-top: 18px; padding-top: 16px; border-top: 1px solid rgb(255 255 255 / .25); }
+.wx-dl b { font: 300 34px/1 var(--sans); letter-spacing: -.03em; }
+.wx-dl span { display: block; font: 400 13px var(--sans); opacity: .85; margin-top: 4px; }
+.wx-track { position: relative; height: 5px; border-radius: 99px; background: rgb(255 255 255 / .25); margin: 14px 0 12px; }
+.wx-track i { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: #ffd166; }
+.wx-ends { display: flex; justify-content: space-between; font: 500 15px var(--sans); }
+.wx-ends small { display: block; font: 400 12px var(--sans); opacity: .8; }
+.wx-note { font: 400 14px/1.45 var(--sans); opacity: .9; margin-top: 14px; }
+
+/* agenda: calendar and tasks in one card */
+.agenda { grid-column: span 2; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 32px; }
+.ag-date { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 18px; }
+.ag-date span { font: 500 17px var(--sans); color: var(--tile-ink-2); }
+.ag-date b { font: 500 84px/.9 var(--sans); letter-spacing: -.05em; }
+.ag-date small { margin-left: auto; font: 400 14px var(--sans); color: var(--tile-ink-2); }
+.ag-head { display: flex; justify-content: space-between; font: 500 14px var(--sans); color: var(--tile-ink-2); margin-bottom: 6px; }
+@media (max-width: 640px) { .agenda { grid-column: auto; grid-template-columns: 1fr; } }
+
+/* chips, cards and card header rows for the lower sections */
+.chip { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px; font: 600 11px/1 var(--sans); text-transform: capitalize; background: var(--tile-rule); color: var(--tile-ink-2); white-space: nowrap; }
+.chip.red { background: var(--sun); color: #fff; }
+.chip.line { background: none; box-shadow: inset 0 0 0 1px var(--sun); color: var(--sun); }
+.card { background: var(--tile); color: var(--tile-ink); border-radius: 20px; padding: 22px; min-width: 0; box-shadow: 0 1px 0 rgb(0 0 0 / .04), 0 14px 32px -14px rgb(0 0 0 / .24); }
+.wh { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.wh-l { display: flex; align-items: center; gap: 10px; font: 600 15px/1 var(--sans); }
+.wh-ico { width: 28px; height: 28px; flex: none; display: grid; place-items: center; border-radius: 8px; background: var(--tile-ink); color: var(--tile); }
+.wh-ico svg { width: 16px; height: 16px; }
+.wh .mono { text-align: right; }
+
+/* tool tiles */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; align-items: start; }
+.rows { list-style: none; padding: 0; }
+.rows li { display: flex; flex-direction: column; gap: 4px; padding: 14px 0; border-top: 1px solid var(--tile-rule); }
+.rows li:first-child { border-top: 0; padding-top: 0; }
+.rows li:last-child { padding-bottom: 0; }
+.r-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 4px; }
+.rows b { font: 500 14.5px/1.35 var(--sans); overflow-wrap: anywhere; }
+.rows p { font: 400 13.5px/1.45 var(--sans); color: var(--tile-ink-2); }
+.rows .next { color: var(--sun); font-weight: 500; }
+.metric + .metric { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--tile-rule); }
+.metric b { display: flex; align-items: center; gap: 10px; font: 400 40px/1.1 var(--serif); letter-spacing: -.03em; margin: 6px 0 4px; }
+.metric p { font: 400 13.5px/1.45 var(--sans); color: var(--tile-ink-2); }
+
+/* tech desk: a full-width newspaper front page */
+.np-bar { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 3px double var(--ink); margin-bottom: 24px; }
+.np-front { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr); }
+.np-lead { padding-right: 40px; border-right: 1px solid var(--ink); }
+.np-lead h3 { font: 400 clamp(40px, 5.6vw, 72px)/.98 var(--serif); letter-spacing: -.03em; margin: 12px 0 20px; text-wrap: balance; }
+.np-lead p { max-width: 60ch; font: 400 18px/1.55 var(--sans); color: var(--ink-2); text-align: justify; hyphens: auto; }
+.np-lead p::first-letter { float: left; font: 400 74px/.8 var(--serif); color: var(--ink); padding: 6px 10px 0 0; }
+.np-side { padding-left: 28px; }
+.np-side article { padding: 18px 0; border-top: 1px solid var(--rule); }
+.np-side article:first-child { border-top: 0; padding-top: 0; }
+.np-side h3 { font: 400 26px/1.12 var(--serif); letter-spacing: -.015em; margin: 8px 0 8px; }
+.np-side p { font: 400 14.5px/1.5 var(--sans); color: var(--ink-2); }
+@media (max-width: 760px) {
+  .np-front { grid-template-columns: 1fr; }
+  .np-lead { padding: 0 0 24px; border-right: 0; border-bottom: 1px solid var(--ink); }
+  .np-lead h3 { font-size: 42px; }
+  .np-lead p { text-align: left; hyphens: manual; }
+  .np-side { padding: 0; }
+}
+
+/* calendar time blocks */
+.cal { position: relative; margin-left: 48px; }
+.cal-h { position: absolute; left: 0; right: 0; border-top: 1px solid var(--tile-rule); }
+.cal-now { position: absolute; left: -48px; right: 0; border-top: 1.5px solid var(--sun); }
+.cal-now::before { content: ""; position: absolute; left: 42px; top: -5px; width: 9px; height: 9px; border-radius: 50%; background: var(--sun); }
+.cal-h span { position: absolute; left: -48px; top: -7px; font: 500 11px var(--mono); color: var(--ink-3); }
+.cal-b { position: absolute; left: 0; right: 0; padding: 4px 9px; border-radius: 8px; background: color-mix(in oklab, var(--dusk) 18%, transparent); border-left: 3px solid var(--dusk); overflow: hidden; }
+.cal-b b { display: block; font: 500 12.5px/1.4 var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-b.focus { background: var(--sun); border-color: var(--sun); color: #fff; }
+.cal-b.soft { background: transparent; border: 1px dashed var(--tile-rule); border-left-width: 3px; color: var(--ink-2); }
+
+/* ── Sections ── */
+section { padding: 40px 0; border-bottom: 1px solid var(--rule); }
+.sec-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 12px 16px; margin-bottom: 22px; }
+h2 { font: 400 30px/1.1 var(--serif); letter-spacing: -.02em; }
+h2 .n { font-family: var(--mono); font-size: 12px; color: var(--sun); letter-spacing: .06em; vertical-align: 14px; margin-right: 10px; }
+
+.filters { display: inline-flex; gap: 4px; background: var(--tile); border-radius: 999px; padding: 4px; box-shadow: 0 10px 24px -18px rgb(0 0 0 / .45); }
+.filters button { font: 500 13px var(--sans); text-transform: capitalize; background: none; border: 0; color: var(--tile-ink-2); padding: 6px 14px; border-radius: 999px; cursor: pointer; }
+.filters button[aria-pressed="true"] { background: var(--tile-ink); color: var(--tile); }
+.mail { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+.mail li { display: flex; flex-direction: column; gap: 8px; }
+.mail li[hidden] { display: none; }
+/* inset ring follows the 20px corner, a border would shift the layout */
+.mail li.urgent { box-shadow: inset 0 0 0 1.5px var(--sun), 0 14px 32px -14px rgb(0 0 0 / .24); }
+.m-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.m-top .from { font: 600 14px var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-top .mono { flex: none; font-variant-numeric: tabular-nums; }
+.mail .subj { font: 400 21px/1.2 var(--serif); letter-spacing: -.015em; overflow-wrap: anywhere; }
+.mail .why { color: var(--tile-ink-2); font-size: 14px; line-height: 1.45; }
+.m-foot { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--tile-rule); }
+.m-foot .mono { margin-left: auto; }
+
+.reads { list-style: none; padding: 0; border-top: 3px double var(--ink); counter-reset: r; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); column-gap: 28px; }
+.reads li { display: flex; gap: 14px; padding: 18px 0; border-bottom: 1px solid var(--rule); counter-increment: r; }
+.reads li::before { content: counter(r); min-width: 18px; font: 400 30px/1 var(--serif); color: var(--sun); }
+.reads a { color: var(--ink); text-decoration: none; font: 400 19px/1.3 var(--serif); letter-spacing: -.01em; }
+.reads a:hover { text-decoration: underline; text-decoration-color: var(--sun); text-underline-offset: 4px; }
+.reads .mono { display: block; margin-top: 8px; text-transform: none; letter-spacing: .02em; }
+
+.close { border: 0; padding-top: 56px; text-align: center; }
+.close blockquote { font: 400 clamp(24px, 3.4vw, 36px)/1.25 var(--serif); letter-spacing: -.02em; max-width: 26ch; margin: 0 auto 16px; text-wrap: balance; }
+.close blockquote::before { content: ""; display: block; width: 48px; height: 3px; background: var(--sun); margin: 0 auto 24px; }
+
+/* ── Phone ── */
+@media (max-width: 640px) {
+  .mast { padding-top: 36px; }
+  .title { padding-bottom: 12px; }
+  .dateline { justify-content: center; text-align: center; }
+  .dateline span:nth-child(3) { display: none; } /* place is in the weather widget */
+  .hero { margin-top: 16px; margin-inline: -16px; }
+  .art { aspect-ratio: 4 / 5; }
+  .art .over { padding: 60px 16px 20px; }
+  .hero figcaption { padding: 12px 16px; flex-direction: column; }
+  .story { column-count: 1; text-align: left; hyphens: manual; font-size: 17px; }
+  .widgets { gap: 24px; }
+  section { padding: 32px 0; }
+  h2 { font-size: 26px; }
+}
+
+/* ── Phone, lower sections ── */
+@media (max-width: 640px) {
+}
+</style>
+</head>
+<body>
+<main class="page" id="app"></main>
+
+<script>
+/* ════════════════════════════════════════════════════════════════
+   THE BRIEF — the only part you edit. Fill it from mail, calendar,
+   weather, etc. Leave a list empty ([]) and its section disappears.
+   Times are "HH:MM", 24-hour. Wrap a headline word in *stars* to
+   colour it.
+   ════════════════════════════════════════════════════════════════ */
+const brief = {
+  paper: "The Agni Express",
+  issue: 304,
+  date: "Saturday, 31 October 2026",
+  place: "Bengaluru · 24° clear",
+  now: "07:12",
+
+  hero: {
+    image: "https://upload.wikimedia.org/wikipedia/commons/5/54/Claude_Monet%2C_Impression%2C_soleil_levant.jpg",
+    credit: "Claude Monet",
+    creditUrl: "https://commons.wikimedia.org/wiki/File:Claude_Monet,_Impression,_soleil_levant.jpg",
+    kicker: "Quote of the morning",
+    headline: "Start with the light, and the *rest* follows.",
+    author: "Author Name",
+    lede: "An orange sun burns through grey mist over the harbour at Le Havre. Small dark boats sit on the water, and the masts and chimneys dissolve into the haze.",
+  },
+
+  story: [
+    "You walk into the woods before the sun has decided to show up. The path is grey, the trees are only shapes, and the air smells of wet leaves. Then the light finds a gap in the branches and the whole trail goes orange, the way the harbour did for Monet in 1872, when he stood at Le Havre and painted the sun pushing through the mist before the port had woken up.",
+    "The critics did not know what to make of it. When the picture went on show at the first Impressionist exhibition in Paris in 1874, Louis Leroy used its title to laugh at the whole group in print. They took the word and kept it. A walk through the trees, a painting and a sneer ended up naming an entire movement.",
+    "Somewhere around the second bend the morning hands you a task. Meridian needs a signature before their office closes at five, and legal cleared version four overnight. The only change is the payment terms, which moved to net-30. Everything else on the trail can wait. The light is already here, so start there.",
+  ],
+
+  // type picks the renderer in `widgetTypes` below
+  widgets: [
+    { type: "agenda", day: "Sat", num: 31, tasks: [
+      { title: "Sign the Meridian contract", meta: "17:00" },
+      { title: "Reply to Priya", meta: "before 10:00" },
+      { title: "Finish the Q4 memo draft", meta: "2 h" },
+      { title: "Book the dentist", meta: "anytime", done: true },
+      { title: "Send the invoice to Ana", meta: "", done: true },
+    ] },
+    { type: "weather", place: "Bengaluru", temp: 19, sky: "Clear", sunrise: "06:21", sunset: "17:58", high: 24, low: 17, note: "Clear until four. Take an umbrella to dinner.",
+      hours: [ { at: "08", temp: 19, sky: "Clear" }, { at: "11", temp: 22, sky: "Clear" }, { at: "14", temp: 24, sky: "Hazy" },
+               { at: "17", temp: 21, sky: "Rain", wet: true }, { at: "20", temp: 18, sky: "Rain", wet: true } ] },
+  ],
+
+  day: {
+    from: 6, to: 22,
+    note: "5 h 40 m unbooked",
+    events: [
+      { start: "07:30", end: "09:30", title: "Deep work · Q4 memo", kind: "focus" },
+      { start: "10:00", end: "10:45", title: "Call · Priya" },
+      { start: "11:30", end: "12:30", title: "Meridian sync" },
+      { start: "13:00", end: "14:00", title: "Lunch", kind: "soft" },
+      { start: "16:00", end: "17:30", title: "Sign contract by 17:00", kind: "soft" },
+      { start: "19:30", end: "22:00", title: "Dinner · Ana & Sam" },
+    ],
+  },
+
+
+  mail: [
+    { time: "23:48", from: "Meridian Legal", subject: "Final contract, v4 attached", why: "Sign today. Only payment terms changed.", tag: "work", action: "Act", urgent: true },
+    { time: "06:02", from: "Priya Raman", subject: "Are we still on for 18 Nov?", why: "Answer before your 10:00 call.", tag: "work", action: "Reply", urgent: true },
+    { time: "21:15", from: "Ana", subject: "Dinner moved to 19:30, same place", why: "Calendar updated. Nothing to do.", tag: "personal", action: "FYI" },
+    { time: "04:30", from: "HDFC Bank", subject: "Card statement for October is ready", why: "₹18,420 due 12 Nov. Autopay is on.", tag: "personal", action: "FYI" },
+    { time: "01:12", from: "GitHub", subject: "3 pull requests waiting for your review", why: "None are blocking. Monday is fine.", tag: "work", action: "Later" },
+  ],
+
+  // Demo data. Each list is filled from its source; an empty list hides its tile.
+  chat: [
+    { source: "Slack", kind: "mention", hot: true, from: "Priya Raman", where: "#launch", text: "Can you confirm the 18 Nov date before the 10:00 call?", time: "06:10" },
+    { source: "Slack", kind: "dm", from: "Sam", text: "Dinner still on for 19:30?", time: "21:40" },
+    { source: "Slack", kind: "thread", from: "Design", where: "Q4 memo", text: "3 new replies. You are tagged in the last one.", time: "23:05" },
+  ],
+  meetings: [
+    { source: "Granola", time: "11:00", title: "Q4 planning", summary: "Launch stays on 18 Nov if QA signs off by 14 Nov.", next: "Ask QA for a sign-off date" },
+    { source: "Granola", time: "16:00", title: "Vendor check-in", summary: "Agreed on net-30. Legal to confirm by Monday.", next: "Send revised terms to Meridian" },
+  ],
+  docs: [
+    { source: "Notion", kind: "comment", hot: true, title: "Q4 memo", text: "Sam commented on the budget table.", time: "22:14" },
+    { source: "Google Drive", kind: "shared", title: "Meridian contract v4", text: "Shared with you by Meridian Legal.", time: "23:48" },
+    { source: "Notion", kind: "edited", title: "Launch checklist", text: "You own this. Priya made 2 edits overnight.", time: "05:30" },
+  ],
+  tracking: [
+    { source: "Linear", kind: "blocker", hot: true, title: "Mobile onboarding blocked on design sign-off", text: "Blocks the 18 Nov launch.", time: "Mon" },
+    { source: "GitHub", kind: "review", title: "Fix retry backoff in sync worker", text: "Waiting for your review for 2 days.", time: "2d" },
+    { source: "Jira", kind: "assigned", title: "PAY-412 Net-30 terms in invoice template", text: "Assigned to you. Due Monday.", time: "Mon" },
+  ],
+  analytics: [
+    { metric: "Trial sign-ups", value: "312", change: "+8%", note: "Up after Tuesday’s email." },
+    { metric: "Checkout completion", value: "61%", change: "-4 pts", note: "The dip started at 03:00.", hot: true },
+  ],
+  news: [
+    { source: "Demo", time: "1 h", headline: "Chip makers race to cut power use in AI data centres", deck: "New cooling designs promise lower bills, though most are still in trials." },
+    { source: "Demo", time: "2 h", headline: "Open-source maintainers add rules for AI-written patches", deck: "Projects want disclosure and smaller review batches as queues grow." },
+    { source: "Demo", time: "3 h", headline: "Battery startup says its cells charge in ten minutes", deck: "Independent tests are due next quarter." },
+    { source: "Demo", time: "4 h", headline: "Regulators ask app stores to label AI-made listings", deck: "A consultation opens next month." },
+    { source: "Demo", time: "5 h", headline: "Search tool adds an offline mode for field teams", deck: "Maps and notes sync when the signal returns." },
+  ],
+
+  reads: [
+    { title: "Why small teams ship faster than big ones", url: "#", meta: "Essay · 9 min · saved Tuesday" },
+    { title: "The case for writing memos instead of decks", url: "#", meta: "Article · 6 min · from Priya" },
+    { title: "A field guide to saying no to meetings", url: "#", meta: "Newsletter · 4 min" },
+  ],
+
+  close: { quote: "Do the hard thing first, while the light is still low.", footer: "Have a good day · next edition Mon 07:00" },
+};
+
+/* ════════════════════════════════════════════════════════════════
+   RENDERING — data in, HTML out. Every value from `brief` is
+   escaped, so pasted mail subjects can't inject markup.
+   ════════════════════════════════════════════════════════════════ */
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+class Raw { constructor(s) { this.s = s; } }
+const fmt = v => v instanceof Raw ? v.s : Array.isArray(v) ? v.map(fmt).join("") : v == null || v === false ? "" : esc(v);
+const h = (strs, ...vals) => new Raw(strs.reduce((out, s, i) => out + s + (i < vals.length ? fmt(vals[i]) : ""), ""));
+const emph = s => new Raw(esc(s).replace(/\*(.+?)\*/g, "<em>$1</em>"));
+const safeUrl = u => /^https?:\/\//i.test(u || "") ? u : "#";
+const hrs = t => { const [a, b] = t.split(":").map(Number); return a + b / 60; };
+
+
+
+// Icons are fixed markup chosen by condition text, so they are safe to inline.
+const icon = s => /rain/i.test(s)
+  ? '<svg viewBox="0 0 24 24"><path d="M7 14h10a4 4 0 0 0 .6-7.96A6 6 0 0 0 6.2 5.3 3.3 3.3 0 0 0 7 14z" fill="currentColor"/><path d="M8 17l-1 3M12 17l-1 3M16 17l-1 3" stroke="#9fd8ff" stroke-width="1.8" stroke-linecap="round"/></svg>'
+  : /clear|sun/i.test(s)
+  ? '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5" fill="#ffd166"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8" stroke="#ffd166" stroke-width="1.8" stroke-linecap="round"/></svg>'
+  : '<svg viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .6-7.96A6 6 0 0 0 6.2 9.3 3.3 3.3 0 0 0 7 18z" fill="currentColor"/></svg>';
+
+const widgetTypes = {
+  weather: (w, b) => {
+    const rise = hrs(w.sunrise), set = hrs(w.sunset), now = hrs(b.now);
+    const left = Math.max(0, set - Math.max(now, rise));
+    const f = Math.min(100, Math.max(0, (now - rise) / (set - rise) * 100));
+    return h`<div class="wx ${w.hours.some(x => x.wet) || /rain/i.test(w.sky) ? "wet" : ""}">
+    <div class="wx-top"><div><div class="wx-place">${w.place}</div><div class="wx-temp">${w.temp}°</div><div class="wx-cond">${w.sky}</div></div>
+      <div class="wx-big">${new Raw(icon(w.sky))}</div></div>
+    <div class="wx-hl">H ${w.high}° · L ${w.low}°</div>
+    <div class="wx-hours">${w.hours.map(x => h`<div><span>${x.at}</span><i>${new Raw(icon(x.sky))}</i><b>${x.temp}°</b></div>`)}</div>
+    <div class="wx-day">
+      <div class="wx-dl">${now < set ? h`<b>${Math.floor(left)}h${String(Math.round((left % 1) * 60)).padStart(2, "0")}m</b><span>of daylight left</span>` : h`<b>Dark</b><span>Sun is down</span>`}</div>
+      <div class="wx-track"><i style="left:${f.toFixed(1)}%"></i></div>
+      <div class="wx-ends"><span>${w.sunrise}<small>sunrise</small></span><span>${w.sunset}<small>sunset</small></span></div>
+    </div>
+    ${w.note && h`<p class="wx-note">${w.note}</p>`}
+  </div>`;
+  },
+  // shortcut: overlapping events would stack on one spot, add lanes like the old ribbon when that happens
+  agenda: (w, b) => {
+    const d = b.day, px = 32, at = t => (hrs(t) - d.from) * px;
+    return h`<div class="widget agenda">
+      <div>
+        <div class="ag-date"><span>${w.day}</span><b>${w.num}</b><small>${d.note}</small></div>
+        <div class="cal" style="height:${(d.to - d.from) * px}px">
+          ${Array.from({ length: d.to - d.from }, (_, i) => h`<div class="cal-h" style="top:${i * px}px"><span>${String(d.from + i).padStart(2, "0")}</span></div>`)}
+          <div class="cal-now" style="top:${at(b.now)}px"></div>
+          ${d.events.map(e => h`<div class="cal-b ${e.kind || ""}" title="${e.start}–${e.end}" style="top:${at(e.start)}px;height:${(hrs(e.end) - hrs(e.start)) * px - 3}px"><b>${e.title}</b></div>`)}
+        </div>
+      </div>
+      <div>
+        <div class="ag-head"><span>Tasks</span><span>${w.tasks.filter(t => t.done).length}/${w.tasks.length}</span></div>
+        <ul class="tasks">${w.tasks.map(t => h`<li class="${t.done ? "done" : ""}"><span class="box"></span><span class="t">${t.title}</span><span class="m">${t.meta}</span></li>`)}</ul>
+      </div>
+    </div>`;
+  },
+};
+
+
+// Icons are fixed markup, so they are safe to inline.
+const ico = d => new Raw(`<span class="wh-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg></span>`);
+const tile = (label, right, d, body) => h`<div class="card"><div class="wh"><div class="wh-l">${ico(d)}${label}</div><span class="mono">${right}</span></div>${body}</div>`;
+const row = (kind, hot, time, title, text) => h`<li><div class="r-top"><span class="chip ${hot ? "red" : ""}">${kind}</span><time class="mono">${time}</time></div><b>${title}</b><p>${text}</p></li>`;
+const toolKeys = ["chat", "meetings", "docs", "tracking", "analytics"];
+const tiles = {
+  chat: b => tile("Chat", "Slack", '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>',
+    h`<ul class="rows">${b.chat.map(c => row(c.kind, c.hot, c.time, `${c.from}${c.where ? ` · ${c.where}` : ""}`, c.text))}</ul>`),
+  meetings: b => tile("Meetings", "Granola", '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+    h`<ul class="rows">${b.meetings.map(m => h`<li><time class="mono">${m.time}</time><b>${m.title}</b><p>${m.summary}</p><p class="next">Next: ${m.next}</p></li>`)}</ul>`),
+  docs: b => tile("Docs", "Notion · Drive", '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/>',
+    h`<ul class="rows">${b.docs.map(d => row(d.kind, d.hot, d.time, d.title, d.text))}</ul>`),
+  tracking: b => tile("Tracking", "Jira · Linear · GitHub", '<path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+    h`<ul class="rows">${b.tracking.map(t => row(t.kind, t.hot, t.time, t.title, t.text))}</ul>`),
+  analytics: b => tile("Overnight metrics", "Amplitude", '<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 6-6"/>',
+    b.analytics.map(m => h`<div class="metric"><span class="mono">${m.metric}</span><b>${m.value}<span class="chip ${m.hot ? "red" : ""}">${m.change}</span></b><p>${m.note}</p></div>`)),
+};
+
+function render(b) {
+  let n = 0;
+  const hr = hrs(b.now);
+  const [edition, bg, fg] = hr < 5 || hr >= 20 ? ["Night edition", "#1b2452", "#cfd6ff"]
+    : hr < 11 ? ["Morning edition", "#ffd23f", "#3b2a00"]
+    : hr < 17 ? ["Day edition", "#7fd0ff", "#05324a"]
+    : ["Evening edition", "#ff9a5a", "#3d1400"];
+  const section = (title, aside, body) => h`<section><div class="sec-head"><h2><span class="n">${String(++n).padStart(2, "0")}</span>${title}</h2>${aside}</div>${body}</section>`;
+  const has = a => a && a.length;
+  return h`
+    <header class="mast">
+      <div class="title">${b.paper}<span class="badge" style="background:${bg};color:${fg}">${edition}</span></div>
+      <div class="dateline"><span class="mono">No. ${b.issue}</span><span class="mono">${b.date}</span><span class="mono">${b.place}</span></div>
+    </header>
+
+    <figure class="hero">
+      <div class="art">
+        ${b.hero.image && h`<img src="${safeUrl(b.hero.image)}" alt="${b.hero.credit || ""}">`}
+        <div class="over"><span class="mono">${b.hero.kicker}</span><h1>${emph(b.hero.headline)}</h1>${b.hero.author && h`<p class="by">~${b.hero.author}</p>`}</div>
+      </div>
+      <figcaption><p>${b.hero.lede}</p><a class="mono" href="${safeUrl(b.hero.creditUrl)}">${b.hero.credit}</a></figcaption>
+    </figure>
+
+    ${has(b.story) && h`<div class="story">${b.story.map(p => h`<p>${p}</p>`)}</div>`}
+    ${has(b.widgets) && h`<div class="widgets">${b.widgets.map(w => widgetTypes[w.type] ? widgetTypes[w.type](w, b) : "")}</div>`}
+    ${has(b.mail) && section("Important email", h`<div class="filters" role="group" aria-label="Filter mail">
+        ${["all", ...new Set(b.mail.map(m => m.tag))].map((f, i) => h`<button aria-pressed="${String(i === 0)}" data-f="${f}">${f}</button>`)}</div>`,
+      h`<ul class="mail">${b.mail.map(m => h`<li class="card ${m.urgent ? "urgent" : ""}" data-tag="${m.tag}">
+        <div class="m-top"><span class="from">${m.from}</span><span class="mono">${m.time}</span></div>
+        <div class="subj">${m.subject}</div>${m.why && h`<div class="why">${m.why}</div>`}
+        <div class="m-foot">${m.urgent && h`<span class="chip line">Urgent</span>`}<span class="chip ${m.urgent ? "red" : ""}">${m.action}</span><span class="mono">${m.tag}</span></div></li>`)}</ul>`)}
+    ${toolKeys.some(k => has(b[k])) && section("Across your tools", "", h`<div class="tiles">${toolKeys.filter(k => has(b[k])).map(k => tiles[k](b))}</div>`)}
+    ${has(b.news) && section("Tech desk", h`<span class="mono">Demo articles</span>`, h`<div>
+      <div class="np-bar"><span class="mono">${b.news.length} stories</span><span class="mono">${b.date}</span></div>
+      <div class="np-front">
+        <article class="np-lead"><span class="mono">${b.news[0].source} · ${b.news[0].time}</span><h3>${b.news[0].headline}</h3><p>${b.news[0].deck}</p></article>
+        <div class="np-side">${b.news.slice(1).map(a => h`<article><span class="mono">${a.source} · ${a.time}</span><h3>${a.headline}</h3><p>${a.deck}</p></article>`)}</div>
+      </div></div>`)}
+    ${has(b.reads) && section("Worth reading", "", h`<ul class="reads">${b.reads.map(r => h`
+      <li><div><a href="${safeUrl(r.url)}">${r.title}</a><span class="mono">${r.meta}</span></div></li>`)}</ul>`)}
+    ${b.close && h`<section class="close"><blockquote>“${b.close.quote}”</blockquote><span class="mono">${b.close.footer}</span></section>`}
+  `.s;
+}
+
+document.getElementById("app").innerHTML = render(brief);
+
+// Mail filter
+const btns = document.querySelectorAll(".filters button");
+btns.forEach(btn => btn.addEventListener("click", () => {
+  btns.forEach(x => x.setAttribute("aria-pressed", x === btn));
+  document.querySelectorAll(".mail li").forEach(li => { li.hidden = btn.dataset.f !== "all" && li.dataset.tag !== btn.dataset.f; });
+}));
+
+// Tap a task to tick it off
+document.querySelectorAll(".tasks li").forEach(li => li.addEventListener("click", () => li.classList.toggle("done")));
+
+</script>
+</body>
+</html>
