@@ -309,3 +309,28 @@ input; every other bot's line passes through the visibility filter, so a
 line. The group has no shared summary and is not compacted, and the tagger
 batches each bot's exchanges separately. These frames are additive and
 optional: `PROTOCOL_VERSION` stays 2.
+
+### Appearance V2 clients
+
+Web and Mac expose one current appearance with editable built-in presets.
+Adjustments render locally immediately and autosave after a 400 ms pause.
+Pending settings are cached on the device and retried on reconnect; an older
+server snapshot cannot replace an unsynced adjustment. Clients display Saved
+only after receiving the matching `appearance.updated` or `appearance.list.ok`
+snapshot, and offer retry after a send failure or an eight-second timeout.
+Slider drags form one undo adjustment. Reset restores the built-in defaults.
+
+The profile wire format and legacy list/activate/delete frames remain available
+for compatibility. V2 updates the current profile in place and removes profile
+management from both settings interfaces; existing stored profiles are retained.
+No protocol version change or database migration is required.
+
+### Desktop appearance V3
+
+Optional appearance fields `bubbleColor` (six-digit hex), `conversationWidth`
+(`comfortable` or `wide`), and `transparency` (`subtle` or `off`) extend version-1
+appearance profiles without changing protocol version 2. Missing fields use blue
+outgoing bubbles, wide conversations, and subtle header transparency. Bot identity
+and app accent remain separate from the outgoing bubble colour. V2 live saving,
+backgrounds, undo and reset continue to work. Sidebar width and pinned bots are
+local device preferences. Visual grouping never changes stored message boundaries.

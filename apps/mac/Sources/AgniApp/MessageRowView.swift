@@ -18,6 +18,8 @@ import AgniKit
 import AgniProtocol
 
 struct MessageRowView: View {
+  var groupEnd = true
+  var showSendStatus = false
   var message: ChatMessage
   var agent: AgentInfo?
   var isSelected = false
@@ -45,6 +47,11 @@ struct MessageRowView: View {
           EmptyView()
         } else {
           systemNote
+        }
+      }
+      if showSendStatus && message.role == .user {
+        if case .complete = message.state {
+          Text(message.isLocalEcho ? "Sending…" : "Sent").font(Typography.caption).foregroundStyle(Palette.inkSecondary).padding(.trailing, 7)
         }
       }
       if message.uiHint == "onboarding_name_prompt" {
@@ -102,18 +109,19 @@ struct MessageRowView: View {
       VStack(alignment: .leading, spacing: 5) {
         Text(message.text)
           .font(Typography.body)
-          .foregroundStyle(Color(hex: 0x18181B))
+          .foregroundStyle(Palette.outgoingInk)
           .textSelection(.enabled)
         if case .failed(let reason) = message.state {
           Text(reason)
             .font(Typography.caption)
-            .foregroundStyle(Color(hex: 0x55554F))
+            .foregroundStyle(Palette.outgoingInk.opacity(0.8))
         }
       }
       .padding(.horizontal, 16)
       .padding(.vertical, 12)
       .background(Palette.outgoingBubble, in: RoundedRectangle(cornerRadius: Metrics.bubbleRadius, style: .continuous))
-      .frame(maxWidth: 520, alignment: .trailing)
+      .overlay(alignment: .bottomTrailing) { if groupEnd { MessageTail().fill(Palette.outgoingBubble).frame(width: 12, height: 14).offset(x: 5) } }
+      .frame(maxWidth: Metrics.measure, alignment: .trailing)
     }
   }
 
@@ -154,8 +162,9 @@ struct MessageRowView: View {
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 12)
-    .frame(maxWidth: 620, alignment: .leading)
+    .frame(maxWidth: Metrics.measure, alignment: .leading)
     .background(Palette.incomingBubble, in: RoundedRectangle(cornerRadius: Metrics.bubbleRadius, style: .continuous))
+    .overlay(alignment: .bottomLeading) { if groupEnd { MessageTail().fill(Palette.incomingBubble).frame(width: 12, height: 14).scaleEffect(x: -1, y: 1).offset(x: -5) } }
   }
 
   /// The activity strip: what the agent did, quietly. One line until the
@@ -297,5 +306,16 @@ struct ThinkingDots: View {
         Task { @MainActor in phase.wrappedValue = (phase.wrappedValue + 1) % 3 }
       }
     }
+  }
+}
+
+private struct MessageTail: Shape {
+  func path(in rect: CGRect) -> Path {
+    var path = Path()
+    path.move(to: .zero)
+    path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.maxY), control: CGPoint(x: rect.width * 0.3, y: rect.maxY))
+    path.addLine(to: CGPoint(x: 0, y: rect.maxY))
+    path.closeSubpath()
+    return path
   }
 }

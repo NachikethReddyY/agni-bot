@@ -95,6 +95,7 @@ struct ComposerView: View {
           .padding(12)
         }
 
+        HStack(alignment: .bottom, spacing: 8) {
         TextField("", text: draft, axis: .vertical)
           .textFieldStyle(.plain)
           .font(Typography.body)
@@ -121,9 +122,9 @@ struct ComposerView: View {
           Button { model.stopTurn() } label: {
             Image(systemName: "stop.fill")
               .font(.system(size: 12, weight: .bold))
-              .foregroundStyle(Color(hex: 0x18181B))
+              .foregroundStyle(Palette.outgoingInk)
               .frame(width: 32, height: 32)
-              .background(Color(hex: 0xF3F3F3), in: Circle())
+              .background(Palette.outgoingBubble, in: Circle())
           }
           .buttonStyle(.plain)
           .keyboardShortcut(".", modifiers: .command)
@@ -131,25 +132,27 @@ struct ComposerView: View {
           .accessibilityLabel("Stop")
         } else {
           Button { submit() } label: {
-            Image(systemName: draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "mic" : "arrow.up")
+            Image(systemName: "arrow.up")
               .font(.system(size: 14, weight: .semibold))
-              .foregroundStyle(Color(hex: 0x18181B))
+              .foregroundStyle(Palette.outgoingInk)
               .frame(width: 32, height: 32)
-              .background(Color(hex: 0xF3F3F3), in: Circle())
+              .background(Palette.outgoingBubble, in: Circle())
           }
           .buttonStyle(.plain)
           // Match the web composer: Return sends, while Shift-Return remains
           // available to the multiline TextField for a line break.
           .keyboardShortcut(.return, modifiers: [])
           .disabled(draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-          .help(draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Voice input isn't available yet" : "Send")
-          .accessibilityLabel(draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Voice input unavailable" : "Send")
+          .help("Send (Enter); new line (Shift-Enter)")
+          .accessibilityLabel("Send")
         }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .frame(minHeight: 44)
+        .background(Palette.surface, in: RoundedRectangle(cornerRadius: 24))
+        .overlay(RoundedRectangle(cornerRadius: 24).stroke(Palette.hairline, lineWidth: 1))
       }
-      .padding(.horizontal, 8)
-      .frame(minHeight: 46)
-      .background(Color(hex: 0x222225), in: Capsule())
-      .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
     }
     .animation(.snappy(duration: 0.15), value: filteredCommands.count)
     .padding(.horizontal, 20)
@@ -158,7 +161,7 @@ struct ComposerView: View {
   }
 
   private var placeholder: String {
-    model.conversation.isStreaming ? "Agni is writing…" : "Message \(model.agent?.name ?? "Agni")"
+    model.conversation.isStreaming ? "\(model.agent?.name ?? "New Bot") is writing…" : "Message \(model.agent?.name ?? "New Bot")"
   }
 
   private func submit() {

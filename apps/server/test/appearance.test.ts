@@ -14,6 +14,18 @@ describe("appearance profiles", () => {
   let db: Database | null = null;
   afterEach(() => { db?.close(); db = null; });
 
+  test("retains optional desktop V3 settings and accepts older profiles", () => {
+    db = openDatabase(":memory:");
+    const previous = profile("theme_old", "Old");
+    const current = { ...profile("theme_current", "Current"), bubbleColor: "#2457a7", conversationWidth: "comfortable" as const, transparency: "off" as const };
+    saveAppearanceProfile(db, previous);
+    saveAppearanceProfile(db, current);
+    const stored = listAppearanceProfiles(db);
+    expect(stored.activeID).toBe(current.id);
+    expect(stored.profiles).toContainEqual(current);
+    expect(stored.profiles).toContainEqual(previous);
+  });
+
   test("saves, activates, updates, and deletes named profiles", () => {
     db = openDatabase(":memory:");
     saveAppearanceProfile(db, profile("theme_one", "One"));

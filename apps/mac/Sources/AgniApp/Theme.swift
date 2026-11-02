@@ -5,6 +5,7 @@
  */
 import SwiftUI
 import AgniProtocol
+import Observation
 
 /**
  * NOTE ON PROPERTY WRAPPERS
@@ -22,7 +23,7 @@ import AgniProtocol
 enum Palette {
   private static var values: [UInt32] {
     let dark: [String: [UInt32]] = [
-      "agni": [0x0D0D0F, 0x08080A, 0x17171A, 0x1F1F23, 0x1B1B1E, 0xF4F4F6, 0x9A9AA1, 0x6D6D76],
+      "agni": [0x1E1E1E, 0x272625, 0x303030, 0x393939, 0x3A3A3C, 0xF4F4F6, 0x9A9AA1, 0x6D6D76],
       "midnight": [0x080B14, 0x050811, 0x111827, 0x1C2538, 0x151D2D, 0xF3F7FF, 0x9BA9C1, 0x64748B],
       "graphite": [0x111315, 0x0B0D0E, 0x1C2022, 0x272C2F, 0x202527, 0xF3F4F4, 0xA3AAAD, 0x70787C],
       "paper": [0x171512, 0x100F0D, 0x24211D, 0x302C27, 0x29251F, 0xFFFAF1, 0xB8AC9B, 0x807568],
@@ -40,14 +41,15 @@ enum Palette {
       "warm": [0xFAF3EF, 0xF1E5DE, 0xFFFDFB, 0xEDDDD4, 0xF5E9E2, 0x2D201B, 0x755E52, 0x9B8376],
     ]
     let profile = AppearanceRuntime.profile
-    return (profile.mode == "light" ? light : dark)[profile.preset] ?? dark["agni"]!
+    return ((profile.mode == "light" || (profile.mode == "system" && UserDefaults.standard.string(forKey: "AppleInterfaceStyle") != "Dark")) ? light : dark)[profile.preset] ?? dark["agni"]!
   }
   static var canvas: Color { Color(hex: values[0]) }
   static var sidebar: Color { Color(hex: values[1]) }
   static var surface: Color { Color(hex: values[2]) }
   static var surfaceRaised: Color { Color(hex: values[3]) }
   static var incomingBubble: Color { Color(hex: values[4]) }
-  static var outgoingBubble: Color { Color(hex: 0xE8E8E3) }
+  static var outgoingBubble: Color { Color(serverHex: AppearanceRuntime.profile.bubbleColor ?? "#0070e8") }
+  static var outgoingInk: Color { AppearanceRuntime.contrast(AppearanceRuntime.profile.bubbleColor ?? "#0070e8", Color.white) >= 4.5 ? .white : .black }
   static var hairline: Color { ink.opacity(0.10) }
   static var ink: Color { Color(hex: values[5]) }
   static var inkSecondary: Color { Color(hex: values[6]) }
@@ -64,7 +66,7 @@ enum Metrics {
   static let inspectorMin: CGFloat = 280
   static let inspectorIdeal: CGFloat = 320
   /// Chat column caps the measure so prose stays under ~80 characters.
-  static let measure: CGFloat = 680
+  static var measure: CGFloat { AppearanceRuntime.profile.conversationWidth == "comfortable" ? 720 : 960 }
   static let gutter: CGFloat = 20
   static var rowRadius: CGFloat { AppearanceRuntime.profile.corners == "square" ? 4 : AppearanceRuntime.profile.corners == "soft" ? 18 : 10 }
   static var bubbleRadius: CGFloat { AppearanceRuntime.profile.corners == "square" ? 7 : AppearanceRuntime.profile.corners == "soft" ? 24 : 18 }
@@ -84,16 +86,52 @@ enum Typography {
 }
 
 enum AppearanceRuntime {
-  nonisolated(unsafe) static var profile = AppearanceProfile(
+  static let defaultProfile = AppearanceProfile(
     id: "theme_default", name: "My Agni", mode: "system", preset: "agni", accent: "ember",
     background: AppearanceBackground(kind: "none"), textScale: "default", density: "comfortable",
     corners: "standard", motion: "system", agentTint: "full", updatedAt: "1970-01-01T00:00:00.000Z"
   )
+  static func load(_ key: String) -> AppearanceProfile? {
+    guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+    return try? JSONDecoder().decode(AppearanceProfile.self, from: data)
+  }
+  static func cache(_ value: AppearanceProfile, key: String) {
+    if let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: key) }
+  }
+  // Reading tokens in any SwiftUI view observes this state, so colour and size
+  // edits invalidate existing views without recreating the chat or composer.
+  nonisolated(unsafe) private static let state = AppearanceState()
+  static var profile: AppearanceProfile {
+    get { state.profile }
+    set { state.profile = newValue }
+  }
   static var accentHex: String {
     if profile.accent == "custom" { return profile.customAccent ?? "#ff3146" }
-    return ["ember": "#ff3146", "amber": "#f0b95a", "ocean": "#38bdf8", "forest": "#4ade80",
-            "violet": "#a78bfa", "rose": "#fb7185", "mono": "#d4d4d8"][profile.accent] ?? "#ff3146"
+    return accentHex(profile.accent)
   }
+  static func accentHex(_ name: String) -> String {
+    ["ember": "#ff3146", "amber": "#f0b95a", "ocean": "#38bdf8", "forest": "#4ade80",
+     "violet": "#a78bfa", "rose": "#fb7185", "mono": "#d4d4d8"][name] ?? "#ff3146"
+  }
+  private static func luminance(_ colour: NSColor) -> Double {
+    guard let rgb = colour.usingColorSpace(.sRGB) else { return 0 }
+    let channels = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map { n in
+      n <= 0.04045 ? n / 12.92 : pow((n + 0.055) / 1.055, 2.4)
+    }
+    return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+  }
+  static func contrast(_ hex: String, _ surface: Color) -> Double {
+    let a = luminance(NSColor(Color(serverHex: hex))), b = luminance(NSColor(surface))
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+  }
+  static var buttonInk: String {
+    contrast(accentHex, Color.white) >= contrast(accentHex, Color.black) ? "#ffffff" : "#000000"
+  }
+}
+
+@Observable
+private final class AppearanceState {
+  var profile = AppearanceRuntime.load("appearance.pending.v2") ?? AppearanceRuntime.load("appearance.current.v2") ?? AppearanceRuntime.defaultProfile
 }
 
 extension Color {

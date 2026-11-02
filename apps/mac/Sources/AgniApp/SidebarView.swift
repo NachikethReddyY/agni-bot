@@ -9,6 +9,12 @@ import AgniProtocol
 
 struct SidebarView: View {
   var model: AppModel
+  var pinned = State(wrappedValue: UserDefaults.standard.stringArray(forKey: "agni.sidebar.pinned") ?? [String]())
+  private func togglePin(_ id: String) {
+    if pinned.wrappedValue.contains(id) { pinned.wrappedValue.removeAll { $0 == id } }
+    else { pinned.wrappedValue.append(id) }
+    UserDefaults.standard.set(pinned.wrappedValue, forKey: "agni.sidebar.pinned")
+  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -23,11 +29,15 @@ struct SidebarView: View {
 
   private var header: some View {
     HStack {
+      Text("Messages").font(Typography.title)
       Spacer()
+      Button { model.isAgentSwitcherPresented = true } label: {
+        Image(systemName: "square.and.pencil").frame(width: 32, height: 32).background(Palette.surface, in: Circle())
+      }.buttonStyle(.plain).accessibilityLabel("Choose bot")
     }
     .padding(.horizontal, 14)
-    .frame(height: 52)
-    .padding(.leading, 72)
+    .frame(height: 68)
+    .padding(.leading, 8)
     .padding(.trailing, 14)
   }
 
@@ -50,8 +60,8 @@ struct SidebarView: View {
       }
     }
     .padding(.horizontal, 12)
-    .frame(height: 32)
-    .background(Palette.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .frame(height: 36)
+    .background(Palette.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     .padding(.horizontal, 12)
     .padding(.bottom, 14)
   }
@@ -60,11 +70,24 @@ struct SidebarView: View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 14) {
         VStack(alignment: .leading, spacing: 4) {
-          sectionTitle("Agents")
+          if !pinned.wrappedValue.isEmpty {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+              ForEach(model.filteredAgents.filter { pinned.wrappedValue.contains($0.id) }) { agent in
+                Button { model.selectAgent(agent) } label: {
+                  VStack(spacing: 8) {
+                    SidebarAgentBadge(agent: agent, size: 48)
+                    Text(agent.name).font(Typography.meta).lineLimit(1)
+                  }.frame(maxWidth: .infinity).padding(.vertical, 14)
+                    .foregroundStyle(model.conversation.agentID == agent.id ? Color.white : Palette.ink)
+                    .background(model.conversation.agentID == agent.id ? Color(hex: 0x0070E8) : Color.clear, in: RoundedRectangle(cornerRadius: 14))
+                }.buttonStyle(.plain).contextMenu { Button("Unpin bot") { togglePin(agent.id) } }
+              }
+            }.padding(.bottom, 14)
+          }
           if model.filteredAgents.isEmpty {
             sectionEmpty(model.searchText.isEmpty ? "No agents available" : "No matching agents")
           } else {
-            ForEach(model.filteredAgents) { agent in agentRow(agent) }
+            ForEach(model.filteredAgents.filter { !pinned.wrappedValue.contains($0.id) }) { agent in agentRow(agent) }
           }
         }
       }
@@ -100,13 +123,17 @@ struct SidebarView: View {
       HStack(spacing: 10) {
         SidebarAgentBadge(agent: agent, size: 36)
         VStack(alignment: .leading, spacing: 3) {
-          Text(agent.name)
-            .font(Typography.rowTitle)
-            .foregroundStyle(Palette.ink)
-            .lineLimit(1)
-          Text(agent.model ?? "Assistant")
+          HStack {
+            Text(agent.name).font(Typography.rowTitle).lineLimit(1)
+            Spacer(minLength: 4)
+            if let latest = model.threads.filter({ $0.agentID == agent.id }).max(by: { $0.updatedAt < $1.updatedAt }),
+               let date = ISO8601DateFormatter().date(from: latest.updatedAt) {
+              Text(date, style: .time).font(Typography.caption).opacity(0.7)
+            }
+          }.foregroundStyle(selected ? Color.white : Palette.ink)
+          Text(model.threads.filter { $0.agentID == agent.id }.sorted { $0.updatedAt > $1.updatedAt }.first?.preview ?? agent.model ?? "Assistant")
             .font(Typography.meta)
-            .foregroundStyle(Palette.inkSecondary)
+            .foregroundStyle(selected ? Color.white.opacity(0.8) : Palette.inkSecondary)
             .lineLimit(1)
         }
         Spacer(minLength: 0)
@@ -123,13 +150,14 @@ struct SidebarView: View {
       .padding(.horizontal, 10)
       .padding(.vertical, 9)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(selected ? Palette.surfaceRaised : .clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+      .background(selected ? Color(hex: 0x0070E8) : .clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .accessibilityLabel("Open \(agent.name) chat")
     .contextMenu {
       Button("Open chat") { model.selectAgent(agent) }
+      Button(pinned.wrappedValue.contains(agent.id) ? "Unpin bot" : "Pin bot") { togglePin(agent.id) }
     }
   }
 

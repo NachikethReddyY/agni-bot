@@ -3,7 +3,7 @@
  * right. Task navigation lives in the sidebar.
  */
 import { useState, type ReactNode } from "react";
-import { Bug, Menu, Monitor } from "lucide-react";
+import { Bug, Menu, Monitor, MoreHorizontal } from "lucide-react";
 import { format } from "@agni/client";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import {
@@ -12,21 +12,22 @@ import {
   connectionTitle,
 } from "./bits";
 
-export function ThreadHeader() {
+export function ThreadHeader({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   const model = useAppModel();
   const snapshot = useAppSnapshot();
+  const [actionsOpen, setActionsOpen] = useState(false);
   const [connectionOpen, setConnectionOpen] = useState(false);
   const agent = model.agent;
   const agentState = agent ? snapshot.agentStates[agent.id] : undefined;
   const working = snapshot.conversation.isStreaming || agentState === "working";
 
   return (
-    <header className="thread-header">
+    <header className="thread-header" onKeyDown={(event) => { if (event.key === "Escape") { setActionsOpen(false); setConnectionOpen(false); } }}>
       <button
         type="button"
-        className="icon-btn header-menu mobile-only"
+        className="icon-btn header-menu"
         aria-label="Open the agent list"
-        onClick={() => model.openSidebar()}
+        onClick={() => { if (typeof matchMedia !== "undefined" && matchMedia("(min-width: 721px)").matches) onToggleSidebar?.(); else model.openSidebar(); }}
       >
         <Menu size={17} />
       </button>
@@ -37,34 +38,23 @@ export function ThreadHeader() {
         onClick={() => model.openAgentProfile()}
       >
         <span className="agent-pill-avatar">
-          <SidebarAgentBadge agent={agent} size={22} />
+          <SidebarAgentBadge agent={agent} size={36} />
           {working ? <span className="agent-pill-dot" aria-label="Working" /> : null}
         </span>
-        <span className="agent-pill-name">{agent?.name ?? "Agni"}</span>
+        <span className="agent-pill-name">{agent?.name ?? "New Bot"}</span>
+        {working ? <span className="header-status">Writing…</span> : snapshot.connectionState.kind !== "ready" ? <span className="header-status">{connectionTitle(snapshot.connectionState)}</span> : null}
       </button>
       <span className="thread-header-spacer" />
 
-      <button
-        type="button"
-        className="icon-btn"
-        title="Bot debugger (Ctrl+Shift+D)"
-        aria-label="Open bot debugger"
-        onClick={() => model.toggleDebug()}
-      >
-        <Bug size={14} />
-      </button>
-
-      <button
-        type="button"
-        className="icon-btn"
-        title="Server connection"
-        aria-label="Server connection details"
-        onClick={() => {
-          setConnectionOpen((open) => !open);
-        }}
-      >
-        <Monitor size={14} />
-      </button>
+      <button type="button" className="icon-btn header-more" aria-label="Conversation options" aria-expanded={actionsOpen} onClick={() => setActionsOpen(!actionsOpen)}><MoreHorizontal size={20} /></button>
+      {actionsOpen ? <>
+        <div className="popover-backdrop" onClick={() => setActionsOpen(false)} />
+        <div className="popover header-actions" role="menu" aria-label="Conversation options">
+          <button type="button" role="menuitem" onClick={() => { setActionsOpen(false); setConnectionOpen(true); }}><Monitor size={15} /> Server connection details</button>
+          <button type="button" role="menuitem" onClick={() => { setActionsOpen(false); model.toggleDebug(); }}><Bug size={15} /> Bot debugger</button>
+          <button type="button" role="menuitem" onClick={() => { setActionsOpen(false); model.toggleInspector(); }}>Conversation details</button>
+        </div>
+      </> : null}
 
       {connectionOpen ? (
         <HeaderPopover onClose={() => setConnectionOpen(false)}>

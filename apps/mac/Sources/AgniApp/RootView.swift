@@ -8,6 +8,10 @@ import AgniProtocol
 
 struct RootView: View {
   var model: AppModel
+  var sidebarVisible = State(wrappedValue: true)
+  var sidebarWidth = State(wrappedValue: CGFloat(UserDefaults.standard.double(forKey: "agni.sidebar.width") == 0 ? 300 : UserDefaults.standard.double(forKey: "agni.sidebar.width")))
+  var resizeStart = State<CGFloat?>(wrappedValue: nil)
+  var systemReduceMotion = Environment(\.accessibilityReduceMotion)
 
   var body: some View {
     ZStack {
@@ -19,6 +23,11 @@ struct RootView: View {
         chat
       }
       if let toast = model.toast { toastOverlay(toast) }
+    }
+    .preferredColorScheme(model.appearance.mode == "system" ? nil : model.appearance.mode == "dark" ? .dark : .light)
+    .environment(\.accessibilityReduceMotion, model.appearance.motion == "system" ? systemReduceMotion.wrappedValue : model.appearance.motion == "reduced")
+    .transaction { transaction in
+      if model.appearance.motion == "reduced" || (model.appearance.motion == "system" && systemReduceMotion.wrappedValue) { transaction.disablesAnimations = true }
     }
     .foregroundStyle(Palette.ink)
     .sheet(isPresented: model.agentSwitcherBinding) {
@@ -32,14 +41,24 @@ struct RootView: View {
 
   private var chat: some View {
     HStack(spacing: 0) {
-      SidebarView(model: model)
-        .frame(width: 260)
-      Rectangle()
-        .fill(Palette.hairline)
-        .frame(width: 1)
+      if sidebarVisible.wrappedValue {
+        SidebarView(model: model).frame(width: sidebarWidth.wrappedValue)
+        Rectangle().fill(Palette.hairline).frame(width: 5)
+          .gesture(DragGesture().onChanged { value in
+            if resizeStart.wrappedValue == nil { resizeStart.wrappedValue = sidebarWidth.wrappedValue }
+            sidebarWidth.wrappedValue = min(380, max(260, (resizeStart.wrappedValue ?? 300) + value.translation.width))
+          }.onEnded { _ in
+            resizeStart.wrappedValue = nil
+            UserDefaults.standard.set(Double(sidebarWidth.wrappedValue), forKey: "agni.sidebar.width")
+          })
+          .accessibilityLabel("Sidebar width")
+          .accessibilityAdjustableAction { direction in
+            switch direction { case .increment: sidebarWidth.wrappedValue = min(380, sidebarWidth.wrappedValue + 10); case .decrement: sidebarWidth.wrappedValue = max(260, sidebarWidth.wrappedValue - 10); @unknown default: break }
+          }
+      }
       VStack(spacing: 0) {
-        ThreadHeader(model: model)
-          .frame(height: 52)
+        ThreadHeader(model: model, toggleSidebar: { sidebarVisible.wrappedValue.toggle() })
+          .frame(height: 96)
         ThreadView(model: model)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -48,16 +67,8 @@ struct RootView: View {
     .background(model.appearance.background.kind == "none" ? Palette.canvas : Color.clear)
   }
 
-  @ViewBuilder private var appearanceBackground: some View {
-    let background = model.appearance.background
-    if background.kind == "image", let image = model.backgroundImage {
-      Image(nsImage: image).resizable().scaledToFill().blur(radius: background.blur ?? 0)
-        .overlay(Color.black.opacity(background.dim ?? 0.68)).clipped()
-    } else if background.kind == "gradient" {
-      LinearGradient(colors: [Color(serverHex: background.from ?? "#111827"), Color(serverHex: background.to ?? "#3b1520")], startPoint: .topLeading, endPoint: .bottomTrailing)
-    } else if background.kind == "solid" {
-      Color(serverHex: background.color ?? "#111827")
-    } else { Palette.canvas }
+  private var appearanceBackground: some View {
+    AppearanceBackgroundView(background: model.appearance.background, image: model.backgroundImage)
   }
 
   private func toastOverlay(_ toast: NoticeRow) -> some View {

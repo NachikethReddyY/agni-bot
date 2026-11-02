@@ -3,7 +3,7 @@
  * Enter sends; Shift-Enter inserts a newline; the composer stays a single quiet capsule.
  */
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowUp, Mic, Plus, UserRound, Paperclip, X } from "lucide-react";
+import { ArrowUp, Plus, UserRound, Paperclip, X } from "lucide-react";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 
 import { MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES, type AttachmentInfo } from "@agni/client";
@@ -209,7 +209,7 @@ export function ComposerView() {
         </>
       ) : null}
 
-      <div className="composer">
+      <div className="composer-row">
         <button
           type="button"
           className="composer-plus"
@@ -220,6 +220,7 @@ export function ComposerView() {
           <Plus size={14} />
         </button>
 
+        <div className="composer">
         <textarea
           ref={textareaRef}
           className="composer-input"
@@ -235,8 +236,8 @@ export function ComposerView() {
             model.updateTypingState(event.target.value.trim().length > 0);
           }}
           onKeyDown={onKeyDown}
-          placeholder={isStreaming ? "Agni is working — send “stop” to interrupt" : `Message ${model.agent?.name ?? "Agni"}`}
-          aria-label={isStreaming ? "Agni is working; send stop to interrupt" : `Message ${model.agent?.name ?? "Agni"}`}
+          placeholder={isStreaming ? `Message ${model.agent?.name ?? "New Bot"} — working…` : `Message ${model.agent?.name ?? "New Bot"}`}
+          aria-label={isStreaming ? `Message ${model.agent?.name ?? "New Bot"}; send stop to interrupt` : `Message ${model.agent?.name ?? "New Bot"}`}
         />
 
         {isStreaming ? (
@@ -255,14 +256,15 @@ export function ComposerView() {
         ) : null}
         <button
           type="button"
-          className={`composer-send${trimmed.length === 0 && attachments.length === 0 ? " is-mic" : ""}`}
+          className="composer-send"
           disabled={sending || (trimmed.length === 0 && attachments.length === 0)}
           title="Send (Enter); new line (Shift+Enter)"
           aria-label="Send"
           onClick={() => void submit()}
         >
-          {trimmed.length === 0 && attachments.length === 0 ? <Mic size={14} /> : <ArrowUp size={15} strokeWidth={2.4} />}
+          <ArrowUp size={17} strokeWidth={2.4} />
         </button>
+        </div>
       </div>
     </div>
   );

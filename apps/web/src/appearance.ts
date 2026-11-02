@@ -1,6 +1,12 @@
 import { AppearanceProfileSchema, type AppearanceProfile } from "@agni/protocol";
 import { themeFor, themeVariables } from "./theme";
 
+export const APPEARANCE_PENDING_KEY = "dev.agni.web.appearance.pending.v1";
+
+export function loadPendingAppearance(): AppearanceProfile | null {
+  try { const raw = localStorage.getItem(APPEARANCE_PENDING_KEY); return raw ? AppearanceProfileSchema.parse(JSON.parse(raw)) : null; } catch { return null; }
+}
+
 export const APPEARANCE_CACHE_KEY = "dev.agni.web.appearance.v1";
 
 export const PRESETS = [
@@ -58,7 +64,7 @@ export function newAppearanceID(): string {
 }
 
 const darkPresets = {
-  agni: ["#0d0d0f", "#08080a", "#17171a", "#1f1f23", "#1b1b1e", "#f4f4f6", "#9a9aa1", "#6d6d76"],
+  agni: ["#1e1e1e", "#272625", "#303030", "#393939", "#3a3a3c", "#f4f4f6", "#9a9aa1", "#6d6d76"],
   midnight: ["#080b14", "#050811", "#111827", "#1c2538", "#151d2d", "#f3f7ff", "#9ba9c1", "#64748b"],
   graphite: ["#111315", "#0b0d0e", "#1c2022", "#272c2f", "#202527", "#f3f4f4", "#a3aaad", "#70787c"],
   paper: ["#171512", "#100f0d", "#24211d", "#302c27", "#29251f", "#fffaf1", "#b8ac9b", "#807568"],
@@ -83,10 +89,7 @@ export function accentColor(profile: AppearanceProfile): string {
 }
 
 function contrastInk(hex: string): string {
-  const channels = [1, 3, 5].map((start) => Number.parseInt(hex.slice(start, start + 2), 16) / 255)
-    .map((value) => value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
-  const luminance = 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
-  return luminance > 0.179 ? "#18181b" : "#ffffff";
+  return contrastRatio(hex, "#000000") > contrastRatio(hex, "#ffffff") ? "#000000" : "#ffffff";
 }
 
 export function appearanceVariables(
@@ -113,19 +116,26 @@ export function appearanceVariables(
   if (background.kind === "solid") image = `linear-gradient(${background.color}, ${background.color})`;
   if (background.kind === "gradient") image = `linear-gradient(${background.angle}deg, ${background.from}, ${background.to})`;
   if (background.kind === "image" && backgroundURL) {
-    image = `linear-gradient(rgb(0 0 0 / ${background.dim}), rgb(0 0 0 / ${background.dim})), url("${backgroundURL}")`;
+    const backdrop = dark ? "0 0 0" : "255 255 255";
+    image = `linear-gradient(rgb(${backdrop} / ${background.dim}), rgb(${backdrop} / ${background.dim})), url("${backgroundURL}")`;
     size = background.fit;
     position = `${background.positionX}% ${background.positionY}%`;
     blur = `${background.blur}px`;
     overlay = dark ? "rgb(0 0 0 / 8%)" : "rgb(255 255 255 / 10%)";
   }
   return {
+    "--outgoing-bubble": profile.bubbleColor ?? "#0070e8",
+    "--outgoing-ink": contrastInk(profile.bubbleColor ?? "#0070e8"),
+    "--conversation-width": profile.conversationWidth === "comfortable" ? "1100px" : "none",
+    "--bubble-max": profile.conversationWidth === "comfortable" ? "720px" : "960px",
+    "--chrome-blur": profile.transparency === "off" ? "none" : "blur(12px)",
     "--canvas": canvas, "--sidebar": sidebar, "--surface": surface,
     "--surface-raised": raised, "--incoming-bubble": incoming,
     "--ink": ink, "--ink-secondary": secondary, "--ink-tertiary": tertiary,
     "--hairline": dark ? "rgb(255 255 255 / 9%)" : "rgb(24 24 27 / 12%)",
     "--ember": accent, "--ember-deep": themeFor(accent).accentDeep,
     "--accent-ink": contrastInk(accent), "--agent-accent-ink": contrastInk(agentTheme.accent),
+    "--bubble-radius": profile.corners === "square" ? "6px" : profile.corners === "soft" ? "24px" : "20px",
     "--row-radius": radius, "--card-radius": profile.corners === "soft" ? "18px" : radius,
     "--text-display": `${22 * scale}px`, "--text-title": `${15 * scale}px`,
     "--text-body": `${14 * scale}px`, "--text-row-title": `${14 * scale}px`,
@@ -138,4 +148,15 @@ export function appearanceVariables(
     "colorScheme": dark ? "dark" : "light",
     ...themeVariables(agentTheme),
   };
+}
+
+/** Relative luminance contrast for six-digit sRGB colours. */
+export function contrastRatio(a: string, b: string): number {
+  const luminance = (hex: string) => {
+    const rgb = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((n) => n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4);
+    return rgb[0]! * 0.2126 + rgb[1]! * 0.7152 + rgb[2]! * 0.0722;
+  };
+  const x = luminance(a), y = luminance(b);
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
 }

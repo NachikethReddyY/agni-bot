@@ -22,11 +22,17 @@ export function MessageRowView({
   message,
   agent,
   isSelected,
+  groupStart = true,
+  groupEnd = true,
+  showSendStatus = false,
   onToggleSelect,
 }: {
   message: ChatMessage;
   agent: AgentInfo | null | undefined;
   isSelected: boolean;
+  groupStart?: boolean;
+  groupEnd?: boolean;
+  showSendStatus?: boolean;
   onToggleSelect: () => void;
 }) {
   const model = useAppModel();
@@ -43,6 +49,8 @@ export function MessageRowView({
   return (
     <div
       className={`message-row ${message.role}${isSelected ? " selected" : ""}`}
+      data-group-start={groupStart}
+      data-group-end={groupEnd}
       data-message-id={message.id}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -62,6 +70,7 @@ export function MessageRowView({
         <SystemNote message={message} />
       )}
 
+      {showSendStatus && message.role === "user" && message.state.kind !== "failed" ? <span className="message-send-status">{message.isLocalEcho ? "Sending…" : "Sent"}</span> : null}
       {onboardingHint === "onboarding_name_prompt" ? (
         <NamePrompt onSave={(name) => model.renameAgent(name)} />
       ) : null}

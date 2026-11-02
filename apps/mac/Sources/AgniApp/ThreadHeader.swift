@@ -1,6 +1,5 @@
 /**
- * Seamless chat header: current agent/thread at left, connection details on
- * demand at right.
+ * Centred bot identity with conversation actions available on demand.
  */
 import SwiftUI
 import AgniKit
@@ -8,61 +7,52 @@ import AgniProtocol
 
 struct ThreadHeader: View {
   var model: AppModel
+  var toggleSidebar: (() -> Void)? = nil
   var isConnectionPopoverPresented = State(wrappedValue: false)
   var isSharePopoverPresented = State(wrappedValue: false)
+  var isBotInfoPresented = State(wrappedValue: false)
 
   var body: some View {
-    HStack(spacing: 9) {
-      SidebarAgentBadge(agent: model.agent, size: 20)
-      VStack(alignment: .leading, spacing: 0) {
-        Text(model.agent?.name ?? "Agni")
-          .font(Typography.rowTitle)
-          .foregroundStyle(Palette.ink)
-          .lineLimit(1)
-        if model.conversation.isStreaming {
-          Text("Writing…")
-            .font(Typography.caption)
-            .foregroundStyle(Palette.inkSecondary)
+    ZStack {
+      Button { isBotInfoPresented.wrappedValue = true } label: {
+      VStack(spacing: 4) {
+        SidebarAgentBadge(agent: model.agent, size: 36)
+        Text(model.agent?.name ?? "New Bot").font(Typography.meta).fontWeight(.semibold).lineLimit(1)
+        if model.conversation.isStreaming { Text("Writing…").font(Typography.caption).foregroundStyle(Palette.inkSecondary) }
+      }.padding(.horizontal, 70)
+      }.buttonStyle(.plain).accessibilityLabel("Open bot profile")
+        .popover(isPresented: isBotInfoPresented.projectedValue) {
+          VStack(alignment: .leading, spacing: 12) {
+            Text(model.agent?.name ?? "New Bot").font(Typography.title)
+            if let name = model.agent?.model { Text(name).font(Typography.meta).foregroundStyle(Palette.inkSecondary) }
+            if let tools = model.agent?.tools, !tools.isEmpty { Text(tools.joined(separator: ", ")).font(Typography.caption).textSelection(.enabled) }
+          }.padding(18).frame(minWidth: 220, maxWidth: 320)
         }
-      }
-      Spacer()
-      Button {
-        model.exportConversation()
-        isSharePopoverPresented.wrappedValue = true
-      } label: {
-        Image(systemName: "square.and.arrow.up")
-          .font(.system(size: 14, weight: .regular))
-          .foregroundStyle(Palette.inkSecondary)
-          .frame(width: 30, height: 30)
-          .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .help("Share this conversation as a document")
-      .accessibilityLabel("Export this conversation")
-      .popover(isPresented: isSharePopoverPresented.projectedValue, arrowEdge: .top) {
-        SharePopover(model: model) { isSharePopoverPresented.wrappedValue = false }
-      }
-      Button { isConnectionPopoverPresented.wrappedValue.toggle() } label: {
-        Image(systemName: "desktopcomputer")
-          .font(.system(size: 14, weight: .regular))
-          .foregroundStyle(Palette.inkSecondary)
-          .frame(width: 30, height: 30)
-          .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .help("Server connection")
-      .accessibilityLabel("Server connection details")
-      .popover(isPresented: isConnectionPopoverPresented.projectedValue, arrowEdge: .top) {
-        ConnectionPopover(model: model) {
-          isConnectionPopoverPresented.wrappedValue = false
-        }
+      HStack {
+        Button { toggleSidebar?() } label: { Image(systemName: "sidebar.left").frame(width: 34, height: 34) }
+          .buttonStyle(.plain).accessibilityLabel("Toggle sidebar")
+        Spacer()
+        Menu {
+          Button("Export conversation") { model.exportConversation(); isSharePopoverPresented.wrappedValue = true }
+          Button("Server connection") { isConnectionPopoverPresented.wrappedValue = true }
+          Button("Switch bot") { model.isAgentSwitcherPresented = true }
+        } label: {
+          Image(systemName: "ellipsis").frame(width: 34, height: 34)
+            .background(Palette.surface, in: Circle())
+        }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Conversation options")
       }
     }
-    .padding(.leading, 18)
-    .padding(.trailing, 16)
-    .background(Palette.canvas)
-    .overlay(alignment: .bottom) {
-      Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+    .padding(.horizontal, 20)
+    .frame(maxWidth: .infinity)
+    .background {
+      if model.appearance.transparency == "off" { Palette.canvas }
+      else { Palette.canvas.opacity(0.94) }
+    }
+    .popover(isPresented: isSharePopoverPresented.projectedValue, arrowEdge: .top) {
+      SharePopover(model: model) { isSharePopoverPresented.wrappedValue = false }
+    }
+    .popover(isPresented: isConnectionPopoverPresented.projectedValue, arrowEdge: .top) {
+      ConnectionPopover(model: model) { isConnectionPopoverPresented.wrappedValue = false }
     }
   }
 }

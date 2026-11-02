@@ -51,7 +51,7 @@ import {
   savePreferences,
   type Preferences,
 } from "./preferences";
-import { cacheAppearance, defaultAppearance, loadCachedAppearance } from "../appearance";
+import { APPEARANCE_PENDING_KEY, cacheAppearance, defaultAppearance, loadCachedAppearance, loadPendingAppearance } from "../appearance";
 
 export type AppScreen = "pairing" | "chat";
 
@@ -125,6 +125,7 @@ export interface AppSnapshot {
   preferences: Preferences;
   appearance: AppearanceProfile;
   appearanceProfiles: AppearanceProfile[];
+  appearanceSaveStatus: "saved" | "saving" | "pending" | "error";
   /** A message the transcript should scroll to (from search). */
   focusMessageID: string | null;
   searchText: string;
@@ -254,7 +255,12 @@ export class AppModel {
   private isSidebarPresented = false;
   private isAgentProfilePresented = false;
   private preferences: Preferences = loadPreferences();
-  private appearance: AppearanceProfile = loadCachedAppearance();
+  private pendingAppearance = loadPendingAppearance();
+  private appearance: AppearanceProfile = this.pendingAppearance ?? loadCachedAppearance();
+  private appearanceSaveStatus: "saved" | "saving" | "pending" | "error" = this.pendingAppearance ? "pending" : "saved";
+  private appearanceSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private appearanceAckTimer: ReturnType<typeof setTimeout> | null = null;
+  private appearanceInFlight: AppearanceProfile | null = null;
   private appearanceProfiles: AppearanceProfile[] = [this.appearance];
   private focusMessageID: string | null = null;
   private searchText = "";
@@ -363,6 +369,7 @@ export class AppModel {
       preferences: this.preferences,
       appearance: this.appearance,
       appearanceProfiles: this.appearanceProfiles,
+      appearanceSaveStatus: this.appearanceSaveStatus,
       focusMessageID: this.focusMessageID,
       searchText: this.searchText,
       focusComposerToken: this.focusComposerToken,
@@ -1496,6 +1503,11 @@ export class AppModel {
       case "state": {
         const wasReady = isReady(this.connectionState);
         this.connectionState = event.state;
+        if (!isReady(event.state) && this.pendingAppearance) {
+          if (this.appearanceAckTimer) clearTimeout(this.appearanceAckTimer);
+          this.appearanceInFlight = null;
+          this.appearanceSaveStatus = "pending";
+        }
         switch (event.state.kind) {
           case "ready": {
             if (this.pendingPairing) {
@@ -1849,9 +1861,20 @@ export class AppModel {
 
     if (frame.type === "appearance.list.ok" || frame.type === "appearance.updated") {
       this.appearanceProfiles = frame.profiles;
-      this.appearance = frame.profiles.find((profile) => profile.id === frame.activeID)
-        ?? frame.profiles[0]
-        ?? defaultAppearance();
+      const remote = frame.profiles.find((profile) => profile.id === frame.activeID) ?? frame.profiles[0] ?? defaultAppearance();
+      const matches = (profile: AppearanceProfile | null) => profile && JSON.stringify(profile) === JSON.stringify(remote);
+      if (matches(this.pendingAppearance)) {
+        this.pendingAppearance = null;
+        this.appearanceInFlight = null;
+        if (this.appearanceAckTimer) clearTimeout(this.appearanceAckTimer);
+        try { localStorage.removeItem(APPEARANCE_PENDING_KEY); } catch { /* storage blocked */ }
+        this.appearanceSaveStatus = "saved";
+      } else if (matches(this.appearanceInFlight)) {
+        this.appearanceInFlight = null;
+        if (this.appearanceAckTimer) clearTimeout(this.appearanceAckTimer);
+        if (this.pendingAppearance && !this.appearanceSaveTimer) this.retryAppearanceSave();
+      }
+      this.appearance = this.pendingAppearance ?? remote;
       cacheAppearance(this.appearance);
       this.publish();
       return;
@@ -2006,17 +2029,46 @@ export class AppModel {
 
   refreshAppearance(): void {
     if (!this.connection || !isReady(this.connectionState)) return;
-    void this.connection.send({ type: "appearance.list" }).catch(() => undefined);
+    if (this.pendingAppearance) this.retryAppearanceSave();
+    else void this.connection.send({ type: "appearance.list" }).catch(() => undefined);
   }
 
-  saveAppearance(profile: AppearanceProfile, activate = true): void {
-    const next = AppearanceProfileSchema.parse({ ...profile, name: profile.name.trim(), updatedAt: new Date().toISOString() });
-    this.appearance = next;
-    this.appearanceProfiles = [next, ...this.appearanceProfiles.filter((item) => item.id !== next.id)];
-    cacheAppearance(next);
+  retryAppearanceSave(): void {
+    if (this.appearanceSaveTimer) clearTimeout(this.appearanceSaveTimer);
+    this.appearanceSaveTimer = null;
+    const next = this.pendingAppearance;
+    if (!next || this.appearanceInFlight) return;
+    if (!this.connection || !isReady(this.connectionState)) {
+      this.appearanceSaveStatus = "pending"; this.publish(); return;
+    }
+    this.appearanceInFlight = next;
+    this.appearanceSaveStatus = "saving";
     this.publish();
-    if (!this.connection || !isReady(this.connectionState)) return;
-    void this.connection.send({ type: "appearance.save", profile: next, activate }).catch(() => undefined);
+    const failed = () => {
+      if (this.appearanceInFlight !== next) return;
+      this.appearanceInFlight = null;
+      if (this.appearanceAckTimer) clearTimeout(this.appearanceAckTimer);
+      this.appearanceSaveStatus = "error"; this.publish();
+    };
+    this.appearanceAckTimer = setTimeout(failed, 8000);
+    void this.connection.send({ type: "appearance.save", profile: next, activate: true }).catch(failed);
+  }
+
+  saveAppearance(profile: AppearanceProfile): void {
+    const timestamp = Math.max(Date.now(), Date.parse(this.appearance.updatedAt) + 1);
+    const next = AppearanceProfileSchema.parse({ ...profile, id: this.appearance.id, name: this.appearance.name, updatedAt: new Date(timestamp).toISOString() });
+    this.appearance = next;
+    this.pendingAppearance = next;
+    this.appearanceProfiles = [next];
+    cacheAppearance(next);
+    try { localStorage.setItem(APPEARANCE_PENDING_KEY, JSON.stringify(next)); } catch { /* storage blocked */ }
+    if (this.appearanceSaveTimer) clearTimeout(this.appearanceSaveTimer);
+    this.appearanceSaveStatus = this.connection && isReady(this.connectionState) ? "saving" : "pending";
+    this.publish();
+    this.appearanceSaveTimer = setTimeout(() => {
+      this.appearanceSaveTimer = null;
+      this.retryAppearanceSave();
+    }, 400);
   }
 
   activateAppearance(id: string): void {

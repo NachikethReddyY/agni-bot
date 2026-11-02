@@ -24,9 +24,9 @@
   /* The persona colour the server assigns, used for scheduled work. */
   --amber: #f0b95a;
 
-  --sidebar-width: 260px;
+  --sidebar-width: 300px;
   --inspector-width: 320px;
-  --measure: 680px;
+  --measure: 960px;
   --gutter: 20px;
   --row-radius: 10px;
   --bubble-radius: 18px;

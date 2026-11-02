@@ -94,6 +94,10 @@ export const AppearanceProfileSchema = z.object({
   preset: z.enum(["agni", "midnight", "graphite", "paper", "ocean", "forest", "warm"]),
   accent: z.enum(["ember", "amber", "ocean", "forest", "violet", "rose", "mono", "custom"]),
   customAccent: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  // Optional V3 choices preserve profiles saved by V1/V2 clients.
+  bubbleColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  conversationWidth: z.enum(["comfortable", "wide"]).optional(),
+  transparency: z.enum(["subtle", "off"]).optional(),
   background: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("none") }),
     z.object({ kind: z.literal("solid"), color: z.string().regex(/^#[0-9a-fA-F]{6}$/) }),

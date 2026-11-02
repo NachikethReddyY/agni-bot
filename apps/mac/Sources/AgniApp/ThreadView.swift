@@ -50,18 +50,27 @@ struct ThreadView: View {
 
   var draft = State(wrappedValue: "")
 
+  private func sameGroup(_ a: ChatMessage, _ b: ChatMessage?) -> Bool {
+    guard let b, a.role == b.role, a.role != .system, a.agentID == b.agentID, a.uiHint == b.uiHint,
+          let first = a.createdAt, let second = b.createdAt else { return false }
+    return Calendar.current.isDate(first, inSameDayAs: second) && second.timeIntervalSince(first) >= 0 && second.timeIntervalSince(first) < 300
+  }
+
   // MARK: transcript
 
   private var transcript: some View {
     ScrollViewReader { proxy in
+      let lastOutgoingID = model.conversation.messages.last(where: { $0.role == .user })?.id
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 16) {
+        LazyVStack(alignment: .leading, spacing: model.appearance.density == "compact" ? 10 : 16) {
           Color.clear.frame(height: 1).id(topAnchor)
           ForEach(Array(model.conversation.messages.enumerated()), id: \.element.id) { index, message in
             if isNewDay(index: index) {
               DayDivider(label: index == 0 ? AgniFormat.stamp(message.createdAt ?? Date()) : AgniFormat.dayTitle(message.createdAt ?? Date()))
             }
             MessageRowView(
+              groupEnd: !sameGroup(message, index + 1 < model.conversation.messages.count ? model.conversation.messages[index + 1] : nil),
+              showSendStatus: message.id == lastOutgoingID,
               message: message,
               agent: model.agent,
               isSelected: selectedMessageIDs.wrappedValue.contains(message.id),
@@ -69,6 +78,7 @@ struct ThreadView: View {
               onNotice: { model.dismissToast() },
               onRename: { model.renameAgent($0) }
             )
+            .padding(.top, index > 0 && sameGroup(model.conversation.messages[index - 1], message) ? (model.appearance.density == "compact" ? -6 : -12) : 0)
           }
           Color.clear.frame(height: 1).id(bottomAnchor)
         }
@@ -180,7 +190,7 @@ struct ThreadView: View {
   private var emptyState: some View {
     VStack(spacing: 0) {
       Spacer(minLength: 0)
-      Text("Message \(model.agent?.name ?? "Agni") — one conversation, it never resets")
+      Text("Message \(model.agent?.name ?? "New Bot") — one conversation, it never resets")
         .font(Typography.meta)
         .foregroundStyle(Palette.inkTertiary)
       Spacer().frame(height: 28)
