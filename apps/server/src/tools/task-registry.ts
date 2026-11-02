@@ -19,6 +19,7 @@ import { createMailTools } from "./mail";
 import { createJobTools } from "./jobs-tool";
 import type { MailAccountResolver } from "../plugins/credentials";
 import { shareThread } from "../share/document";
+import { scheduleTaskReminder } from "../jobs/task-reminders";
 
 const objectSchema = (properties: Record<string, unknown>, required: string[]): Record<string, unknown> => ({
   type: "object", properties, required, additionalProperties: false,
@@ -130,14 +131,24 @@ export function buildTaskToolRegistry(db: Database, mailAccounts?: MailAccountRe
     handler: async (args) => tasksList(db, parseObject(args, (v) => ({ status: optionalEnum(v.status, ["open", "done", "snoozed", "all"] as const), limit: optionalLimit(v.limit) }))),
   });
   register({
-    name: "task_create", description: "Create a task with an optional ISO due date and priority.", kind: "static",
-    schema: objectSchema({ title: { type: "string", minLength: 1, maxLength: 500 }, dueAt: { type: "string", format: "date-time" }, priority: { type: "string", enum: ["low", "normal", "high"] } }, ["title"]), timeoutMs: 2_000,
-    handler: async (args) => taskCreate(db, parseObject(args, (v) => ({ title: boundedString(v.title, 500), dueAt: v.dueAt === undefined ? undefined : boundedString(v.dueAt, 80), priority: optionalEnum(v.priority, ["low", "normal", "high"] as const) }))),
+    name: "task_create", description: "Create a task with optional due time, deadline, reminder, labels, and priority. Add relevant concise labels when the task context suggests them.", kind: "static",
+    schema: objectSchema({ title: { type: "string", minLength: 1, maxLength: 500 }, dueAt: { type: "string", format: "date-time" }, deadlineAt: { type: "string", format: "date-time" }, reminderAt: { type: "string", format: "date-time" }, labels: { type: "array", maxItems: 20, items: { type: "string", maxLength: 64 } }, repeatRule: { type: "string", enum: ["none", "daily", "weekly", "monthly"] }, priority: { type: "string", enum: ["low", "normal", "high", "urgent"] } }, ["title"]), timeoutMs: 2_000,
+    handler: async (args, ctx) => {
+      const input = parseObject(args, (v) => ({ title: boundedString(v.title, 500), dueAt: v.dueAt === undefined ? undefined : boundedString(v.dueAt, 80), deadlineAt: v.deadlineAt === undefined ? undefined : boundedString(v.deadlineAt, 80), reminderAt: v.reminderAt === undefined ? undefined : boundedString(v.reminderAt, 80), labels: optionalStrings(v.labels), repeatRule: optionalEnum(v.repeatRule,["none","daily","weekly","monthly"] as const), priority: optionalEnum(v.priority, ["low", "normal", "high", "urgent"] as const), actor: ctx.chain?.currentAgentID ?? "agent" }));
+      const task = taskCreate(db,input);
+      if (input.reminderAt) scheduleTaskReminder(db,task.id);
+      return task;
+    },
   });
   register({
-    name: "task_update", description: "Complete, reopen, or snooze a task. Snooze requires an ISO timestamp.", kind: "static",
-    schema: objectSchema({ id: stringProp, action: { type: "string", enum: ["done", "reopen", "snooze"] }, until: { type: "string", format: "date-time" } }, ["id", "action"]), timeoutMs: 2_000,
-    handler: async (args) => taskUpdate(db, parseObject(args, (v) => ({ id: string(v.id), action: enumValue(v.action, ["done", "reopen", "snooze"] as const), until: v.until === undefined ? undefined : boundedString(v.until, 80) }))),
+    name: "task_update", description: "Complete, reopen, snooze, or edit a task, including labels, workflow status, and current progress. Update progressNote as work advances. Set AI review when delegated work is ready for the owner. Snooze requires an ISO timestamp.", kind: "static",
+    schema: objectSchema({ id: stringProp, action: { type: "string", enum: ["done", "reopen", "snooze", "edit"] }, until: { type: "string", format: "date-time" }, title: { type: "string", minLength: 1, maxLength: 500 }, dueAt: { type: ["string", "null"], format: "date-time" }, deadlineAt: { type: ["string", "null"], format: "date-time" }, reminderAt: { type: ["string", "null"], format: "date-time" }, labels: { type: "array", maxItems: 20, items: { type: "string", maxLength: 64 } }, workflowStatus: { type: "string", enum: ["not_started", "in_progress", "ai_review"] }, progressNote: { type: ["string", "null"], maxLength: 1000 }, repeatRule: { type: "string", enum: ["none", "daily", "weekly", "monthly"] }, description: { type: ["string", "null"], maxLength: 10000 }, priority: { type: "string", enum: ["low", "normal", "high", "urgent"] } }, ["id", "action"]), timeoutMs: 2_000,
+    handler: async (args, ctx) => {
+      const input = parseObject(args, (v) => ({ id: string(v.id), action: enumValue(v.action, ["done", "reopen", "snooze", "edit"] as const), until: v.until === undefined ? undefined : boundedString(v.until, 80), title: v.title === undefined ? undefined : boundedString(v.title,500), dueAt: v.dueAt === undefined ? undefined : v.dueAt === null ? null : boundedString(v.dueAt,80), deadlineAt: v.deadlineAt === undefined ? undefined : v.deadlineAt === null ? null : boundedString(v.deadlineAt,80), reminderAt: v.reminderAt === undefined ? undefined : v.reminderAt === null ? null : boundedString(v.reminderAt,80), labels: optionalStrings(v.labels), workflowStatus: optionalEnum(v.workflowStatus,["not_started","in_progress","ai_review"] as const), progressNote: v.progressNote === undefined ? undefined : v.progressNote === null ? null : boundedString(v.progressNote,1000), repeatRule: optionalEnum(v.repeatRule,["none","daily","weekly","monthly"] as const), description: v.description === undefined ? undefined : v.description === null ? null : boundedString(v.description,10000), priority: optionalEnum(v.priority,["low","normal","high","urgent"] as const), actor: ctx.chain?.currentAgentID ?? "agent" }));
+      const task = taskUpdate(db,input);
+      if (task) scheduleTaskReminder(db,task.id);
+      return task;
+    },
   });
   register({
     name: "grep", description: "Search file contents in the sandbox for a regex pattern.", kind: "static",

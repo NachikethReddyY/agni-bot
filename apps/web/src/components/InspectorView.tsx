@@ -259,7 +259,7 @@ function MemoryRow({ memory }: { memory: MemoryItem }) {
   );
 }
 
-function TaskRow({ task }: { task: TaskInfo }) {
+export function TaskRow({ task }: { task: TaskInfo }) {
   const model = useAppModel();
   const due = task.dueAt ? format.parseISO(task.dueAt) : null;
   const meta = [

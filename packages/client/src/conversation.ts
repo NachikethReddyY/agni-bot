@@ -373,6 +373,9 @@ export class Conversation {
       case "thread.history.ok":
       case "job.list.ok":
       case "task.list.ok":
+      case "task.create.ok":
+      case "task.list.create.ok":
+      case "task.activity.ok":
       case "task.update.ok":
       case "memory.list.ok":
       case "provider.add.ok":

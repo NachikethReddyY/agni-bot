@@ -16,6 +16,7 @@ import { ThreadHeader } from "./ThreadHeader";
 import { ThreadView } from "./ThreadView";
 import { InspectorView } from "./InspectorView";
 import { ChatGPTPlanNotice } from "./ChatGPTConnectionView";
+import { TasksView } from "./TasksView";
 
 export function RootView() {
   const model = useAppModel();
@@ -76,6 +77,8 @@ export function RootView() {
           model.closeAgentProfile();
         } else if (snapshot.isNewChatPresented) {
           model.closeNewChat();
+        } else if (snapshot.isTasksPresented) {
+          model.closeTasks();
         }
       }
     };
@@ -87,6 +90,7 @@ export function RootView() {
     snapshot.isSettingsPresented,
     snapshot.isAgentProfilePresented,
     snapshot.isNewChatPresented,
+    snapshot.isTasksPresented,
   ]);
 
   return (
@@ -115,7 +119,7 @@ function ChatView() {
       {snapshot.isSidebarPresented ? (
         <div className="drawer-backdrop" onClick={() => model.closeSidebar()} />
       ) : null}
-      <main className="chat-main">
+      {snapshot.isTasksPresented ? <TasksView /> : <main className="chat-main">
         {snapshot.isNewChatPresented ? (
           <NewChatView />
         ) : (
@@ -124,7 +128,7 @@ function ChatView() {
             <ThreadView />
           </>
         )}
-      </main>
+      </main>}
       {snapshot.isAgentProfilePresented ? <AgentProfileView /> : null}
       {snapshot.isInspectorPresented ? <InspectorView /> : null}
     </>

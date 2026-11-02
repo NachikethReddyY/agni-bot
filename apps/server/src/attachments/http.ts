@@ -39,7 +39,8 @@ export async function attachmentRequest(request: Request, db: Database, dbPath: 
         const data = await request.formData();
         const file = data.get("file");
         if (!(file instanceof File) || data.getAll("file").length !== 1) return reply({ error: "Upload one file at a time." }, 400);
-        return reply({ attachment: await saveAttachment(db, dbPath, device.id, file) }, 201);
+        const purpose = data.get("purpose") === "task" ? "task" : "chat";
+        return reply({ attachment: await saveAttachment(db, dbPath, device.id, file, purpose) }, 201);
       } finally { activeUploads--; }
     }
     const id = /^\/attachments\/(att_[a-zA-Z0-9_-]+)$/.exec(path)?.[1];

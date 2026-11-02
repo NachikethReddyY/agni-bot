@@ -1,4 +1,4 @@
-import { validateAttachments, linkAttachments, messageAttachments } from "../attachments/store";
+import { attachmentInfo, getAttachment as getAttachmentRow, validateAttachments, linkAttachments, messageAttachments } from "../attachments/store";
 import type { AttachmentInfo } from "@agni/protocol";
 /**
  * Client frame dispatch. One session per WebSocket connection:
@@ -64,8 +64,9 @@ import { putAgentMemory, listAgentMemories, type AgentMemoryRow } from "../store
 import { appendChannelMessage, ensureDMChannel, getChannel } from "../stores/channels";
 import { canonicalURL, saveLink, searchLinks } from "../stores/links";
 import { buildShareDocument, publishShare, shareBaseURL } from "../share/document";
-import { createTask, getTask, listTasks, setTaskStatus, snoozeTask, cancelDelegation, clearPendingQuestion, setDelegationJob, setDelegationState, taskInfo } from "../stores/tasks";
+import { createTask, createTaskList, editTask, getTask, listTaskActivity, listTaskLists, listTasks, setTaskStatus, snoozeTask, cancelDelegation, clearPendingQuestion, setDelegationJob, setDelegationState, taskInfo } from "../stores/tasks";
 import { fetchPage } from "../tools/fetch-url";
+import { scheduleTaskReminder } from "../jobs/task-reminders";
 import type { PluginService } from "../plugins/service";
 import { pluginMailResolver } from "../plugins/credentials";
 import type { FrameLog } from "./frame-log";
@@ -158,6 +159,12 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleJobDelete(deps, session, frame);
     case "task.list":
       return handleTaskList(deps, session, frame);
+    case "task.create":
+      return handleTaskCreate(deps, session, frame);
+    case "task.list.create":
+      return handleTaskListCreate(deps, session, frame);
+    case "task.activity":
+      return handleTaskActivity(deps, session, frame);
     case "memory.list":
       return handleMemoryList(deps, session, frame);
     case "task.update":
@@ -766,9 +773,9 @@ async function captureMessage(deps: DispatchDeps, session: Session, thread: Thre
   }
 }
 
-function parseTaskCapture(value: string): { title: string; dueAt?: string; priority?: "low"|"normal"|"high" } {
-  let title = value.trim(), dueAt: string | undefined, priority: "low"|"normal"|"high" = "normal";
-  const p = title.match(/\s+priority\s*:\s*(low|normal|high)\s*$/i);
+function parseTaskCapture(value: string): { title: string; dueAt?: string; priority?: "low"|"normal"|"high"|"urgent" } {
+  let title = value.trim(), dueAt: string | undefined, priority: "low"|"normal"|"high"|"urgent" = "normal";
+  const p = title.match(/\s+priority\s*:\s*(low|normal|high|urgent)\s*$/i);
   if (p) { priority = p[1]!.toLowerCase() as typeof priority; title = title.slice(0,p.index).trim(); }
   const due = title.match(/\s+by\s+(\d{4}-\d{2}-\d{2})(?:\s+(\d{2}:\d{2}))?\s*$/i);
   if (due) {
@@ -788,7 +795,32 @@ function parseTaskCapture(value: string): { title: string; dueAt?: string; prior
 function handleTaskList(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame,{type:"task.list"}>): void {
   if (!requireAuth(deps,session)) return;
   const status = frame.status ?? "open";
-  deps.reply({ type:"task.list.ok", tasks:listTasks(deps.db,{status,limit:frame.limit,includeSnoozed:status==="open"}).map(taskSnapshot) });
+  deps.reply({ type:"task.list.ok", tasks:listTasks(deps.db,{status,limit:frame.limit,includeSnoozed:status==="open"}).map((task) => taskSnapshot(task,deps.db)), lists:listTaskLists(deps.db).map((list) => ({ id:list.id,name:list.name,position:list.position,taskCount:list.task_count })) });
+}
+
+function handleTaskCreate(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame,{type:"task.create"}>): void {
+  if (!requireAuth(deps,session)) return;
+  try {
+    if (frame.attachmentIDs?.length) validateAttachments(deps.db,frame.attachmentIDs,session.device?.id ?? "");
+    const task = createTask(deps.db,{title:frame.title,description:frame.description,dueAt:frame.dueAt,reminderAt:frame.reminderAt,deadlineAt:frame.deadlineAt,labels:frame.labels,repeatRule:frame.repeatRule,priority:frame.priority,ownerDeviceID:session.device?.id,listID:frame.listID,parentTaskID:frame.parentTaskID,attachmentIDs:frame.attachmentIDs});
+    scheduleTaskReminder(deps.db,task.id);
+    deps.reply({type:"task.create.ok",task:taskSnapshot(task,deps.db)});
+  } catch (error) { sendError(deps,session,"bad_task",error instanceof Error?error.message:String(error)); }
+}
+
+function handleTaskListCreate(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame,{type:"task.list.create"}>): void {
+  if (!requireAuth(deps,session)) return;
+  try {
+    createTaskList(deps.db,frame.name);
+    deps.reply({type:"task.list.create.ok",lists:listTaskLists(deps.db).map((list) => ({id:list.id,name:list.name,position:list.position,taskCount:list.task_count}))});
+  } catch (error) { sendError(deps,session,"bad_task_list",error instanceof Error?error.message:String(error)); }
+}
+
+function handleTaskActivity(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame,{type:"task.activity"}>): void {
+  if (!requireAuth(deps,session)) return;
+  const task = getTask(deps.db,frame.taskID);
+  if (!task) return sendError(deps,session,"unknown_task",`no task ${frame.taskID}`);
+  deps.reply({type:"task.activity.ok",taskID:frame.taskID,activity:listTaskActivity(deps.db,frame.taskID).map((entry) => ({id:entry.id,actor:entry.actor,action:entry.action,detail:entry.detail,createdAt:entry.created_at}))});
 }
 
 /**
@@ -833,14 +865,17 @@ function handleTaskUpdate(deps: DispatchDeps, session: Session, frame: Extract<C
     if (frame.action === "cancel") {
       const cancelled = cancelDelegation(deps.db, old.id);
       if (!cancelled) return sendError(deps, session, "unknown_task", `no task ${frame.taskID}`);
-      deps.reply({ type: "task.update.ok", task: taskSnapshot(cancelled) });
+      deps.reply({ type: "task.update.ok", task: taskSnapshot(cancelled,deps.db) });
+      scheduleTaskReminder(deps.db,old.id);
       return;
     }
-    const updated=frame.action==="done"?setTaskStatus(deps.db,old.id,"done"):
+    const updated=frame.action==="edit"?editTask(deps.db,old.id,{title:frame.title,description:frame.description,dueAt:frame.dueAt,reminderAt:frame.reminderAt,deadlineAt:frame.deadlineAt,labels:frame.labels,workflowStatus:frame.workflowStatus,progressNote:frame.progressNote,repeatRule:frame.repeatRule,priority:frame.priority,listID:frame.listID}):
+      frame.action==="done"?setTaskStatus(deps.db,old.id,"done"):
       frame.action==="reopen"?setTaskStatus(deps.db,old.id,"open"):
       frame.until?snoozeTask(deps.db,old.id,frame.until):null;
     if(!updated)return sendError(deps,session,"bad_task_action","snooze requires an ISO timestamp in the future");
-    deps.reply({type:"task.update.ok",task:taskSnapshot(updated)});
+    scheduleTaskReminder(deps.db,updated.id);
+    deps.reply({type:"task.update.ok",task:taskSnapshot(updated,deps.db)});
   } catch(error) { sendError(deps,session,"bad_task_action",error instanceof Error?error.message:String(error)); }
 }
 
@@ -885,7 +920,7 @@ function handleTaskAnswer(deps: DispatchDeps, session: Session, frame: Extract<C
   });
   setDelegationJob(deps.db, task.id, job.id);
   const updated = getTask(deps.db, task.id);
-  if (updated) deps.reply({ type: "task.answer.ok", task: taskSnapshot(updated) });
+  if (updated) deps.reply({ type: "task.answer.ok", task: taskSnapshot(updated,deps.db) });
 }
 
 /**
@@ -911,8 +946,10 @@ async function handleBindDirect(deps: DispatchDeps, session: Session, frame: Ext
   });
 }
 
-function taskSnapshot(task: ReturnType<typeof listTasks>[number]): TaskInfo {
-  return taskInfo(task);
+function taskSnapshot(task: ReturnType<typeof listTasks>[number], db: Database): TaskInfo {
+  const info = taskInfo(task);
+  info.attachments = info.attachmentIDs?.map((id) => getAttachmentRow(db,id)).filter((row): row is NonNullable<typeof row> => row !== null).map(attachmentInfo) ?? [];
+  return info;
 }
 
 /** Model-call deps for the conversation seam (summary generation, rollovers). */

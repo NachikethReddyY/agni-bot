@@ -47,7 +47,7 @@ export async function deleteDraftAttachment(db: Database, id: string, deviceID: 
   db.run("DELETE FROM attachments WHERE id = ?", [id]);
   await unlink(row.path).catch(() => undefined);
 }
-export async function saveAttachment(db: Database, dbPath: string, deviceID: string, file: File): Promise<AttachmentInfo> {
+export async function saveAttachment(db: Database, dbPath: string, deviceID: string, file: File, purpose: "chat" | "task" = "chat"): Promise<AttachmentInfo> {
   if (file.size === 0 || file.size > MAX_ATTACHMENT_BYTES) throw new Error("Files must be between 1 byte and 10 MB.");
   const stale = db.query<{ id: string; device_id: string }, [string]>(`SELECT id, device_id FROM attachments
     WHERE created_at < ? AND NOT EXISTS (SELECT 1 FROM message_attachments WHERE attachment_id = attachments.id)`)
@@ -96,7 +96,9 @@ export async function saveAttachment(db: Database, dbPath: string, deviceID: str
     throw new Error("Supported files: PNG, JPEG, WebP, text/source files, and PDFs with selectable text.");
   }
   const id = newID("att");
-  const directory = join(dirname(dbPath), "attachments");
+  const directory = purpose === "task"
+    ? join(dirname(dbPath), "attachments", "documents")
+    : join(dirname(dbPath), "attachments");
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const path = join(directory, id);
   await Bun.write(path, bytes);

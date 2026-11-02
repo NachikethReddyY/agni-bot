@@ -17,6 +17,7 @@ import { registerBriefJob } from "./brief";
 import { registerTaggerJob } from "./tagger";
 import { registerMemoryJobs } from "./memory";
 import { registerRolloverJob } from "./rollover";
+import { registerTaskReminderJob } from "./task-reminders";
 
 export interface AllJobsDeps {
   db: Database;
@@ -30,6 +31,7 @@ export interface AllJobsDeps {
 export function registerAllJobs(runner: JobRunner, deps: AllJobsDeps): void {
   registerTurnJob(runner, { db: deps.db, router: deps.router, settings: deps.settings, emit: deps.emit });
   registerBriefJob(runner, { db: deps.db, emit: deps.emit });
+  registerTaskReminderJob(runner, { db: deps.db, emit: deps.emit });
   // TAG-001: memory is extracted in batches, never on the path of a turn.
   registerTaggerJob(runner, { db: deps.db, router: deps.router, emit: deps.emit });
   // MEM-003/MEM-006: vectors, the nightly sweep, the summary rollup.

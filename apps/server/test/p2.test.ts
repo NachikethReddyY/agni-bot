@@ -45,7 +45,7 @@ describe("P2 stores", () => {
     const later = createTask(db, { title: "Later", dueAt: "2027-01-02T12:00:00Z" });
     const sooner = createTask(db, { title: "Sooner", dueAt: "2027-01-01T12:00:00Z", priority: "high" });
     expect(listTasks(db).map((row) => row.id)).toEqual([sooner.id, later.id]);
-    expect(() => createTask(db!, { title: "Bad", priority: "urgent" as never })).toThrow("invalid task priority");
+    expect(() => createTask(db!, { title: "Bad", priority: "critical" as never })).toThrow("invalid task priority");
     const snoozed = snoozeTask(db, sooner.id, "2099-01-01T12:00:00Z");
     expect(snoozed?.status).toBe("snoozed");
     expect(setTaskStatus(db, sooner.id, "done")?.status).toBe("done");
