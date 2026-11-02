@@ -3,6 +3,7 @@ import type { ServerFrameBody } from "@agni/protocol";
 import { enqueueJob, type JobRow } from "../stores/jobs";
 import { editTask, getTask, setTaskReminderJob } from "../stores/tasks";
 import type { JobRunner } from "./runner";
+import { defaultPersona } from "../agent/personas";
 
 interface ReminderPayload { taskID: string; reminderAt: string }
 
@@ -35,10 +36,16 @@ export function registerTaskReminderJob(runner: JobRunner, deps: { db: Database;
     catch { throw new Error("invalid task reminder payload"); }
     const task = getTask(deps.db,payload.taskID);
     if (!task || task.status === "done" || task.reminder_at !== payload.reminderAt) return { result:"task reminder is no longer active" };
-    deps.emit({type:"notify",title:"Task reminder",body:task.title,sound:false});
+    deps.emit({type:"notify",title:"Task reminder",body:task.title,sound:false,agentId:defaultPersona().id});
     if (task.repeat_rule !== "none") {
-      const nextReminder = advance(new Date(payload.reminderAt),task.repeat_rule).toISOString();
-      const nextDue = task.due_at ? advance(new Date(task.due_at),task.repeat_rule).toISOString() : null;
+      // Catch-up after downtime fires once, then lands on the next future occurrence.
+      let steps = 0;
+      let reminder = advance(new Date(payload.reminderAt),task.repeat_rule);
+      while (reminder.getTime() <= Date.now() && steps++ < 5000) reminder = advance(reminder,task.repeat_rule);
+      const nextReminder = reminder.toISOString();
+      let due = task.due_at ? advance(new Date(task.due_at),task.repeat_rule) : null;
+      for (let i = 0; due && i < steps; i += 1) due = advance(due,task.repeat_rule);
+      const nextDue = due ? due.toISOString() : null;
       editTask(deps.db,task.id,{reminderAt:nextReminder,dueAt:nextDue},"scheduler");
       scheduleTaskReminder(deps.db,task.id);
     } else setTaskReminderJob(deps.db,task.id,null);

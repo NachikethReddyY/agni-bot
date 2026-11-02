@@ -19,6 +19,7 @@ import type { ToolRegistry } from "./registry";
 import { appendChannelMessage } from "../stores/channels";
 import { setPendingQuestion, getTask, taskInfo } from "../stores/tasks";
 import { newID } from "../util/ids";
+import { stripPeerTags } from "../agent/peer-message";
 
 export interface RequestOwnerInputDeps {
   db: Database;
@@ -55,9 +56,10 @@ export function registerRequestOwnerInputTool(registry: ToolRegistry, deps: Requ
     schema: objectSchema({
       question: { type: "string", minLength: 1, maxLength: 1_000, description: "The question, in one or two sentences." },
     }, ["question"]),
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const input = (args ?? {}) as Record<string, unknown>;
-      const question = String(input.question ?? "").trim();
+      const rawQuestion = String(input.question ?? "").trim();
+      const question = ctx.peerInput ? stripPeerTags(rawQuestion) : rawQuestion;
       if (!question) throw new Error("question is required");
       if (question.length > 1_000) throw new Error("question must be at most 1000 characters");
 
@@ -77,6 +79,7 @@ export function registerRequestOwnerInputTool(registry: ToolRegistry, deps: Requ
         text: question,
         uiHint: "needs_input",
         toAgentID: deps.task.parentAgentID,
+        peerInfluenced: Boolean(ctx.peerInput),
       });
       deps.emit({
         type: "msg.new",

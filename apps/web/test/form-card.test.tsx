@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SecretStore, type FrameTransport, type HealthReport } from "@agni/client";
 import { AppModel } from "../src/state/app-model";
 import { silentNotifications } from "../src/state/notifications";
@@ -33,6 +33,12 @@ function renderApp(model: AppModel) {
   );
 }
 
+function connectStub(model: AppModel): void {
+  const inner = model as unknown as { connection: unknown; connectionState: unknown };
+  inner.connection = { send: async () => undefined };
+  inner.connectionState = { kind: "ready", lastSeq: 0 };
+}
+
 function frame(model: AppModel, value: unknown): void {
   (model as unknown as { handleFrame: (value: unknown) => void }).handleFrame(value);
 }
@@ -49,7 +55,7 @@ afterEach(() => {
 });
 
 describe("a question the agent asked", () => {
-  it("draws the choices with letters, and Done when more than one may be chosen", () => {
+  it("draws the choices with letters, and Done when more than one may be chosen", async () => {
     SecretStore.save("test-token");
     const model = new AppModel({
       makeTransport: idleTransport,
@@ -67,6 +73,7 @@ describe("a question the agent asked", () => {
       multiple: true,
       kind: "choice",
     });
+    connectStub(model);
     renderApp(model);
 
     expect(screen.getAllByText("Which sections should the update cover?").length).toBeGreaterThan(0);
@@ -79,10 +86,12 @@ describe("a question the agent asked", () => {
     fireEvent.click(screen.getByText("Key hires this week"));
     fireEvent.click(screen.getByText("Product launches"));
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
-    expect(model.getSnapshot().conversation.forms[0]?.answer).toBe("Key hires this week, Product launches");
+    await waitFor(() =>
+      expect(model.getSnapshot().conversation.forms[0]?.answer).toBe("Key hires this week, Product launches"),
+    );
   });
 
-  it("draws an email draft with the fields and two ways out", () => {
+  it("draws an email draft with the fields and two ways out", async () => {
     SecretStore.save("test-token");
     const model = new AppModel({
       makeTransport: idleTransport,
@@ -104,6 +113,7 @@ describe("a question the agent asked", () => {
         body: "Hi Sarah,\n\nCould we move the review?",
       },
     });
+    connectStub(model);
     renderApp(model);
 
     expect(screen.getByText("New email")).toBeInTheDocument();
@@ -112,6 +122,6 @@ describe("a question the agent asked", () => {
     expect(screen.getByRole("button", { name: "Send email" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
-    expect(model.getSnapshot().conversation.forms[0]?.answer).toBe("Discard");
+    await waitFor(() => expect(model.getSnapshot().conversation.forms[0]?.answer).toBe("Discard"));
   });
 });

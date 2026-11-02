@@ -2,6 +2,8 @@
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
+import { providerConfigPath } from "./providers";
+import { homePath } from "../home";
 import {
   loadCustomProviders,
   loadProviders,
@@ -53,7 +55,7 @@ export async function addProviderCredential(
     return { ok: false, code: "provider_exists", message: `${target.label} is already configured.` };
   }
 
-  const envPath = resolve(process.cwd(), ".env");
+  const envPath = homePath("config.env");
   const temporaryPath = `${envPath}.${randomUUID()}.tmp`;
   try {
     const nextContents = await writeEnvValues(envPath, { [target.envKey]: apiKey });
@@ -93,7 +95,7 @@ async function addCustomProvider(
     model: model?.trim() ? validateModel(model) : "",
     envKey,
   };
-  const envPath = resolve(process.cwd(), ".env");
+  const envPath = homePath("config.env");
   const temporaryPath = `${envPath}.${randomUUID()}.tmp`;
   try {
     const nextContents = await writeEnvValues(envPath, { [envKey]: apiKey });
@@ -163,13 +165,14 @@ async function writeEnvValues(envPath: string, values: Record<string, string>): 
 
 /** Write the .env file atomically, mode 600, so a key is never half-written. */
 async function writeEnvFile(envPath: string, temporaryPath: string, contents: string): Promise<void> {
+  await mkdir(dirname(envPath), { recursive: true, mode: 0o700 });
   await writeFile(temporaryPath, contents, { encoding: "utf8", mode: 0o600, flag: "wx" });
   await rename(temporaryPath, envPath);
   await chmod(envPath, 0o600);
 }
 
 async function saveProviderModel(providerID: string, model: string): Promise<void> {
-  const path = resolve(Bun.env.AGNI_PROVIDER_CONFIG_PATH?.trim() || "data/providers.json");
+  const path = providerConfigPath();
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   await mkdir(dirname(path), { recursive: true });
   let models: Record<string, string> = {};
@@ -196,7 +199,7 @@ async function saveProviderModel(providerID: string, model: string): Promise<voi
 
 /** Store a custom endpoint next to the chosen models. */
 async function saveCustomProvider(entry: CustomProviderEntry): Promise<void> {
-  const path = resolve(Bun.env.AGNI_PROVIDER_CONFIG_PATH?.trim() || "data/providers.json");
+  const path = providerConfigPath();
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   await mkdir(dirname(path), { recursive: true });
   let models: Record<string, string> = {};

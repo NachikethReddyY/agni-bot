@@ -21,10 +21,16 @@ export type SecretStoreKind = "browser" | "memory";
 
 export function defaultServerSettings(): ServerSettings {
   return {
-    url: "127.0.0.1:8787",
+    url: pageOrigin() ?? "127.0.0.1:8787",
     deviceName: browserDeviceName(),
     lastSeq: 0,
   };
+}
+
+/** The page's own origin when served over http(s): the daemon serves the web app. */
+export function pageOrigin(): string | null {
+  if (typeof location === "undefined" || !/^https?:$/.test(location.protocol)) return null;
+  return `${location.protocol}//${location.host}`;
 }
 
 function browserDeviceName(): string {

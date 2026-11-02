@@ -23,7 +23,7 @@ import {
 import { consolidateMemories } from "../src/jobs/memory";
 import { registerExpandTool } from "../src/tools/expand-tool";
 import { ToolRegistry } from "../src/tools/registry";
-import { previousBlockTail, rewriteForRetrieval } from "../src/agent/retrieval";
+import { previousBlockTail, retrieveFacts, rewriteForRetrieval } from "../src/agent/retrieval";
 import { formatBrief } from "../src/tools/delegate-task-tool";
 import { appendMessage, createThread } from "../src/stores/threads";
 
@@ -91,6 +91,19 @@ describe("vector search", () => {
     expect(hits[0]!.row.id).toBe(near.id);
   });
 
+  test("the nearest fact is found past the first few dozen rows", () => {
+    db = openDatabase(":memory:");
+    for (let index = 0; index < 30; index += 1) {
+      const row = putAgentMemory(db, { scope: "global_user", keySlug: `far-${index}`, content: `Unrelated fact ${index}.` });
+      setMemoryEmbedding(db, row.id, Float32Array.from([0, 1, 0]), "test-model");
+    }
+    const near = putAgentMemory(db, { scope: "global_user", keySlug: "near", content: "Deployments happen on Tuesday." });
+    setMemoryEmbedding(db, near.id, Float32Array.from([1, 0, 0]), "test-model");
+
+    const hits = searchMemoriesByVector(db, { vector: Float32Array.from([1, 0, 0]), callerAgentID: "ea", limit: 6 });
+    expect(hits[0]!.row.id).toBe(near.id);
+  });
+
   test("a private fact is not a neighbour of another agent", () => {
     db = openDatabase(":memory:");
     const priv = putAgentMemory(db, {
@@ -112,6 +125,20 @@ describe("vector search", () => {
     const fused = fuseHits([textHit, both], [vectorHit, both]);
     // The item both searches found comes first.
     expect(fused[0]!.row.id).toBe("c");
+  });
+
+  test("a paraphrase with no shared words is recalled through vectors", async () => {
+    db = openDatabase(":memory:");
+    const near = putAgentMemory(db, { scope: "global_user", keySlug: "near", content: "Deployments happen on Tuesday." });
+    const far = putAgentMemory(db, { scope: "global_user", keySlug: "far", content: "The office cat is called Miso." });
+    setMemoryEmbedding(db, near.id, Float32Array.from([1, 0, 0]), "test-model");
+    setMemoryEmbedding(db, far.id, Float32Array.from([0, 1, 0]), "test-model");
+    const fetchMock = (async () =>
+      new Response(JSON.stringify({ data: [{ embedding: [1, 0, 0] }] }), { status: 200 })) as unknown as typeof fetch;
+
+    const result = await retrieveFacts(db, { query: "when do we ship releases", callerAgentID: "ea", embedder, fetchFn: fetchMock });
+    expect(result.usedVectors).toBe(true);
+    expect(result.hits.map((hit) => hit.row.id)).toEqual([near.id]);
   });
 });
 

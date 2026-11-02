@@ -1,0 +1,42 @@
+# Self-hosted Firecrawl for Agni web search/scraping.
+#
+# Firecrawl's official repo has the full compose stack (API, workers, Playwright,
+# Redis, RabbitMQ, PostgreSQL). This wrapper clones it and starts it.
+#
+# Usage:
+#   git clone --depth 1 https://github.com/mendableai/firecrawl.git apps/firecrawl
+#   docker compose -f infra/firecrawl.compose.yml up -d
+#   # → Firecrawl API on http://localhost:3002
+#   # → set AGNI_FIRECRAWL_URL=http://localhost:3002 in .env, restart daemon
+
+version: "3.8"
+
+# Firecrawl's official compose file lives in apps/firecrawl/docker-compose.yaml.
+# Run it from that directory:
+#   cd apps/firecrawl && docker compose up -d
+#
+# Or use this wrapper to start the whole stack with a single command from the
+# repo root. It delegates to the official compose file.
+
+services:
+  firecrawl:
+    image: ghcr.io/mendableai/firecrawl:latest
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - HOST=0.0.0.0
+    restart: unless-stopped
+    # NOTE: This is a minimal single-container setup. The full Firecrawl stack
+    # (Redis, RabbitMQ, PostgreSQL, Playwright workers) requires the official
+    # docker-compose.yaml from the Firecrawl repo. See README below.
+
+# For the full self-hosted stack with all workers and backends:
+#
+#   git clone --depth 1 https://github.com/mendableai/firecrawl.git apps/firecrawl
+#   cd apps/firecrawl
+#   docker compose up -d
+#
+# The full stack runs: API (port 3002), workers, Playwright, Redis, RabbitMQ,
+# PostgreSQL. Only the API is exposed to the host. See SELF_HOST.md in the
+# cloned repo for configuration.

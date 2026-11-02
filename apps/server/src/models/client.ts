@@ -71,7 +71,11 @@ export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
   signal?: AbortSignal;
-  /** Abort the attempt if no content token arrives within this window. */
+  /**
+   * Abort the attempt if no content token arrives within this window (counted
+   * from before the request, so it covers the header wait), or if the stream
+   * then goes silent for this long.
+   */
   firstTokenTimeoutMs: number;
   onDelta: (delta: string) => void;
   temperature?: number;
@@ -114,6 +118,11 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
   const controller = new AbortController();
   let timedOut = false;
   let firstTokenTimer: ReturnType<typeof setTimeout> | undefined;
+  // One timer: the first-token deadline until output starts, then a stall timer re-armed per chunk.
+  const arm = (): void => {
+    if (firstTokenTimer !== undefined) clearTimeout(firstTokenTimer);
+    firstTokenTimer = setTimeout(() => { timedOut = true; controller.abort(); }, request.firstTokenTimeoutMs);
+  };
 
   const abortFromCaller = (): void => controller.abort();
   if (request.signal) {
@@ -126,6 +135,8 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
     request.signal?.removeEventListener("abort", abortFromCaller);
   };
 
+  const startedAt = Date.now();
+  arm();
   let response: Response;
   try {
     response = await fetchFn(url, {
@@ -154,12 +165,13 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
   } catch (error) {
     cleanup();
     if (request.signal?.aborted) throw new ProviderError("cancelled", { kind: "aborted" });
+    if (timedOut) throw new ProviderError(`no response within ${request.firstTokenTimeoutMs}ms`, { kind: "timeout" });
     throw new ProviderError(`request failed: ${messageOf(error)}`, { kind: "network" });
   }
 
   if (!response.ok) {
-    cleanup();
     const body = await response.text().catch(() => "");
+    cleanup();
     throw new ProviderError(`HTTP ${response.status}: ${truncate(body, 300)}`, {
       kind: "http",
       status: response.status,
@@ -171,12 +183,6 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
     throw new ProviderError("response has no body", { kind: "network" });
   }
 
-  firstTokenTimer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, request.firstTokenTimeoutMs);
-
-  const startedAt = Date.now();
   let reasoning = "";
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -187,12 +193,18 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
   let outputTokens: number | undefined;
   // Tool calls arrive as incremental fragments keyed by index; accumulate them.
   const toolFragments = new Map<number, { id?: string; name?: string; arguments: string }>();
+  // A stream that closes without [DONE] or a finish_reason was cut off, not finished.
+  let finished = false;
+  const markFirstToken = (): void => {
+    if (firstTokenMs < 0) { firstTokenMs = Date.now() - startedAt; arm(); }
+  };
 
   try {
     // SSE: one JSON event per `data:` line, terminated by `data: [DONE]`.
     streamLoop: while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (firstTokenMs >= 0) arm();
       buffer += decoder.decode(value, { stream: true });
       let newline: number;
       while ((newline = buffer.indexOf("\n")) >= 0) {
@@ -200,22 +212,20 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
         buffer = buffer.slice(newline + 1);
         if (!line.startsWith("data:")) continue;
         const payloadText = line.slice("data:".length).trim();
-        if (payloadText === "[DONE]") break streamLoop;
+        if (payloadText === "[DONE]") { finished = true; break streamLoop; }
         let payload: unknown;
         try {
           payload = JSON.parse(payloadText);
         } catch {
           continue; // keep-alive comments and partial junk are not fatal
         }
-        const choice = (payload as { choices?: Array<{ delta?: Record<string, unknown> }> }).choices?.[0];
+        const choice = (payload as { choices?: Array<{ delta?: Record<string, unknown>; finish_reason?: unknown }> }).choices?.[0];
+        if (choice?.finish_reason) finished = true;
         if (!choice?.delta) continue;
         const delta = choice.delta;
         const content = delta.content;
         if (typeof content === "string" && content.length > 0) {
-          if (firstTokenMs < 0) {
-            firstTokenMs = Date.now() - startedAt;
-            if (firstTokenTimer !== undefined) clearTimeout(firstTokenTimer);
-          }
+          markFirstToken();
           text += content;
           request.onDelta(content);
         }
@@ -225,20 +235,13 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
         // exposes it. It is never streamed to the chat.
         const thought = reasoningDelta(delta);
         if (thought.length > 0) {
-          if (firstTokenMs < 0) {
-            firstTokenMs = Date.now() - startedAt;
-            if (firstTokenTimer !== undefined) clearTimeout(firstTokenTimer);
-          }
+          markFirstToken();
           reasoning += thought;
         }
         // Accumulate tool-call fragments (OpenAI streaming shape).
         const calls = delta.tool_calls;
         if (Array.isArray(calls)) {
-          if (calls.length > 0 && firstTokenTimer !== undefined) {
-            firstTokenMs = Date.now() - startedAt;
-            clearTimeout(firstTokenTimer);
-            firstTokenTimer = undefined;
-          }
+          if (calls.length > 0) markFirstToken();
           for (const fragment of calls as Array<Record<string, unknown>>) {
             const index = typeof fragment.index === "number" ? fragment.index : 0;
             const existing = toolFragments.get(index) ?? { arguments: "" };
@@ -257,13 +260,19 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
       }
     }
   } catch (error) {
-    if (timedOut) throw new ProviderError(`no first token within ${request.firstTokenTimeoutMs}ms`, { kind: "timeout" });
+    if (timedOut) {
+      throw new ProviderError(
+        firstTokenMs < 0 ? `no first token within ${request.firstTokenTimeoutMs}ms` : `stream stalled for ${request.firstTokenTimeoutMs}ms`,
+        { kind: "timeout" },
+      );
+    }
     if (request.signal?.aborted) throw new ProviderError("cancelled", { kind: "aborted" });
     throw new ProviderError(`stream failed: ${messageOf(error)}`, { kind: "network" });
   } finally {
     cleanup();
     reader.releaseLock?.();
   }
+  if (!finished) throw new ProviderError("stream ended before the provider finished", { kind: "network" });
 
   if (firstTokenMs < 0) {
     // The stream ended without a single content token.

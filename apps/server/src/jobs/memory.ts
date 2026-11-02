@@ -60,14 +60,17 @@ export function registerMemoryJobs(runner: JobRunner, deps: MemoryJobDeps): void
         ? { nextRunAt: new Date(Date.now() + 5 * 60_000).toISOString() }
         : {}),
     };
-  });
+  }, { nextRun: () => new Date(Date.now() + 5 * 60_000).toISOString() });
 
   runner.register("summary.rollup", async () => {
     // CMP-001: the ladder of summaries — block → day → epoch. Deterministic,
     // so it costs nothing and can run in the background.
     const result = rollupSummaries(deps.db);
-    return { result: `rolled up ${result.days} day(s) and ${result.epochs} epoch(s)` };
-  });
+    return {
+      result: `rolled up ${result.days} day(s) and ${result.epochs} epoch(s)`,
+      nextRunAt: new Date(Date.now() + 6 * 3_600_000).toISOString(),
+    };
+  }, { nextRun: () => new Date(Date.now() + 6 * 3_600_000).toISOString() });
 
   runner.register("memory.consolidate", async () => {
     const result = consolidateMemories(deps.db);
@@ -80,7 +83,7 @@ export function registerMemoryJobs(runner: JobRunner, deps: MemoryJobDeps): void
       // The sweep is a nightly habit, not a one-off.
       nextRunAt: nextDailyRun("03:00", undefined).toISOString(),
     };
-  });
+  }, { nextRun: () => nextDailyRun("03:00", undefined).toISOString() });
 }
 
 export interface ConsolidationResult {

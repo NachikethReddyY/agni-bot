@@ -4,8 +4,8 @@
  * whether it is throwaway chatter, something that might become a durable
  * fact, a task the owner wants done, or an explicit "remember this".
  *
- * Rules first. There is no model call on this path: the instant lane has to
- * stay instant, and the classifier only has to be right enough to keep
+ * Rules first. There is no model call on this path: it runs before every
+ * turn and must stay cheap, and the classifier only has to be right enough to keep
  * ephemeral chatter out of compaction and long-term memory. Everything the
  * gate marks `temp` is still written to the durable transcript and still
  * served from the recent-turn window, so a misclassification never loses a
@@ -93,6 +93,11 @@ export function classifyTurn(text: string, previousText?: string | null): GateRe
   }
 
   return { category: "durable_candidate", salience: "recent_turns", deictic: false, reason: "substantial turn, may carry durable content" };
+}
+
+/** A greeting or an acknowledgement: nothing worth a vector search. */
+export function isSmallTalk(text: string): boolean {
+  return !text.trim() || THANKS.test(text);
 }
 
 /** Explicit remembers bypass batching and are processed immediately (GATE-003). */

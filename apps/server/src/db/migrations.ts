@@ -901,4 +901,195 @@ export const MIGRATIONS: Migration[] = [
     name: "task_progress_notes",
     sql: `ALTER TABLE tasks ADD COLUMN progress_note TEXT NOT NULL DEFAULT '';`,
   },
+  {
+    id: 38,
+    name: "peer_chains",
+    sql: `
+      CREATE TABLE peer_chains (
+        id TEXT PRIMARY KEY,
+        retried INTEGER NOT NULL DEFAULT 0,
+        stopped_at TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE peer_chain_messages (
+        chain_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(chain_id, fingerprint)
+      );
+    `,
+  },
+  {
+    id: 39,
+    name: "peer_influenced_channel_messages",
+    sql: `ALTER TABLE channel_messages ADD COLUMN peer_influenced INTEGER NOT NULL DEFAULT 0;`,
+  },
+  {
+    id: 40,
+    name: "default_bot_name_new_bot",
+    sql: `UPDATE agents SET default_name = 'New Bot', display_name = 'New Bot'
+      WHERE id = 'ea' AND display_name = 'Agni Bot';`,
+  },
+  {
+    id: 41,
+    name: "routines",
+    sql: `
+      CREATE TABLE routines (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        cron TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        misfire TEXT NOT NULL DEFAULT 'run_once',
+        preflight TEXT NOT NULL,
+        max_tokens INTEGER NOT NULL,
+        max_execution_ms INTEGER NOT NULL,
+        allowed_domains TEXT NOT NULL DEFAULT '[]',
+        thread_id TEXT,
+        last_state_hash TEXT,
+        state_context TEXT,
+        success_streak INTEGER NOT NULL DEFAULT 0,
+        failure_streak INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX routines_job_id ON routines(job_id);
+      CREATE TABLE routine_runs (
+        id TEXT PRIMARY KEY,
+        routine_id TEXT NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        outcome TEXT NOT NULL,
+        tokens INTEGER NOT NULL DEFAULT 0,
+        summary TEXT,
+        tool_trace TEXT,
+        error TEXT
+      );
+      CREATE INDEX routine_runs_routine_started ON routine_runs(routine_id, started_at);
+    `,
+  },
+  {
+    id: 42,
+    name: "queued_owner_messages",
+    sql: `
+      -- H22: an owner message is written here on receipt, before any ack, and
+      -- deleted once its turn has started. Rows left at boot are replayed.
+      CREATE TABLE queued_messages (
+        id TEXT PRIMARY KEY,
+        frame TEXT NOT NULL,
+        text TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        device_name TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    id: 43,
+    name: "fts_update_triggers_column_filter",
+    sql: `
+      -- M40: only a change to an indexed column rewrites the FTS row, so
+      -- markMemoryUsed (use_count, last_used_at) no longer touches the index.
+      DROP TRIGGER agent_memories_fts_au;
+      CREATE TRIGGER agent_memories_fts_au AFTER UPDATE OF content, tags, key_slug ON agent_memories BEGIN
+        INSERT INTO agent_memories_fts(agent_memories_fts, rowid, content, tags, key_slug)
+        VALUES ('delete', old.rowid, old.content, old.tags, old.key_slug);
+        INSERT INTO agent_memories_fts(rowid, content, tags, key_slug)
+        VALUES (new.rowid, new.content, new.tags, new.key_slug);
+      END;
+      DROP TRIGGER channel_messages_fts_au;
+      CREATE TRIGGER channel_messages_fts_au AFTER UPDATE OF text ON channel_messages BEGIN
+        INSERT INTO channel_messages_fts(channel_messages_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+        INSERT INTO channel_messages_fts(rowid, text) VALUES (new.rowid, new.text);
+      END;
+    `,
+  },
+  {
+    id: 44,
+    name: "harness_proposals",
+    sql: `
+      CREATE TABLE harness_proposals (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,               -- promote_core | demote_core | tool_failing | turn_timeouts
+        subject TEXT NOT NULL,            -- a tool name, or '*' for the whole lane
+        evidence TEXT NOT NULL,           -- JSON counts only, never transcript text
+        status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX harness_proposals_subject ON harness_proposals(kind, subject);
+    `,
+  },
+  {
+    id: 45,
+    name: "pair_codes",
+    sql: `
+      -- One-time browser pairing codes from \`agni open\` / \`agni pair --code\`.
+      CREATE TABLE pair_codes (
+        code_hash TEXT PRIMARY KEY,       -- SHA-256 of the code; the code itself is never stored
+        expires_at TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    id: 46,
+    name: "push_subscriptions",
+    sql: `
+      -- Web Push subscriptions, one per browser endpoint. Server-side only.
+      CREATE TABLE push_subscriptions (
+        endpoint TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    id: 47,
+    name: "agent_proactivity",
+    sql: `
+      -- Quiet hours and a daily cap on unprompted pushes, per bot.
+      CREATE TABLE agent_proactivity (
+        agent_id TEXT PRIMARY KEY,
+        quiet_start TEXT,                 -- "HH:MM" in the server time zone
+        quiet_end TEXT,
+        max_per_day INTEGER
+      );
+      CREATE TABLE proactive_sent (
+        agent_id TEXT NOT NULL,
+        day TEXT NOT NULL,                -- local date
+        count INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (agent_id, day)
+      );
+    `,
+  },
+  {
+    id: 48,
+    name: "task_notes",
+    sql: `
+      -- Phase 4: a shared scratchpad per delegated task. Bots working the
+      -- task append notes; the delegating bot reads them through task_status,
+      -- filtered by the writer's visibility like every other cross-bot read.
+      CREATE TABLE task_notes (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_task_notes_task ON task_notes(task_id, created_at);
+    `,
+  },
+  {
+    id: 49,
+    name: "agent_critic",
+    sql: `
+      -- Phase 4: opt-in critic. When set, this bot's outbound email drafts
+      -- are reviewed by the named bot before the owner's approval card.
+      ALTER TABLE agents ADD COLUMN critic_agent_id TEXT;
+    `,
+  },
 ];

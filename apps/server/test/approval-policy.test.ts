@@ -30,14 +30,15 @@ describe("approval policy: destructive only", () => {
       ["task_create", { title: "file taxes" }],
       ["task_update", { id: "task_1", action: "done" }],
       ["tasks_list", {}],
+      // Free because the tools themselves refuse paths outside scratch.
       ["read_file", { path: "/etc/hosts" }],
       ["grep", { pattern: "foo" }],
       ["mail_read", { id: "msg_1" }],
       // The agent's own mailbox is ungated by owner decision (2026-10-17).
-      ["mail_send", { account: "agni", to: "a@b.c", subject: "hi" }],
-      // Reversible shell is free; only destructive patterns gate.
+      ["mail_send", { account: "agent", to: "a@b.c", subject: "hi" }],
+      ["mail_send", { to: "a@b.c", subject: "hi" }],
+      // Only a single read-only command inside scratch runs free.
       ["bash", { command: "ls -la" }],
-      ["bash", { command: "git status" }],
       // Writes inside the declared scratch tree are free.
       ["write_file", { path: join(scratchDir(), "notes.md"), content: "hi" }],
     ] as Array<[string, Record<string, unknown>]>;
@@ -51,6 +52,9 @@ describe("approval policy: destructive only", () => {
       ["bash", { command: "rm -rf /tmp/everything" }],
       ["bash", { command: "git clean -fdx" }],
       ["bash", { command: "git push --force origin main" }],
+      // Shell is allowlisted, not denylisted: anything not provably read-only asks.
+      ["bash", { command: "git status" }],
+      ["mail_send", { account: "agni", to: "a@b.c", subject: "hi" }],
       ["write_file", { path: "/etc/hosts", content: "127.0.0.1" }],
       ["write_file", { path: "apps/server/src/index.ts", content: "// clobber" }],
       ["mail_send", { account: "owner", to: "a@b.c", subject: "hi" }],

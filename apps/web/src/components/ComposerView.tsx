@@ -264,7 +264,6 @@ export function ComposerView() {
           {trimmed.length === 0 && attachments.length === 0 ? <Mic size={14} /> : <ArrowUp size={15} strokeWidth={2.4} />}
         </button>
       </div>
-      <div className="composer-hint">Enter to send · Shift+Enter for a new line · Drop files here</div>
     </div>
   );
 }

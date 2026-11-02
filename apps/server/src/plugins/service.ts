@@ -9,6 +9,7 @@ import type { PluginAccount, PluginInfo, PluginStatus, ServerFrameBody } from "@
 import type { Config } from "../config";
 import { CATALOG, manifestFor, type PluginManifest } from "./catalog";
 import * as oauth from "./oauth";
+import { mcpHub } from "./mcp";
 import {
   completeConnect,
   deleteConnection,
@@ -191,6 +192,18 @@ export class PluginService {
       return this.connect(pluginID, account);
     }
 
+    if (manifest.authKind === "mcp") {
+      // The bearer token (if the server needs one) goes to plugins.json only.
+      upsertPlugin(this.pluginsFile, pluginID, {
+        account,
+        enabled: true,
+        auth: { kind: "mcp", key: credentials.key?.trim() || undefined, url: credentials.url?.trim() || undefined },
+        connectedAt: Date.now(),
+      });
+      this.save();
+      return this.connect(pluginID, account);
+    }
+
     if (manifest.authKind === "oauth") {
       const clientID = credentials.clientID?.trim() ?? "";
       const clientSecret = credentials.clientSecret?.trim() ?? "";
@@ -278,13 +291,9 @@ export class PluginService {
       }
     }
 
+    if (manifest.authKind === "mcp") return this.connectMcp(manifest, role.capabilities, account);
     if (manifest.authKind !== "oauth") {
-      return {
-        error: {
-          code: "plugin_unavailable",
-          message: `${manifest.name} connects via MCP and is not wired yet (lands with the MCP plugin pass)`,
-        },
-      };
+      return { error: { code: "plugin_unavailable", message: `${manifest.name} cannot be connected from here` } };
     }
     const oauthClient = this.oauthDeps();
     if (!oauth.isConfigured(oauthClient)) {
@@ -308,6 +317,38 @@ export class PluginService {
       return { authorizeURL: oauth.authorizeURL(oauthClient, this.deps.config, role.scopes, tokens.state ?? "") };
     } catch (error) {
       return { error: { code: "plugin_connect_failed", message: error instanceof Error ? error.message : String(error) } };
+    }
+  }
+
+  /**
+   * MCP plugins: mark connected now, then reach the server in the background;
+   * a failure flips the row to an error the pane shows. The bearer token never
+   * leaves plugins.json.
+   */
+  private connectMcp(manifest: PluginManifest, capabilities: PluginManifest["roles"][number]["capabilities"], account: PluginAccount): { error?: { code: string; message: string } } {
+    const entry = this.authFor(manifest.id);
+    const url = entry?.auth.url || manifest.mcpUrl || "";
+    try {
+      new URL(url);
+    } catch {
+      return { error: { code: "plugin_not_configured", message: "Enter the MCP server URL." } };
+    }
+    const pending = startPending(this.deps.db, { pluginID: manifest.id, account, scopes: [], capabilities });
+    completeConnect(this.deps.db, pending.id, {}, new URL(url).host);
+    if (!entry) upsertPlugin(this.pluginsFile, manifest.id, { account, enabled: true, auth: { kind: "mcp" }, connectedAt: Date.now() });
+    else entry.label = new URL(url).host;
+    this.save();
+    this.emitState();
+    void this.reachMcp(manifest.id, pending.id, url, entry?.auth.key);
+    return {};
+  }
+
+  private async reachMcp(pluginID: string, connectionID: string, url: string, token?: string): Promise<void> {
+    try {
+      await mcpHub.connect(pluginID, url, token);
+    } catch (error) {
+      markError(this.deps.db, connectionID, error instanceof Error ? error.message : String(error));
+      this.emitState();
     }
   }
 
@@ -362,9 +403,10 @@ export class PluginService {
       // A Google-side failure must not strand the credential locally.
     }
     deleteConnection(this.deps.db, row.id);
+    await mcpHub.disconnect(row.plugin_id);
     // Clear tokens from plugins.json.
     if (entry) {
-      entry.auth = { kind: "oauth" };
+      entry.auth = { kind: manifestFor(row.plugin_id)?.authKind === "mcp" ? "mcp" : "oauth" };
       entry.label = undefined;
       entry.connectedAt = undefined;
       this.save();
@@ -390,6 +432,12 @@ export class PluginService {
   /** Auto-connect app-password and api-key plugins from plugins.json on daemon start. */
   autoConnect(): void {
     for (const manifest of CATALOG) {
+      if (manifest.authKind === "mcp") {
+        const entry = this.authFor(manifest.id);
+        const url = entry?.auth.url || manifest.mcpUrl;
+        if (entry?.enabled && url) void this.reachMcp(manifest.id, getConnectionFor(this.deps.db, manifest.id, entry.account)?.id ?? "", url, entry.auth.key);
+        continue;
+      }
       if (manifest.authKind !== "app-password" && manifest.authKind !== "api-key") continue;
       for (const role of manifest.roles) {
         const entry = this.authFor(manifest.id);
@@ -442,7 +490,7 @@ function toInfo(manifest: PluginManifest, account: PluginAccount, row?: PluginCo
     scopes: role.scopes,
     capabilities: role.capabilities,
     // OAuth kinds are reachable once the daemon has Google creds configured.
-    available: manifest.authKind === "oauth" || manifest.authKind === "app-password" || manifest.authKind === "api-key",
+    available: true,
     ...(row?.id ? { connectionID: row.id } : {}),
     ...(row?.status ? { status: row.status as PluginStatus } : {}),
     ...(row?.account_label ? { accountLabel: row.account_label } : {}),

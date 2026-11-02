@@ -9,11 +9,11 @@
  * Each skill lives at ~/.agni/skills/<name>/SKILL.md with optional YAML
  * frontmatter for name/description/category metadata.
  */
-import { homedir } from "node:os";
+import { homePath } from "../home";
 import { join, resolve, relative } from "node:path";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 
-const SKILLS_DIR = join(homedir(), ".agni", "skills");
+const SKILLS_DIR = homePath("skills");
 
 export interface SkillEntry {
   id: string;

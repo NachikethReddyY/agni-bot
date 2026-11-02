@@ -16,6 +16,7 @@ import {
   healthURL,
   isKnownFrame,
   isReady,
+  pageOrigin,
   websocketURL,
   type AgentInfo,
   type ApprovalRow,
@@ -44,6 +45,7 @@ import {
   type ThreadInfo,
 } from "@agni/client";
 import { browserNotifications, type NotificationBridge } from "./notifications";
+import { subscribePush, unsubscribePush } from "./push";
 import {
   loadPreferences,
   savePreferences,
@@ -65,6 +67,8 @@ export interface AppSnapshot {
   settings: ServerSettings;
   secretKind: SecretStoreKind | null;
   tokenIsStored: boolean;
+  /** Paired by the daemon's HttpOnly session cookie, not a stored token. */
+  cookieSession: boolean;
   isCheckingServer: boolean;
   isPairing: boolean;
   pairingError: string | null;
@@ -105,6 +109,8 @@ export interface AppSnapshot {
   exportError: string | null;
 
   isInspectorPresented: boolean;
+  /** The full-screen bot debugger is open. */
+  isDebugPresented: boolean;
   /** The left pane is showing the task/reminder list instead of the roster. */
   isTasksPresented: boolean;
   isSettingsPresented: boolean;
@@ -142,7 +148,7 @@ export function isPrimaryAgent(agent: AgentInfo | null | undefined): boolean {
 }
 
 function seedAgents(): AgentInfo[] {
-  return [{ id: "ea", name: "Agni Bot", color: "#f0b95a", tools: [] }];
+  return [{ id: "ea", name: "New Bot", color: "#f0b95a", tools: [] }];
 }
 
 /** What the "+" button makes: an agent with a placeholder name, not a form. */
@@ -195,6 +201,7 @@ export class AppModel {
   private settings: ServerSettings;
   private secretKind: SecretStoreKind | null = null;
   private tokenIsStored = false;
+  private cookieSession = false;
   private isCheckingServer = false;
   private isPairing = false;
   private pairingError: string | null = null;
@@ -239,6 +246,7 @@ export class AppModel {
   private exportError: string | null = null;
 
   private isInspectorPresented = false;
+  private isDebugPresented = false;
   private isTasksPresented = false;
   private isSettingsPresented = false;
   private isAgentSwitcherPresented = false;
@@ -264,6 +272,11 @@ export class AppModel {
   private started = false;
 
   private readonly settingsStore: SettingsStore;
+  private unsent = new Map<string, { frame: ClientFrame; resolve: () => void }>();
+  private tokenQueue: IncomingFrame[] = [];
+  private tokenIsFrame = false;
+  private tokenTimer: ReturnType<typeof setTimeout> | number | null = null;
+  private settingsTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly notifier: NotificationBridge;
   private readonly healthFetch: (url: string) => Promise<HealthReport>;
   private readonly makeTransport: (() => FrameTransport) | undefined;
@@ -277,7 +290,10 @@ export class AppModel {
     this.healthPollMs = env.healthPollMs ?? 20_000;
     this.settings = this.settingsStore.load();
     this.applyLocationRoute(false);
-    if (typeof window !== "undefined") window.addEventListener("popstate", this.onLocationChange);
+    if (typeof window !== "undefined") {
+      window.addEventListener("popstate", this.onLocationChange);
+      window.addEventListener("pagehide", this.flushSettings);
+    }
     const stored = SecretStore.load();
     if (stored) {
       this.token = stored.token;
@@ -304,6 +320,7 @@ export class AppModel {
       settings: this.settings,
       secretKind: this.secretKind,
       tokenIsStored: this.tokenIsStored,
+      cookieSession: this.cookieSession,
       isCheckingServer: this.isCheckingServer,
       isPairing: this.isPairing,
       pairingError: this.pairingError,
@@ -336,6 +353,7 @@ export class AppModel {
       exportedLink: this.exportedLink,
       exportError: this.exportError,
       isInspectorPresented: this.isInspectorPresented,
+      isDebugPresented: this.isDebugPresented,
       isTasksPresented: this.isTasksPresented,
       isSettingsPresented: this.isSettingsPresented,
       isAgentSwitcherPresented: this.isAgentSwitcherPresented,
@@ -367,10 +385,79 @@ export class AppModel {
     if (this.started) return;
     this.started = true;
     this.notifier.request();
+    if (!this.canConnect && pageOrigin()) {
+      void this.resumeCookieSession();
+      return;
+    }
     this.screen = this.canConnect ? "chat" : "pairing";
     if (this.canConnect && typeof window !== "undefined" && window.location.pathname === "/") this.navigatePath(agentPath(this.agent));
     this.publish();
     if (this.canConnect) this.connect();
+  }
+
+  /** Served by the daemon: spend a `#code=` from `agni open`, then reuse the session cookie. */
+  private async resumeCookieSession(): Promise<void> {
+    this.isCheckingServer = true;
+    this.publish();
+    try {
+      const code = new URLSearchParams(window.location.hash.slice(1)).get("code");
+      if (code) {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+        await this.postPairCode(code, this.settings.deviceName).catch((error: unknown) => {
+          this.pairingError = error instanceof Error ? error.message : String(error);
+        });
+      }
+      const response = await fetch("/auth/session", { cache: "no-store" });
+      const session = (await response.json()) as { paired?: boolean };
+      if (session.paired) this.enterCookieSession();
+    } catch {
+      // No daemon behind this page (static hosting): the token form still works.
+    } finally {
+      this.isCheckingServer = false;
+      this.publish();
+    }
+  }
+
+  private async postPairCode(code: string, deviceName: string): Promise<void> {
+    const response = await fetch("/auth/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, name: deviceName }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(body?.error ?? `Pairing failed (${response.status}).`);
+    }
+  }
+
+  private enterCookieSession(): void {
+    this.cookieSession = true;
+    this.pairingError = null;
+    this.settings = { ...this.settings, url: pageOrigin() ?? this.settings.url };
+    this.settingsStore.save(this.settings);
+    this.screen = "chat";
+    if (typeof window !== "undefined" && window.location.pathname === "/") this.navigatePath(agentPath(this.agent));
+    this.connect();
+  }
+
+  /** The pairing view's code form. */
+  pairWithCode(code: string, device: string): void {
+    void (async () => {
+      const name = device.trim() || "This Browser";
+      this.pairingError = null;
+      this.isCheckingServer = true;
+      this.publish();
+      try {
+        await this.postPairCode(code, name);
+        this.settings = { ...this.settings, deviceName: name };
+        this.enterCookieSession();
+      } catch (error) {
+        this.pairingError = error instanceof Error ? error.message : String(error);
+      } finally {
+        this.isCheckingServer = false;
+        this.publish();
+      }
+    })();
   }
 
   private onLocationChange = (): void => { this.applyLocationRoute(true); };
@@ -408,7 +495,7 @@ export class AppModel {
   }
 
   get canConnect(): boolean {
-    return this.token.length > 0 && websocketURL(this.settings) !== null;
+    return (this.token.length > 0 || this.cookieSession) && websocketURL(this.settings) !== null;
   }
 
   get agent(): AgentInfo | null {
@@ -487,7 +574,7 @@ export class AppModel {
   }
 
   cancelConnectionEdit(): void {
-    if (!this.tokenIsStored) return;
+    if (!this.tokenIsStored && !this.cookieSession) return;
     this.pendingPairing = null;
     this.isPairing = false;
     this.connection?.stop();
@@ -503,6 +590,8 @@ export class AppModel {
     this.chatgptError = null;
     this.disconnect();
     SecretStore.clear();
+    if (this.cookieSession) void fetch("/auth/logout", { method: "POST" }).catch(() => undefined);
+    this.cookieSession = false;
     this.token = "";
     this.tokenIsStored = false;
     this.secretKind = null;
@@ -524,7 +613,7 @@ export class AppModel {
   private connect(targetSettings?: ServerSettings, targetToken?: string): void {
     const settings = { ...(targetSettings ?? this.settings) };
     const token = targetToken ?? this.token;
-    if (token.length === 0 || !websocketURL(settings)) return;
+    if ((token.length === 0 && !this.cookieSession) || !websocketURL(settings)) return;
     this.connection?.stop();
     const next = new AgniConnection({
       settings,
@@ -824,10 +913,11 @@ export class AppModel {
 
   private async attachmentRequest(path: string, init: RequestInit = {}): Promise<Response> {
     const base = healthURL(this.settings);
-    if (!base || !this.token) throw new Error("Connect to the server first.");
+    if (!base || (!this.token && !this.cookieSession)) throw new Error("Connect to the server first.");
+    // Cookie mode: same origin, so the browser sends the session cookie itself.
     const response = await fetch(new URL(path, base), {
       ...init,
-      headers: { ...init.headers, Authorization: `Bearer ${this.token}` },
+      headers: this.token ? { ...init.headers, Authorization: `Bearer ${this.token}` } : init.headers,
       signal: init.signal ?? AbortSignal.timeout(30_000),
     });
     if (!response.ok) {
@@ -922,14 +1012,39 @@ export class AppModel {
     void connection.send({ type: "msg.cancel", turnID }).catch(() => undefined);
   }
 
-  answer(approval: ApprovalRow, decision: string): void {
-    this.conversation.resolveApproval(approval.id, decision);
-    this.publish();
+  /**
+   * Send an answer and resolve the card only once the send succeeded. A failed
+   * send keeps the card pending and queues the frame for the next reconnect
+   * (`keep`; secrets are never kept, their value must not outlive the form).
+   */
+  private reply(requestID: string, frame: ClientFrame, resolve: () => void, keep = true): void {
     const connection = this.connection;
-    if (!connection) return;
-    void connection
-      .send({ type: "approve.reply", requestID: approval.id, decision: decision as "once" | "always" | "reject" })
-      .catch(() => undefined);
+    const failed = (): void => {
+      if (keep) this.unsent.set(requestID, { frame, resolve });
+      this.showToast(notice("failure", "Not sent", "Reconnecting — your answer is still pending."));
+      this.publish();
+    };
+    if (!connection || !isReady(this.connectionState)) return failed();
+    connection.send(frame).then(
+      () => {
+        this.unsent.delete(requestID);
+        resolve();
+        this.publish();
+      },
+      failed,
+    );
+  }
+
+  private flushUnsent(): void {
+    for (const [id, { frame, resolve }] of [...this.unsent]) this.reply(id, frame, resolve);
+  }
+
+  answer(approval: ApprovalRow, decision: string): void {
+    this.reply(
+      approval.id,
+      { type: "approve.reply", requestID: approval.id, decision: decision as "once" | "always" | "reject" },
+      () => this.conversation.resolveApproval(approval.id, decision),
+    );
   }
 
   /**
@@ -937,33 +1052,20 @@ export class AppModel {
    * so the turn waiting on it can carry on.
    */
   answerForm(form: FormRow, answer: string): void {
-    this.conversation.resolveForm(form.id, answer);
-    this.publish();
-    const connection = this.connection;
-    if (!connection) return;
-    void connection
-      .send({ type: "form.answer", requestID: form.id, answer })
-      .catch(() => undefined);
+    this.reply(form.id, { type: "form.answer", requestID: form.id, answer }, () =>
+      this.conversation.resolveForm(form.id, answer),
+    );
   }
 
-  /**
-   * Send a one-time secret. The value is never put into app state or the
-   * transcript; the row disappears before the frame leaves.
-   */
+  /** Send a one-time secret. The value is never kept in app state or the transcript. */
   submitSecret(secret: SecretRow, value: string): void {
-    this.conversation.resolveSecret(secret.id);
-    this.publish();
-    const connection = this.connection;
-    if (!connection) return;
-    void connection.send({ type: "secret.reply", requestID: secret.id, value }).catch(() => undefined);
+    this.reply(secret.id, { type: "secret.reply", requestID: secret.id, value }, () =>
+      this.conversation.resolveSecret(secret.id), false);
   }
 
   cancelSecret(secret: SecretRow): void {
-    this.conversation.resolveSecret(secret.id);
-    this.publish();
-    const connection = this.connection;
-    if (!connection) return;
-    void connection.send({ type: "secret.cancel", requestID: secret.id }).catch(() => undefined);
+    this.reply(secret.id, { type: "secret.cancel", requestID: secret.id }, () =>
+      this.conversation.resolveSecret(secret.id));
   }
 
   selectAgent(agent: AgentInfo, updateRoute = true): void {
@@ -1005,6 +1107,12 @@ export class AppModel {
     const connection = this.connection;
     if (!connection) return;
     void connection.send({ type: "job.set", jobID: job.id, action: "run" }).catch(() => undefined);
+  }
+
+  setRoutineDomains(job: JobInfo, domains: string[]): void {
+    const connection = this.connection;
+    if (!connection) return;
+    void connection.send({ type: "routine.domains.set", jobID: job.id, domains }).catch(() => undefined);
   }
 
   openTask(_job: JobInfo): void {
@@ -1192,6 +1300,16 @@ export class AppModel {
     this.publish();
   }
 
+  toggleDebug(): void {
+    this.isDebugPresented = !this.isDebugPresented;
+    this.publish();
+  }
+
+  /** Read the daemon's owner-only bot debugger data (GET /debug/*). */
+  async debugData<T>(path: string, signal?: AbortSignal): Promise<T> {
+    return await (await this.attachmentRequest(`/debug/${path}`, { signal })).json() as T;
+  }
+
   /** Show the task/reminder list in place of the roster. */
   toggleTasks(): void {
     this.isTasksPresented = !this.isTasksPresented;
@@ -1280,7 +1398,21 @@ export class AppModel {
     this.preferences = { ...this.preferences, [key]: value };
     savePreferences(this.preferences);
     if (key === "typingIndicator" && !value) this.updateTypingState(false);
+    if (key === "push") this.syncPush();
     this.publish();
+  }
+
+  /** Opt in/out of Web Push: ask the daemon for its key (answered by `push.vapid`), or drop the subscription. */
+  private syncPush(): void {
+    const connection = this.connection;
+    if (!connection) return;
+    if (this.preferences.push) {
+      void connection.send({ type: "push.vapid.get" }).catch(() => undefined);
+    } else {
+      void unsubscribePush()
+        .then(async (endpoint) => { if (endpoint) await connection.send({ type: "push.unsubscribe", endpoint }); })
+        .catch(() => undefined);
+    }
   }
 
   /** Pin an agent to the top of the roster, or unpin it. */
@@ -1383,8 +1515,10 @@ export class AppModel {
             this.refreshTasks();
             this.refreshPlugins();
             this.refreshAppearance();
+            if (this.preferences.push) this.syncPush();
             this.startHealthPolling();
             if (!wasReady) this.openConversation(this.conversation.agentID);
+            this.flushUnsent();
             break;
           }
           case "refused":
@@ -1430,8 +1564,7 @@ export class AppModel {
 
       case "lastSeq":
         this.settings = { ...this.settings, lastSeq: event.seq };
-        this.settingsStore.save(this.settings);
-        this.publish();
+        this.saveSettingsSoon();
         return;
     }
   }
@@ -1440,9 +1573,48 @@ export class AppModel {
     return this.conversation.agentID === "ea" ? "main" : `dm:${this.conversation.agentID}`;
   }
 
+  private saveSettingsSoon(): void {
+    if (this.settingsTimer !== null) return;
+    this.settingsTimer = setTimeout(() => this.flushSettings(), 1000);
+  }
+
+  /** Also called on pagehide so a reload resumes from the real lastSeq. */
+  flushSettings = (): void => {
+    if (this.settingsTimer === null) return;
+    clearTimeout(this.settingsTimer);
+    this.settingsTimer = null;
+    this.settingsStore.save(this.settings);
+  };
+
+  /** Apply every queued token in one pass: one publish per frame of animation. */
+  flushTokens = (): void => {
+    if (this.tokenTimer !== null) {
+      if (this.tokenIsFrame) cancelAnimationFrame(this.tokenTimer as number);
+      else clearTimeout(this.tokenTimer as ReturnType<typeof setTimeout>);
+      this.tokenTimer = null;
+    }
+    const queue = this.tokenQueue;
+    if (queue.length === 0) return;
+    this.tokenQueue = [];
+    for (const frame of queue) this.run(this.conversation.apply(frame));
+    this.publish();
+  };
+
   private handleFrame(frame: IncomingFrame): void {
     // A frame type this build does not know is data, not an instruction.
     if (!isKnownFrame(frame)) return;
+
+    if (frame.type === "token") {
+      this.tokenQueue.push(frame);
+      if (this.tokenTimer === null) {
+        this.tokenIsFrame = typeof requestAnimationFrame === "function";
+        this.tokenTimer = this.tokenIsFrame
+          ? requestAnimationFrame(this.flushTokens)
+          : setTimeout(this.flushTokens, 16);
+      }
+      return;
+    }
+    this.flushTokens(); // keep order: tokens before whatever arrived after them
 
     // AppModel owns channel routing; the reducer owns the transcript.
     if (frame.type === "status.update") {
@@ -1458,6 +1630,20 @@ export class AppModel {
       this.statusText = null;
       this.run(this.conversation.apply(frame));
       this.publish();
+      return;
+    }
+
+    if (frame.type === "push.vapid") {
+      const connection = this.connection;
+      void subscribePush(frame.publicKey)
+        .then((json) => {
+          if (json?.endpoint && json.keys?.p256dh && json.keys.auth && connection) {
+            return connection.send({ type: "push.subscribe", subscription: { endpoint: json.endpoint, keys: { p256dh: json.keys.p256dh, auth: json.keys.auth } } });
+          }
+          // Blocked or unsupported: the switch must not lie.
+          this.setPreference("push", false);
+        })
+        .catch(() => this.setPreference("push", false));
       return;
     }
 

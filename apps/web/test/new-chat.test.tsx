@@ -30,7 +30,7 @@ it("the To field greets you with the roster, not a modal form", async () => {
   newChat();
   expect(screen.getByRole("listbox", { name: "Start a chat" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: /New bot/ })).toBeInTheDocument();
-  expect(screen.getByRole("option", { name: /Agni Bot/ })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /New Bot/ })).toBeInTheDocument();
   const input = screen.getByRole("combobox");
   await waitFor(() => expect(input).toHaveFocus());
 });
@@ -79,7 +79,7 @@ it("the roster's + opens the same field", () => {
   render(<AppModelProvider model={model}><Shell /></AppModelProvider>);
   fireEvent.click(screen.getByLabelText("Start a new chat"));
   expect(screen.getByRole("listbox", { name: "Start a chat" })).toBeInTheDocument();
-  fireEvent.click(screen.getByLabelText("Open Agni Bot chat"));
+  fireEvent.click(screen.getByLabelText("Open New Bot chat"));
   expect(screen.queryByRole("listbox", { name: "Start a chat" })).not.toBeInTheDocument();
 });
 
@@ -87,6 +87,6 @@ it("query narrows the roster and keeps New bot reachable", () => {
   newChat();
   fireEvent.change(screen.getByRole("combobox"), { target: { value: "zzz" } });
   expect(screen.getByRole("option", { name: /New bot/ })).toBeInTheDocument();
-  expect(screen.queryByRole("option", { name: /Agni Bot/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: /New Bot/ })).not.toBeInTheDocument();
   expect(screen.getByText(/No agents match/)).toBeInTheDocument();
 });

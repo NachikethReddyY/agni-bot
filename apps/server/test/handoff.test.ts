@@ -142,14 +142,14 @@ describe("agent-to-agent handoff", () => {
     expect(block?.agent_id).toBe("researcher");
     expect(block?.conversation_id).toBe(conversation.id);
     // And it is titled as the conversation it is, not as the internal brief.
-    expect(block?.title).toBe("Agni Bot messaged Researcher");
+    expect(block?.title).toBe("New Bot messaged Researcher");
     // The work is in that conversation's transcript.
     const transcript = conversationTranscript(db!, conversation.id);
     expect(transcript.some((message) => message.text.includes("Here is the brief."))).toBe(true);
     // The brief is a note, not the owner speaking.
     const brief = transcript.find((message) => message.text.includes("messaged you"));
     expect(brief?.role).toBe("system");
-    expect(brief?.text).toContain("Agni Bot messaged you");
+    expect(brief?.text).toContain("New Bot messaged you");
   });
 
   test("the specialist's answer stays out of the user's channel", async () => {
@@ -191,5 +191,114 @@ describe("agent-to-agent handoff", () => {
     // ...and the work is still readable in the specialist's own conversation.
     const conversation = ensureConversation(db, "researcher");
     expect(conversationTranscript(db, conversation.id).some((message) => message.text.includes("private answer"))).toBe(true);
+  });
+
+  test("the handoff notice carries the delegation intent", async () => {
+    db = openDatabase(":memory:");
+    const parent = createThread(db, defaultResolvedPersona(db!).id);
+    const emitted: Array<{ type: string; [key: string]: unknown }> = [];
+    const registry = new ToolRegistry();
+    registerHandoffTool(registry, {
+      db,
+      router: makeRouter(["Done."]),
+      settings: { firstTokenTimeoutMs: 1000, turnTimeoutMs: 5000 },
+      emit: (frame) => emitted.push(frame as { type: string; [key: string]: unknown }),
+      signal: new AbortController().signal,
+      threadID: parent.id,
+      channelID: "main",
+      currentAgentID: "ea",
+      guardrail: rootGuardrail("ea"),
+    });
+    const tool = registry.get("handoff") as unknown as {
+      handler: (args: Record<string, unknown>, ctx: { threadID: string; turnID: string; signal: AbortSignal }) => Promise<unknown>;
+    };
+    await tool.handler(
+      { toAgentID: "researcher", task: "Find it", intent: "question" },
+      { threadID: parent.id, turnID: "trn_handoff", signal: new AbortController().signal },
+    );
+
+    const notice = emitted.find((frame) => frame.type === "msg.new" && frame.uiHint === "handoff_notice");
+    expect(notice?.intent).toBe("question");
+
+    // Absent means request — the frame still says so, so a client never has
+    // to guess what silence meant.
+    const second = new ToolRegistry();
+    const defaultEmitted: Array<{ type: string; [key: string]: unknown }> = [];
+    registerHandoffTool(second, {
+      db,
+      router: makeRouter(["Done."]),
+      settings: { firstTokenTimeoutMs: 1000, turnTimeoutMs: 5000 },
+      emit: (frame) => defaultEmitted.push(frame as { type: string; [key: string]: unknown }),
+      signal: new AbortController().signal,
+      threadID: parent.id,
+      channelID: "main",
+      currentAgentID: "ea",
+      guardrail: rootGuardrail("ea"),
+    });
+    const defaultTool = second.get("handoff") as unknown as {
+      handler: (args: Record<string, unknown>, ctx: { threadID: string; turnID: string; signal: AbortSignal }) => Promise<unknown>;
+    };
+    await defaultTool.handler(
+      { toAgentID: "researcher", task: "Find it again" },
+      { threadID: parent.id, turnID: "trn_handoff_2", signal: new AbortController().signal },
+    );
+    const defaultNotice = defaultEmitted.find((frame) => frame.type === "msg.new" && frame.uiHint === "handoff_notice");
+    expect(defaultNotice?.intent).toBe("request");
+  });
+});
+describe("handoff fixes (B4, B5, B7)", () => {
+  const sse = (chunk: unknown): Response => new Response(
+    `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, { status: 200 },
+  );
+
+  test("a child's form prompt reaches the owner, so it can be answered", async () => {
+    db = openDatabase(":memory:");
+    const parent = createThread(db, defaultResolvedPersona(db!).id);
+    let call = 0;
+    const fetchStub = async (): Promise<Response> => call++ === 0
+      ? sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "c-ask", type: "function", function: { name: "ask", arguments: JSON.stringify({ question: "Which day?", options: ["Mon", "Tue"] }) } }] } }] })
+      : sse({ choices: [{ delta: { content: "Booked for Tue." } }] });
+    const router = new Router([provider], new HealthTracker(), fetchStub as unknown as typeof fetch);
+    const forwarded: Array<{ type: string; requestID?: string }> = [];
+    const { answerFormAndWake } = await import("../src/agent/form-broker");
+    const result = await handoff({
+      db: db!, router, settings: { firstTokenTimeoutMs: 1000, turnTimeoutMs: 5000 },
+      emit: (frame) => {
+        forwarded.push(frame as { type: string; requestID?: string });
+        if (frame.type === "form.request") answerFormAndWake(db!, frame.requestID, "Tue");
+      },
+      signal: new AbortController().signal, threadID: parent.id, guardrail: rootGuardrail("ea"),
+    }, { toAgentID: "researcher", task: "Book it.", emit: () => undefined, signal: new AbortController().signal });
+    expect(forwarded.some((frame) => frame.type === "form.request")).toBe(true);
+    expect(result.text).toBe("Booked for Tue.");
+    // Token and tool frames stay inside the child.
+    expect(forwarded.some((frame) => frame.type === "token" || frame.type === "tool.start")).toBe(false);
+  });
+
+  test("the child sees its own conversation summary, never the parent's", async () => {
+    db = openDatabase(":memory:");
+    const parent = createThread(db, defaultResolvedPersona(db!).id);
+    const child = ensureConversation(db!, "researcher");
+    db.run("UPDATE conversations SET summary = ? WHERE id = ?", ["researcher-own-summary", child.id]);
+    const parentConversation = ensureConversation(db!, "ea");
+    db.run("UPDATE conversations SET summary = ? WHERE id = ?", ["ea-private-summary", parentConversation.id]);
+    const bodies: string[] = [];
+    const fetchStub = async (_url: string, init: RequestInit): Promise<Response> => {
+      bodies.push(String(init.body));
+      return sse({ choices: [{ delta: { content: "ok" } }] });
+    };
+    const router = new Router([provider], new HealthTracker(), fetchStub as unknown as typeof fetch);
+    await handoff({
+      db: db!, router, settings: { firstTokenTimeoutMs: 1000, turnTimeoutMs: 5000 },
+      emit: () => undefined, signal: new AbortController().signal, threadID: parent.id,
+      conversationID: parentConversation.id, guardrail: rootGuardrail("ea"),
+    }, { toAgentID: "researcher", task: "Look.", emit: () => undefined, signal: new AbortController().signal });
+    expect(bodies.join("\n")).toContain("researcher-own-summary");
+    expect(bodies.join("\n")).not.toContain("ea-private-summary");
+  });
+
+  test("handoff and delegate_task share one depth cap", async () => {
+    const { MAX_DELEGATION_DEPTH } = await import("../src/tools/delegate-task-tool");
+    expect(MAX_DELEGATION_DEPTH).toBe(MAX_DEPTH);
   });
 });

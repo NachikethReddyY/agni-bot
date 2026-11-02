@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { Router } from "../models/router";
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from "@agni/protocol";
-import { verifyToken } from "../auth/tokens";
+import { requestToken, verifyToken } from "../auth/tokens";
 import { attachmentInfo, canReadAttachment, deleteDraftAttachment, getAttachment, saveAttachment, validateAttachments } from "./store";
 
 const headers = {
@@ -14,7 +14,7 @@ let activeUploads = 0;
 export async function attachmentRequest(request: Request, db: Database, dbPath: string, router: Router): Promise<Response> {
   const reply = (data: unknown, status = 200) => Response.json(data, { status, headers });
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
-  const token = /^Bearer (.+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
+  const token = requestToken(request);
   const device = token ? await verifyToken(db, token) : null;
   if (!device) return reply({ error: "Pair this device before uploading or opening files." }, 401);
   const path = new URL(request.url).pathname;

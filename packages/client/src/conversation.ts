@@ -378,6 +378,11 @@ export class Conversation {
       case "task.activity.ok":
       case "task.update.ok":
       case "memory.list.ok":
+      case "memory.update.ok":
+      case "memory.pin.ok":
+      case "memory.forget.ok":
+      case "memory.conflicts.list.ok":
+      case "memory.conflict.resolve.ok":
       case "provider.add.ok":
       case "provider.models.ok":
       case "provider.auth.started":
@@ -387,6 +392,12 @@ export class Conversation {
       case "plugin.state":
       case "appearance.list.ok":
       case "appearance.updated":
+      case "push.vapid":
+      case "agent.proactivity":
+      // Group channels are a roster concern; a group's messages arrive as msg.new.
+      case "channel.created":
+      case "channel.list.ok":
+      case "channel.history.ok":
         return [];
 
       case "presence":
@@ -536,7 +547,7 @@ export class Conversation {
         const id = Conversation.assistantID(frame.turnID);
         const message = this.messages.find((candidate) => candidate.id === id);
         if (message) {
-          message.text += frame.delta;
+          message.text = frame.reset ? frame.delta : message.text + frame.delta;
         } else {
           // Replayed deltas without their turn.start: rebuild the bubble.
           this.inFlightTurnID = frame.turnID;

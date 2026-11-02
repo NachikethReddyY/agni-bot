@@ -3,7 +3,7 @@ doc: remaining-work
 version: 2.0
 status: built
 source_spec: docs/agni-context-memory-spec.md
-supersedes: docs/audit-context-memory-spec.md
+supersedes: legacy/docs/audit-context-memory-spec.md
 ---
 
 # Remaining work — context, memory, delegation, secure input
@@ -17,7 +17,7 @@ needs, and the spec gaps found while checking it against the code.
   coverage map in §6 says where each requirement landed, and §3.1 lists the
   new decisions the work forced.
 - **v2** — folded the spec-gap audit into the plan; PR 3 split into 3a/3b/3c;
-  stale `docs/audit-context-memory-spec.md` superseded by this document.
+  stale `legacy/docs/audit-context-memory-spec.md` superseded by this document.
 
 ---
 
@@ -28,7 +28,7 @@ needs, and the spec gaps found while checking it against the code.
 - **The spec is the requirement source.** `docs/agni-context-memory-spec.md` is
   the authoritative requirement list (copied verbatim from the original
   spec). This document is the *plan* against it, not a replacement.
-- **The old audit is dead.** `docs/audit-context-memory-spec.md` was written
+- **The old audit is dead.** `legacy/docs/audit-context-memory-spec.md` was written
   against `eb56aac` and predates the memory/delegation/secure-input work. It
   is marked as superseded. Do not use it as a source of truth.
 - **Every PR carries its own acceptance tests.** A PR without a test that
@@ -663,7 +663,7 @@ before it. Merge them in order.
 - This document was committed **before the first implementation PR**, and
   updated to v3 when the last one landed. The changelog at the top and the
   coverage map in §6 are the record of what happened.
-- `docs/audit-context-memory-spec.md` is marked as superseded. It stays for
+- `legacy/docs/audit-context-memory-spec.md` is marked as superseded. It stays for
   history and for the reasoning behind the early build order, but it is not a
   source of truth and must not be used to size remaining work.
 - The spec is corrected where a decision changed the requirement: C-04,

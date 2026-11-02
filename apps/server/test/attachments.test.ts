@@ -11,7 +11,7 @@ import { HealthTracker } from "../src/models/health";
 import { createThread, recentMessages } from "../src/stores/threads";
 import { runTaskTurn } from "../src/agent/task-loop";
 import type { AttachmentInfo } from "@agni/protocol";
-import { AgniSocket } from "../../../tools/cli/src/client";
+import { AgniSocket } from "../../../apps/cli/src/client";
 import { startServer, type RunningServer } from "../src/ws/server";
 import { loadConfig } from "../src/config";
 

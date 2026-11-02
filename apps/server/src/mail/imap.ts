@@ -35,6 +35,12 @@ function parseHeaders(raw: string): { subject: string; from: string; to: string;
   return { subject, from, to, date };
 }
 
+/** IMAP quoted-string; rejects CR/LF/NUL which would break out of the command. */
+export function imapQuote(v: unknown): string {
+  if (typeof v !== "string" || /[\r\n\0]/.test(v)) throw new Error("invalid IMAP string");
+  return `"${v.replace(/[\\"]/g, "\\$&")}"`;
+}
+
 export class ImapClient {
   private socket: tls.TLSSocket | null = null;
   private buffer = "";
@@ -47,6 +53,7 @@ export class ImapClient {
 
   async connect(cfg: ImapConfig): Promise<void> {
     return new Promise((resolve, reject) => {
+      const loginArgs = `${imapQuote(cfg.user)} ${imapQuote(cfg.pass)}`; // throws before any socket exists
       const socket = tls.connect(cfg.port, cfg.host, { rejectUnauthorized: true }, () => {});
       this.socket = socket;
       let greeted = false;
@@ -56,7 +63,7 @@ export class ImapClient {
         if (!greeted && this.buffer.includes("\r\n")) {
           greeted = true;
           loginTag = this.nextTag();
-          socket.write(`${loginTag} LOGIN "${cfg.user}" "${cfg.pass}"\r\n`);
+          socket.write(`${loginTag} LOGIN ${loginArgs}\r\n`);
         }
       });
       const checkLogin = setInterval(() => {
@@ -97,7 +104,7 @@ export class ImapClient {
   }
 
   async select(mailbox: string): Promise<{ exists: number; recent: number }> {
-    const resp = await this.sendCommand(`SELECT "${mailbox}"`);
+    const resp = await this.sendCommand(`SELECT ${imapQuote(mailbox)}`);
     const existsMatch = resp.match(/\* (\d+) EXISTS/);
     const recentMatch = resp.match(/\* (\d+) RECENT/);
     return {
@@ -107,6 +114,7 @@ export class ImapClient {
   }
 
   async search(criteria: string): Promise<number[]> {
+    if (/[\r\n\0]/.test(criteria)) throw new Error("invalid IMAP search criteria");
     const resp = await this.sendCommand(`SEARCH ${criteria}`);
     const match = resp.match(/\* SEARCH (.+)/);
     if (!match || !match[1]!.trim()) return [];

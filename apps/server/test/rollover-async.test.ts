@@ -11,6 +11,7 @@ import type { Database } from "bun:sqlite";
 import { openDatabase } from "../src/db";
 import type { Router } from "../src/models/router";
 import {
+  CARRY_SUMMARY_CHARS,
   parseStructuredSummary,
   renderSummary,
   ROLLOVER_HYSTERESIS_CHARS,
@@ -19,6 +20,7 @@ import {
   rolloverIfNeeded,
   SESSION_ROLLOVER_CHARS,
   shouldRotate,
+  summarizeBlock,
   tailOf,
 } from "../src/agent/rollover";
 import { ensureConversation, getConversation, openSession, updateSummary } from "../src/stores/conversations";
@@ -119,6 +121,25 @@ describe("the background summary", () => {
     expect(stored?.summary_version).toBeGreaterThan(0);
   });
 
+  test("a long block is summarized from its newest turns", async () => {
+    db = openDatabase(":memory:");
+    const conversation = ensureConversation(db, "ea");
+    const block = openSession(db, conversation, "manual", null);
+    for (let index = 0; index < 30; index += 1) {
+      appendMessage(db, { threadID: block.id, role: "user", text: `filler ${index} ${"x".repeat(800)}` });
+    }
+    appendMessage(db, { threadID: block.id, role: "user", text: "the newest decision is Postgres" });
+    let prompt = "";
+    const router = {
+      route: async (request: { messages: Array<{ content: string }> }) => {
+        prompt = request.messages.map((message) => message.content).join("\n");
+        return { text: '{"decisions":["Postgres"]}' };
+      },
+    } as unknown as Router;
+    await summarizeBlock({ db, router, firstTokenTimeoutMs: 1000 }, conversation, block);
+    expect(prompt).toContain("the newest decision is Postgres");
+  });
+
   test("a second rotation before the first summary keeps the newer one", async () => {
     db = openDatabase(":memory:");
     const conversation = ensureConversation(db, "ea");
@@ -163,6 +184,18 @@ describe("the structured summary", () => {
     const rendered = renderSummary(summary);
     expect(rendered).toContain("Decided: Ship on Friday");
     expect(rendered).toContain("Still open: Write the notes");
+  });
+
+  test("goal and open loops survive a long list of decisions", () => {
+    const summary = parseStructuredSummary(JSON.stringify({
+      goal: "Launch the beta",
+      next_step: "Email the testers",
+      decisions: Array.from({ length: 20 }, (_, index) => `decision ${index} ${"d".repeat(300)}`),
+      open_loops: ["Pick a pricing tier"],
+    }));
+    const rendered = renderSummary(summary);
+    expect(rendered.startsWith("Goal: Launch the beta. Next: Email the testers. Still open: Pick a pricing tier")).toBe(true);
+    expect(rendered.length).toBeLessThanOrEqual(CARRY_SUMMARY_CHARS);
   });
 
   test("prose still becomes a summary", () => {

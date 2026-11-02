@@ -79,6 +79,7 @@ export function createAgentPersona(
   const finalTools = requested.length > 0 ? requested : [...DEFAULT_AGENT_TOOLS];
 
   const color = spec.color?.trim() || colorFor(id);
+  if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color)) throw new Error("color must be a hex value like #e05252");
   // DEL-007: a new agent reads user memory but cannot write it unless the
   // caller explicitly says so.
   const memoryScope = spec.memoryScope === "readwrite" ? "readwrite" : "read";

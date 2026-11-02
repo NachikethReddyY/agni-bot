@@ -12,10 +12,11 @@
  * itself — a scheduled run is a normal turn, with the same tool rules.
  */
 import type { Database } from "bun:sqlite";
-import type { ToolDefinition } from "./registry";
+import type { ToolContext, ToolDefinition } from "./registry";
 import {
   deleteJob, enqueueJob, getJob, getJobByPrefix, listFinishedJobs, listJobs, setJobEnabled,
 } from "../stores/jobs";
+import { canonicalAgentID } from "../agent/personas";
 import { describeSchedule, nextDailyRun, parseDay, parseWallClock } from "../jobs/schedule";
 
 export interface JobScheduleArgs {
@@ -31,8 +32,6 @@ export interface JobScheduleArgs {
   everyMinutes?: number;
   /** Which agent runs it. Defaults to the agent that scheduled it. */
   agentID?: string;
-  /** `task` (default) runs the plan→act→observe loop with tools. */
-  lane?: "instant" | "task";
   /** Raise a notification when a run ends. Default true. */
   notify?: boolean;
 }
@@ -44,7 +43,6 @@ export interface JobScheduleResult {
   /** Plain description of the schedule. */
   recurrence: string;
   agent: string;
-  lane: "instant" | "task";
   what: string;
 }
 
@@ -59,12 +57,17 @@ export interface ScheduledJobView {
   nextRun: string;
   recurrence: string;
   agent: string;
-  lane: string;
   what: string;
   lastResult: string | null;
 }
 
-export function scheduleJob(db: Database, args: JobScheduleArgs, fallbackAgentID: string): JobScheduleResult {
+const MIN_EVERY_MINUTES = 5;
+
+export function scheduleJob(db: Database, args: JobScheduleArgs, callerAgentID: string): JobScheduleResult {
+  const requested = args.agentID?.trim();
+  if (requested && canonicalAgentID(requested) !== canonicalAgentID(callerAgentID)) {
+    throw new Error("an agent may only schedule jobs for itself");
+  }
   const text = args.text.trim();
   if (!text) throw new Error("a scheduled job needs something to do");
   const choices = [args.at, args.dailyAt, args.everyMinutes].filter((value) => value !== undefined && value !== null);
@@ -73,8 +76,9 @@ export function scheduleJob(db: Database, args: JobScheduleArgs, fallbackAgentID
 
   const payload: Record<string, unknown> = {
     text,
-    agentID: args.agentID?.trim() || fallbackAgentID,
-    lane: args.lane ?? "task",
+    agentID: callerAgentID,
+    // C4: scheduled text is model-authored, so it runs as non-owner input.
+    inputRole: "system",
     notify: args.notify !== false,
   };
 
@@ -95,8 +99,8 @@ export function scheduleJob(db: Database, args: JobScheduleArgs, fallbackAgentID
     if (days && days.length > 0) payload.days = days;
   } else {
     const minutes = Number(args.everyMinutes);
-    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 10_080) {
-      throw new Error("everyMinutes must be between 1 and 10080 (a week)");
+    if (!Number.isFinite(minutes) || minutes < MIN_EVERY_MINUTES || minutes > 10_080) {
+      throw new Error(`everyMinutes must be between ${MIN_EVERY_MINUTES} and 10080 (a week)`);
     }
     const everyMs = Math.round(minutes * 60_000);
     runAt = new Date(Date.now() + everyMs).toISOString();
@@ -110,12 +114,11 @@ export function scheduleJob(db: Database, args: JobScheduleArgs, fallbackAgentID
     nextRun: runAt,
     recurrence,
     agent: String(payload.agentID),
-    lane: payload.lane as "instant" | "task",
     what: text.slice(0, 200),
   };
 }
 
-export function listScheduledJobs(db: Database, limit = 20): JobListResult {
+export function listScheduledJobs(db: Database, callerAgentID: string, limit = 20): JobListResult {
   const view = (row: NonNullable<ReturnType<typeof getJob>>): ScheduledJobView => {
     const payload = parsePayload(row.payload);
     const dailyAt = typeof payload.dailyAt === "string" ? payload.dailyAt : null;
@@ -130,19 +133,25 @@ export function listScheduledJobs(db: Database, limit = 20): JobListResult {
           ? `every ${Math.round(Number(payload.everyMs) / 60_000)} minute(s)`
           : "once",
       agent: String(payload.agentID ?? "ea"),
-      lane: String(payload.lane ?? "instant"),
       what: String(payload.text ?? "").slice(0, 200),
       lastResult: row.result,
     };
   };
+  const mine = (row: NonNullable<ReturnType<typeof getJob>>) => ownsJob(row, callerAgentID);
   return {
-    scheduled: listJobs(db, { limit }).map(view),
-    recentlyFinished: listFinishedJobs(db, 5).map(view),
+    scheduled: listJobs(db, { limit: 500 }).filter(mine).slice(0, limit).map(view),
+    recentlyFinished: listFinishedJobs(db, 100).filter(mine).slice(0, 5).map(view),
   };
 }
 
-export function cancelScheduledJob(db: Database, id: string): { id: string; state: string; note: string } {
-  const row = getJob(db, id) ?? getJobByPrefix(db, id);
+function ownsJob(row: NonNullable<ReturnType<typeof getJob>>, callerAgentID: string): boolean {
+  return row.kind === "turn" && canonicalAgentID(String(parsePayload(row.payload).agentID ?? "ea")) === canonicalAgentID(callerAgentID);
+}
+
+export function cancelScheduledJob(db: Database, id: string, callerAgentID: string): { id: string; state: string; note: string } {
+  const found = getJob(db, id) ?? getJobByPrefix(db, id);
+  // Someone else's job looks the same as a missing one.
+  const row = found && ownsJob(found, callerAgentID) ? found : undefined;
   if (!row) throw new Error(`no scheduled job with id "${id}"`);
   if (row.state === "running") {
     setJobEnabled(db, row.id, false);
@@ -167,6 +176,12 @@ const objectSchema = (properties: Record<string, unknown>, required: string[]): 
 });
 const stringProp = { type: "string", minLength: 1 };
 
+function callerOf(ctx: ToolContext): string {
+  const id = ctx.chain?.currentAgentID;
+  if (!id) throw new Error("unknown calling agent");
+  return id;
+}
+
 /** The scheduling tools, as the task lane sees them. */
 export function createJobTools(db: Database): ToolDefinition<unknown, unknown>[] {
   return [
@@ -183,13 +198,13 @@ export function createJobTools(db: Database): ToolDefinition<unknown, unknown>[]
         at: { type: "string", description: "ISO timestamp for a one-off run" },
         dailyAt: { type: "string", description: "Local wall-clock time for a recurring run, e.g. \"09:05\"" },
         days: { type: "array", maxItems: 7, items: { type: "string" }, description: "Weekdays for a dailyAt schedule" },
-        everyMinutes: { type: "integer", minimum: 1, maximum: 10_080 },
+        everyMinutes: { type: "integer", minimum: MIN_EVERY_MINUTES, maximum: 10_080 },
         agent_id: stringProp,
-        lane: { type: "string", enum: ["instant", "task"] },
         notify: { type: "boolean" },
       }, ["text"]),
       timeoutMs: 3_000,
       handler: async (args, ctx) => {
+        if (ctx.peerInput) return { error: "not done: this turn started from another agent's message" };
         const input = (args ?? {}) as Record<string, unknown>;
         return scheduleJob(db, {
           text: String(input.text ?? ""),
@@ -198,9 +213,8 @@ export function createJobTools(db: Database): ToolDefinition<unknown, unknown>[]
           ...(input.days === undefined ? {} : { days: (input.days as unknown[]).map((day) => String(day)) }),
           ...(input.everyMinutes === undefined ? {} : { everyMinutes: Number(input.everyMinutes) }),
           ...(input.agent_id === undefined ? {} : { agentID: String(input.agent_id) }),
-          ...(input.lane === undefined ? {} : { lane: String(input.lane) as "instant" | "task" }),
           ...(input.notify === undefined ? {} : { notify: Boolean(input.notify) }),
-        }, ctx.chain?.currentAgentID ?? "ea");
+        }, callerOf(ctx));
       },
     } as ToolDefinition<unknown, unknown>,
     {
@@ -209,10 +223,10 @@ export function createJobTools(db: Database): ToolDefinition<unknown, unknown>[]
       kind: "static",
       schema: objectSchema({ limit: { type: "integer", minimum: 1, maximum: 50 } }, []),
       timeoutMs: 2_000,
-      handler: async (args) => {
+      handler: async (args, ctx) => {
         const input = (args ?? {}) as Record<string, unknown>;
         const limit = typeof input.limit === "number" ? Math.max(1, Math.min(50, Math.floor(input.limit))) : 20;
-        return listScheduledJobs(db, limit);
+        return listScheduledJobs(db, callerOf(ctx), limit);
       },
     } as ToolDefinition<unknown, unknown>,
     {
@@ -221,9 +235,10 @@ export function createJobTools(db: Database): ToolDefinition<unknown, unknown>[]
       kind: "static",
       schema: objectSchema({ id: stringProp }, ["id"]),
       timeoutMs: 2_000,
-      handler: async (args) => {
+      handler: async (args, ctx) => {
+        if (ctx.peerInput) return { error: "not done: this turn started from another agent's message" };
         const input = (args ?? {}) as Record<string, unknown>;
-        return cancelScheduledJob(db, String(input.id ?? ""));
+        return cancelScheduledJob(db, String(input.id ?? ""), callerOf(ctx));
       },
     } as ToolDefinition<unknown, unknown>,
   ];

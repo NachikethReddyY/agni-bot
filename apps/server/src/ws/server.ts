@@ -1,11 +1,13 @@
 import { attachmentRequest } from "../attachments/http";
 import { backgroundRequest } from "../appearance/http";
+import { debugRequest } from "../debug/http";
 /**
  * HTTP + WebSocket entry. Binds to AGNI_HOST only (loopback in dev, the
  * Tailscale interface on bb-1) — nothing listens on the public internet.
  *
  * Routes: GET /health (JSON), GET /ws (WebSocket upgrade), GET /share/<token>
- * (a published thread export).
+ * (a published thread export), GET /debug/* (owner-only bot debugger data),
+ * /auth/* (browser pairing), and the built web app for everything else.
  */
 import type { Database } from "bun:sqlite";
 import { PROTOCOL_VERSION, encodeFrame, type ServerFrame, type ServerFrameBody } from "@agni/protocol";
@@ -16,10 +18,15 @@ import { PluginService } from "../plugins/service";
 import type { Router, ProviderStatus } from "../models/router";
 import { dayTotals, type DayTotals } from "../stores/usage";
 import { readShareFile } from "../share/document";
-import { dispatch, newSession, type Session } from "./dispatch";
+import { dispatch, errorFrame, newSession, resumeQueuedMessages, type DispatchDeps, type Session } from "./dispatch";
+import { isDeviceRevoked, requestToken, verifyToken } from "../auth/tokens";
+import { authRequest } from "../auth/web";
+import { webAppRequest } from "./web-app";
 import { FrameLog } from "./frame-log";
 import { dirname, resolve } from "node:path";
 import { ChatGPTAuth } from "../models/chatgpt-auth";
+import { PushService } from "../push/web-push";
+import { homePath } from "../home";
 
 export interface RunningServer {
   readonly port: number;
@@ -73,13 +80,39 @@ export function startServer(config: Config, db: Database, router: Router, starte
 
   const sessions = new Map<Bun.ServerWebSocket<Session>, Session>();
 
+  /** A live frame for one connection: held while it waits for its resync replay (H32). */
+  const deliver = (socket: Bun.ServerWebSocket<Session>, frame: ServerFrame): void => {
+    if (socket.data.held) socket.data.held.push(frame);
+    else socket.send(encodeFrame(frame));
+  };
+
+  const push = new PushService(db, {
+    vapidPath: config.dbPath === ":memory:" ? ":memory:" : homePath("push-vapid.json"),
+    timeZone: config.timeZone,
+  });
+
   const emit = (body: ServerFrameBody): ServerFrame => {
     const frame = frameLog.next(body);
+    const connected = new Set<string>();
     for (const [socket, session] of sessions) {
-      if (session.authed) socket.send(encodeFrame(frame));
+      if (!session.authed) continue;
+      deliver(socket, frame);
+      if (session.device) connected.add(session.device.id);
     }
+    // A closed app is reached by Web Push; a device with a live socket already saw it.
+    if (body.type === "notify") void push.notify(body, connected).catch((error) => log.warn("push notify failed", error));
     return frame;
   };
+
+  // M1: `revoke` runs in another process, so the daemon looks for revoked
+  // devices among its open sessions and closes them.
+  const revocationSweep = setInterval(() => {
+    for (const [socket, session] of sessions) {
+      if (!session.authed || !session.device || !isDeviceRevoked(db, session.device.id)) continue;
+      session.authed = false;
+      socket.close(4003, "revoked");
+    }
+  }, REVOCATION_SWEEP_MS);
 
   const plugins = new PluginService({ config, db, emit, pluginsPath: config.pluginsPath });
   plugins.autoConnect();
@@ -105,6 +138,9 @@ export function startServer(config: Config, db: Database, router: Router, starte
       if (url.pathname === "/backgrounds" || url.pathname.startsWith("/backgrounds/")) {
         return backgroundRequest(request, db, config.dbPath);
       }
+      if (url.pathname.startsWith("/debug/")) {
+        return debugRequest(request, db, router, config);
+      }
       if (url.pathname === "/health") {
         if (request.method === "OPTIONS") {
           return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -112,6 +148,9 @@ export function startServer(config: Config, db: Database, router: Router, starte
         return Response.json(healthReport(db, router, frameLog.seq, startedAt), {
           headers: { ...CORS_HEADERS, "cache-control": "no-store" },
         });
+      }
+      if (url.pathname.startsWith("/auth/")) {
+        return authRequest(request, db, (origin) => allowedOrigin(origin, config.host, config.publicOrigin));
       }
       if (url.pathname === "/oauth/callback") {
         return handleOAuthCallback(plugins, url);
@@ -127,14 +166,31 @@ export function startServer(config: Config, db: Database, router: Router, starte
         });
       }
       if (url.pathname === "/ws") {
-        if (srv.upgrade(request, { data: newSession() })) return undefined;
+        // Browsers always send Origin; native clients (Mac, CLI) send none.
+        // Refusing foreign origins stops any web page (or a DNS-rebound
+        // name) in the owner's browser from driving the socket.
+        const origin = request.headers.get("origin");
+        if (origin !== null && !allowedOrigin(origin, config.host, config.publicOrigin)) {
+          return new Response("forbidden origin", { status: 403 });
+        }
+        const session = newSession();
+        // A paired browser's cookie authenticates the socket; `hello` then needs no token.
+        const token = requestToken(request);
+        const device = token ? await verifyToken(db, token) : null;
+        if (device) session.cookieDevice = { id: device.id, name: device.name };
+        // Behind a proxy (tailscale serve) every peer is 127.0.0.1, so a
+        // forwarded request or a non-loopback page is never "local".
+        session.local = LOOPBACK_IPS.has(srv.requestIP(request)?.address ?? "")
+          && !request.headers.has("x-forwarded-for")
+          && (origin === null || LOOPBACK_HOSTS.has(new URL(origin).hostname));
+        if (srv.upgrade(request, { data: session })) return undefined;
         return new Response("websocket upgrade failed", { status: 400 });
       }
+      if (request.method === "GET" || request.method === "HEAD") return webAppRequest(url.pathname);
       return new Response("not found", { status: 404 });
     },
     websocket: {
       open(socket) {
-        socket.data.local = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(socket.remoteAddress);
         sessions.set(socket, socket.data);
         socket.data.helloTimer = setTimeout(() => {
           if (!socket.data.authed) socket.close(4001, "hello timeout");
@@ -144,30 +200,38 @@ export function startServer(config: Config, db: Database, router: Router, starte
       async message(socket, message) {
         if (typeof message !== "string") return;
         const session = socket.data;
-        await dispatch(
-          {
-            config,
-            db,
-            router,
-            frameLog,
-            emit,
-            plugins,
-            chatgpt,
-            reply: (body) => {
-              const frame = frameLog.next(body, { replay: false });
-              socket.send(encodeFrame(frame));
-              return frame;
+        try {
+          await dispatch(
+            {
+              config,
+              db,
+              router,
+              frameLog,
+              emit,
+              plugins,
+              chatgpt,
+              push,
+              reply: (body) => {
+                const frame = frameLog.next(body, { replay: false });
+                deliver(socket, frame);
+                return frame;
+              },
+              send: (frame) => socket.send(encodeFrame(frame)),
+              close: (code, reason) => socket.close(code, reason),
             },
-            send: (frame) => socket.send(encodeFrame(frame)),
-            close: (code, reason) => socket.close(code, reason),
-          },
-          session,
-          message,
-        );
+            session,
+            message,
+          );
+        } catch (error) {
+          // A throwing handler answers its own connection; it never takes the daemon down.
+          log.error(`frame handler failed on ${session.id}`, error);
+          socket.send(encodeFrame(errorFrame(frameLog, "internal", error instanceof Error ? error.message : String(error))));
+        }
       },
       close(socket) {
         const session = socket.data;
         if (session.helloTimer !== undefined) clearTimeout(session.helloTimer);
+        if (session.holdTimer !== undefined) clearTimeout(session.holdTimer);
         for (const controller of session.aborts.values()) controller.abort();
         session.aborts.clear();
         sessions.delete(socket);
@@ -176,17 +240,54 @@ export function startServer(config: Config, db: Database, router: Router, starte
     },
   });
 
+  // H22: owner messages a previous process accepted but never started. They
+  // have no connection; their answers reach every client through `emit`.
+  const bootDeps: DispatchDeps = {
+    config, db, router, frameLog, emit, plugins, chatgpt,
+    reply: (body) => frameLog.next(body, { replay: false }),
+    send: () => undefined,
+    close: () => undefined,
+  };
+  const resumed = resumeQueuedMessages(bootDeps);
+  if (resumed > 0) log.warn(`resumed ${resumed} owner message(s) a previous process left queued`);
+
   return {
     port: server.port ?? config.port,
     url: `ws://${config.host}:${server.port ?? config.port}/ws`,
     plugins,
     emit,
     stop() {
+      clearInterval(revocationSweep);
       chatgpt.stop();
       server.stop(true);
       frameLog.flush();
     },
   };
+}
+
+const REVOCATION_SWEEP_MS = 2_000;
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+const LOOPBACK_IPS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+/**
+ * Loopback pages, pages served from the daemon's own bound host, and the
+ * owner's AGNI_PUBLIC_ORIGIN (e.g. the `tailscale serve` https name).
+ */
+export function allowedOrigin(origin: string, host: string, publicOrigin?: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+  const bound = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  if (LOOPBACK_HOSTS.has(parsed.hostname) || parsed.hostname === bound) return true;
+  try {
+    return publicOrigin !== undefined && new URL(publicOrigin).origin === parsed.origin;
+  } catch {
+    return false;
+  }
 }
 
 /**

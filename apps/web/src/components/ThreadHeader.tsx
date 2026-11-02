@@ -3,7 +3,7 @@
  * right. Task navigation lives in the sidebar.
  */
 import { useState, type ReactNode } from "react";
-import { Menu, Monitor } from "lucide-react";
+import { Bug, Menu, Monitor } from "lucide-react";
 import { format } from "@agni/client";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import {
@@ -43,6 +43,16 @@ export function ThreadHeader() {
         <span className="agent-pill-name">{agent?.name ?? "Agni"}</span>
       </button>
       <span className="thread-header-spacer" />
+
+      <button
+        type="button"
+        className="icon-btn"
+        title="Bot debugger (Ctrl+Shift+D)"
+        aria-label="Open bot debugger"
+        onClick={() => model.toggleDebug()}
+      >
+        <Bug size={14} />
+      </button>
 
       <button
         type="button"

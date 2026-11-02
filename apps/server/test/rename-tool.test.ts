@@ -28,7 +28,7 @@ describe("rename_agent tool", () => {
     db = openDatabase(":memory:");
     const { emitted, tool, ctx } = harness();
     const result = (await tool.handler({ name: "Baahu" } as never, ctx)) as Record<string, unknown>;
-    expect(result).toEqual({ ok: true, agentId: "ea", previousName: "Agni Bot", name: "Baahu" });
+    expect(result).toEqual({ ok: true, agentId: "ea", previousName: "New Bot", name: "Baahu" });
     expect(emitted).toEqual([{ type: "agent.updated", agentId: "ea", displayName: "Baahu", onboarded: true }]);
     expect(resolvePersona(db, "ea")?.systemPrompt.split("\n")[0]).toBe("You are Baahu, personal assistant to the owner.");
   });
@@ -52,7 +52,7 @@ describe("rename_agent tool", () => {
     const result = (await tool.handler({ name: "  " } as never, ctx)) as Record<string, unknown>;
     expect(result.ok).toBe(false);
     expect(emitted).toHaveLength(0);
-    expect(db.query<{ display_name: string }, []>("SELECT display_name FROM agents WHERE id = 'ea'").get()?.display_name).toBe("Agni Bot");
+    expect(db.query<{ display_name: string }, []>("SELECT display_name FROM agents WHERE id = 'ea'").get()?.display_name).toBe("New Bot");
   });
 
   test("the tool is exposed to the ea persona in the model's tool list", () => {

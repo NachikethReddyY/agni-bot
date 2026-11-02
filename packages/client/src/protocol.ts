@@ -11,6 +11,7 @@
  */
 import {
   PROTOCOL_VERSION,
+  ServerFrameSchema,
   parseServerFrame,
   type ClientFrame,
   type ServerFrame,
@@ -56,49 +57,10 @@ export interface UnknownServerFrame {
 
 export type IncomingFrame = ServerFrame | UnknownServerFrame;
 
-const KNOWN_SERVER_TYPES = new Set<string>([
-  "hello.ok",
-  "token",
-  "turn.start",
-  "turn.end",
-  "tool.start",
-  "tool.update",
-  "tool.end",
-  "approval.request",
-  "secret.request",
-  "secret.cancel",
-  "form.request",
-  "notify",
-  "agents.update",
-  "thread.list.ok",
-  "thread.history.ok",
-  "conversation.ok",
-  "session.start",
-  "conversation.history.ok",
-  "thread.export.ok",
-  "job.list.ok",
-  "task.list.ok",
-  "memory.list.ok",
-  "task.update.ok",
-  "task.updated",
-  "task.answer.ok",
-  "bind.direct.ok",
-  "provider.add.ok",
-  "provider.models.ok",
-  "provider.auth.started",
-  "provider.auth.state",
-  "plugin.list.ok",
-  "plugin.connect.ok",
-  "plugin.state",
-  "appearance.list.ok",
-  "appearance.updated",
-  "presence",
-  "agent.presence",
-  "status.update",
-  "msg.new",
-  "agent.updated",
-  "error",
-]);
+// Derived from the zod schema so a new server frame type cannot be dropped silently.
+const KNOWN_SERVER_TYPES = new Set<string>(
+  ServerFrameSchema.options.map((option) => option.shape.type.value as string),
+);
 
 export type DecodeResult =
   | { ok: true; frame: IncomingFrame }

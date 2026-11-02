@@ -10,31 +10,59 @@ let db: Database | undefined;
 afterEach(() => { db?.close(); db = undefined; });
 
 describe("channel compaction", () => {
-  test("keeps recent messages, updates the summary, and extracts durable facts", async () => {
+  test("keeps recent messages and updates the summary; facts are the tagger's job", async () => {
     const testDB = openDatabase(":memory:");
     db = testDB;
-    for (let index = 0; index < 37; index++) {
-      appendChannelMessage(testDB, {
-        channelID: "main", fromType: index % 2 ? "agent" : "user",
-        fromID: index % 2 ? "ea" : "user", text: "message " + index,
-      });
-    }
+    fill(testDB);
     const router = {
-      route: async () => ({ text: JSON.stringify({
-        updated_summary: "The user is building Agni.",
-        upserted_facts: [{ scope: "global_user", type: "fact", key_slug: "project_name", content: "The user's project is Agni.", importance: 0.9 }],
-      }) }),
+      // A fenced answer is still JSON (B6).
+      route: async () => ({ text: "```json\n" + JSON.stringify({ updated_summary: "The user is building Agni." }) + "\n```" }),
     } as unknown as Router;
 
     await compactChannelHistory(testDB, router, "main", "ea");
 
     expect(getChannelSummary(testDB, "main")?.summary).toBe("The user is building Agni.");
     expect(uncompactedMessages(testDB, "main")).toHaveLength(13);
-    // TAG-002: what the conversation implies is the agent's own note, never a
-    // fact about the owner — the channel holds tool output and web text too.
-    const note = listAgentMemories(testDB, { scope: "agent", agentID: "ea", limit: 10 })[0];
-    expect(note?.key_slug).toBe("project-name");
-    expect(note?.source).toBe("compaction");
+    // One extractor: the compactor writes no memories at all.
+    expect(listAgentMemories(testDB, { scope: "agent", agentID: "ea", limit: 10 })).toHaveLength(0);
     expect(listAgentMemories(testDB, { scope: "global_user", limit: 10 })).toHaveLength(0);
   });
+
+  test("a failed parse backs off, and overlapping runs make one call (B6)", async () => {
+    const testDB = openDatabase(":memory:");
+    db = testDB;
+    fill(testDB);
+    let calls = 0;
+    const bad = { route: async () => { calls += 1; return { text: "not json" }; } } as unknown as Router;
+    await compactChannelHistory(testDB, bad, "main", "ea");
+    await compactChannelHistory(testDB, bad, "main", "ea");
+    expect(calls).toBe(1);
+
+    const other = openDatabase(":memory:");
+    fill(other);
+    let release!: () => void;
+    let slowCalls = 0;
+    const slow = {
+      route: async () => {
+        slowCalls += 1;
+        await new Promise<void>((resolve) => { release = resolve; });
+        return { text: JSON.stringify({ updated_summary: "s" }) };
+      },
+    } as unknown as Router;
+    const first = compactChannelHistory(other, slow, "main", "ea");
+    await compactChannelHistory(other, slow, "main", "ea");
+    release();
+    await first;
+    expect(slowCalls).toBe(1);
+    other.close();
+  });
 });
+
+function fill(testDB: Database): void {
+  for (let index = 0; index < 37; index++) {
+    appendChannelMessage(testDB, {
+      channelID: "main", fromType: index % 2 ? "agent" : "user",
+      fromID: index % 2 ? "ea" : "user", text: "message " + index,
+    });
+  }
+}

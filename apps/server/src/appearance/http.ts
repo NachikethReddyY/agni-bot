@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { mkdir, chmod, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { imageSize } from "image-size";
-import { verifyToken } from "../auth/tokens";
+import { requestToken, verifyToken } from "../auth/tokens";
 import { newID, nowISO } from "../util/ids";
 
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -23,7 +23,7 @@ function referenced(db: Database, id: string): boolean {
 export async function backgroundRequest(request: Request, db: Database, dbPath: string): Promise<Response> {
   const reply = (data: unknown, status = 200) => Response.json(data, { status, headers });
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
-  const token = /^Bearer (.+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
+  const token = requestToken(request);
   const device = token ? await verifyToken(db, token) : null;
   if (!device) return reply({ error: "Pair this device before changing appearance." }, 401);
   const path = new URL(request.url).pathname;

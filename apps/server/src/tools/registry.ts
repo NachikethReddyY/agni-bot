@@ -1,7 +1,6 @@
 /**
  * Tool registry. Every tool declares a schema and a timeout before it can be
- * registered; the instant lane never calls tools (S3) — the task lane (P2+)
- * executes them through this registry only.
+ * registered; the task lane executes them through this registry only.
  *
  * The current task and retrieval captures use validated deterministic paths;
  * model-invoked tools are not enabled until the separate task runner lands.
@@ -12,6 +11,12 @@ export interface ToolContext {
   threadID: string;
   turnID: string;
   signal: AbortSignal;
+  /**
+   * True when this turn was started from another agent's message (a delegation
+   * brief, a handoff, or a completion wake). Tools that write durable memory
+   * refuse to run in that case.
+   */
+  peerInput?: boolean;
   /**
    * Agent-to-agent chain metadata. Absent for a root turn; populated for
    * delegated work so tools (notably `handoff`) can refuse or behave
@@ -27,6 +32,8 @@ export interface ToolContext {
     /** Short summary passed in by the delegating agent. */
     handoffSummary: string | null;
   };
+  /** Routine egress: true when a URL's host is on the run's allowlist. Absent outside routines. */
+  hostAllowed?: (url: URL) => boolean;
 }
 
 export type ToolKind = "static" | "dynamic";

@@ -1,5 +1,10 @@
 # P2 plan: stores, capture, and daily brief
 
+> **Historical plan. Partly stale as of 2026-10-26.** Tools are registered in
+> `apps/server/src/tools/` (the bullet below about "no registered tools" is out
+> of date). Check the code before relying on any "already exists" or "remains to
+> be built" claim here.
+
 P2 makes Agni useful between conversations: saved memories and links can be
 retrieved, tasks can be captured and completed, and a short morning brief
 surfaces what needs attention. The instant lane stays one model call with no

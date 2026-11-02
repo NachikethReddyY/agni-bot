@@ -1,4 +1,4 @@
-import { useState, type ComponentPropsWithoutRef } from "react";
+import { memo, useState, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
@@ -17,7 +17,7 @@ function CodeBlock({ children, ...props }: ComponentPropsWithoutRef<"pre">) {
   </div>;
 }
 
-export function MarkdownText({ text }: { text: string }) {
+export const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
   return <div className="prose">
     <ReactMarkdown skipHtml remarkPlugins={[remarkGfm, remarkBreaks]} components={{
       a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>,
@@ -27,4 +27,4 @@ export function MarkdownText({ text }: { text: string }) {
       img: ({ src, alt }) => <a href={typeof src === "string" ? src : undefined} target="_blank" rel="noreferrer noopener">{alt || "Open image"}</a>,
     }}>{text}</ReactMarkdown>
   </div>;
-}
+});

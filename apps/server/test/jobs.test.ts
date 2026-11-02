@@ -192,6 +192,26 @@ describe("job runner", () => {
     expect(job?.result).toContain("recurring");
     db.close();
   });
+
+  test("a recurring job that succeeds five times and then fails is retried, not parked", async () => {
+    const db = freshDb();
+    const { emit } = collector();
+    const runner = new JobRunner(db, emit, { maxAttempts: 3, retryDelayMs: 0, maxPerTick: 1 });
+    let calls = 0;
+    runner.register("heartbeat", async () => {
+      calls++;
+      if (calls === 6) throw new Error("one bad tick");
+      return { nextRunAt: nowISO() };
+    });
+
+    enqueueJob(db, { kind: "heartbeat", payload: {} });
+    for (let i = 0; i < 6; i++) await runner.tick();
+    const job = listJobs(db, { includeFinished: true })[0];
+    expect(calls).toBe(6);
+    expect(job?.state).toBe("queued");
+    expect(job?.attempts).toBe(1);
+    db.close();
+  });
 });
 
 describe("turn job", () => {

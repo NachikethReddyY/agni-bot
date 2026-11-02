@@ -23,12 +23,13 @@ import {
 import { defaultPersona, getPersona, personaInfo, mentionRoster, defaultResolvedPersona, resolvePersona, canonicalAgentID, updatePersona } from "../agent/personas";
 import { createAgentPersona } from "../agent/creation";
 import { answerFormAndWake } from "../agent/form-broker";
+import { getForm } from "../stores/forms";
 import { renameAgent } from "../agent/identity";
 import { resolveAgentMention } from "../agent/mentions";
 import { cancelThreadTurn, isThreadActive, runTaskTurn } from "../agent/task-loop";
 import { resolveApprovalWaiter } from "../agent/approval-broker";
 import { cancelSecret, listPendingSecrets, resolveSecret } from "../agent/secret-broker";
-import { verifyToken } from "../auth/tokens";
+import { isDeviceRevoked, verifyToken } from "../auth/tokens";
 import type { Config } from "../config";
 import { log } from "../log";
 import type { Router } from "../models/router";
@@ -60,28 +61,65 @@ import { bypassesBatch, classifyTurn } from "../agent/gate";
 import { scheduleTagger, turnsSinceTag } from "../jobs/tagger";
 import type { TurnJobPayload } from "../jobs/turn";
 import { newID, nowISO } from "../util/ids";
-import { putAgentMemory, listAgentMemories, type AgentMemoryRow } from "../stores/agent-memories";
-import { appendChannelMessage, ensureDMChannel, getChannel } from "../stores/channels";
+import {
+  deleteAgentMemory,
+  getAgentMemory,
+  listAgentMemories,
+  memoryVisibleTo,
+  putAgentMemory,
+  rewriteAgentMemory,
+  setMemoryPinned,
+  type AgentMemoryRow,
+} from "../stores/agent-memories";
+import { getConflict, listConflicts, resolveConflict } from "../stores/conflicts";
+import { appendChannelMessage, channelAgentIDs, createGroupChannel, ensureDMChannel, getChannel, listGroupChannels, type ChannelRow } from "../stores/channels";
+import { groupContextBlock, groupHistory, groupResponder } from "../agent/group";
 import { canonicalURL, saveLink, searchLinks } from "../stores/links";
 import { buildShareDocument, publishShare, shareBaseURL } from "../share/document";
-import { createTask, createTaskList, editTask, getTask, listTaskActivity, listTaskLists, listTasks, setTaskStatus, snoozeTask, cancelDelegation, clearPendingQuestion, setDelegationJob, setDelegationState, taskInfo } from "../stores/tasks";
+import { createTask, createTaskList, editTask, getTask, listTaskActivity, listTaskLists, listTasks, setTaskStatus, snoozeTask, cancelDelegation, clearPendingQuestion, setDelegationJob, setDelegationState, taskInfo, briefChainID } from "../stores/tasks";
 import { fetchPage } from "../tools/fetch-url";
 import { scheduleTaskReminder } from "../jobs/task-reminders";
 import type { PluginService } from "../plugins/service";
 import { pluginMailResolver } from "../plugins/credentials";
 import type { FrameLog } from "./frame-log";
 import { activateAppearanceProfile, deleteAppearanceProfile, listAppearanceProfiles, saveAppearanceProfile } from "../stores/appearance";
+import { getRoutineByJobID, listRuns, updateRoutineState } from "../stores/routines";
+import { normalizeAllowedDomains } from "../routines/egress";
+import { deleteRoutineJob } from "../tools/routines-tool";
+import { removeSubscription, saveSubscription, type PushService } from "../push/web-push";
+import { getProactivity, setProactivity } from "../stores/proactivity";
 
 export interface Session {
   id: string;
   authed: boolean;
   local?: boolean;
   device?: { id: string; name: string };
+  /** Set at upgrade when a paired browser's session cookie came with the request. */
+  cookieDevice?: { id: string; name: string };
   agentID: string;
   openThreadID?: string;
   /** In-flight turns owned by this connection, cancellable via msg.cancel. */
   aborts: Map<string, AbortController>;
   helloTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * H32: live frames held after `hello` until this connection's `resync`
+   * replay is out, so the client never sees a newer seq before an older one.
+   */
+  held?: ServerFrame[];
+  holdTimer?: ReturnType<typeof setTimeout>;
+}
+
+/** How long a fresh connection's live frames wait for its `resync`. */
+export const RESYNC_HOLD_MS = 1_000;
+
+/** Send `frames` plus everything held, once each, in seq order; stop holding. */
+export function releaseHeld(deps: Pick<DispatchDeps, "send">, session: Session, frames: ServerFrame[] = []): void {
+  if (session.holdTimer !== undefined) clearTimeout(session.holdTimer);
+  session.holdTimer = undefined;
+  const bySeq = new Map<number, ServerFrame>();
+  for (const frame of [...frames, ...(session.held ?? [])]) bySeq.set(frame.seq, frame);
+  session.held = undefined;
+  for (const frame of [...bySeq.values()].sort((a, b) => a.seq - b.seq)) deps.send(frame);
 }
 
 export function newSession(): Session {
@@ -109,6 +147,8 @@ export interface DispatchDeps {
   /** Plugin connections (catalog, connect flows, OAuth callbacks). */
   plugins?: PluginService;
   chatgpt?: ChatGPTAuth;
+  /** Web Push (VAPID key, delivery). */
+  push?: PushService;
 }
 
 export async function dispatch(deps: DispatchDeps, session: Session, raw: string): Promise<void> {
@@ -118,6 +158,17 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
   if (!parsed.ok) return sendError(deps, session, "bad_frame", parsed.error);
 
   const frame = parsed.frame;
+  // One gate for every frame: only the handshake may arrive unauthenticated.
+  if (frame.type !== "hello" && !requireAuth(deps, session)) return;
+  // A client that acts before resyncing is not going to resync: stop holding its live frames.
+  if (session.held && frame.type !== "resync" && frame.type !== "hello") releaseHeld(deps, session);
+  // M1: a revoked device loses its open sessions too, not just new handshakes.
+  if (session.device && isDeviceRevoked(deps.db, session.device.id)) {
+    session.authed = false;
+    sendError(deps, session, "unauthorized", "this device was revoked");
+    deps.close(4003, "revoked");
+    return;
+  }
   switch (frame.type) {
     case "hello":
       return handleHello(deps, session, frame);
@@ -140,7 +191,7 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
     case "conversation.open":
       return handleConversationOpen(deps, session, frame);
     case "session.new":
-      return void handleSessionNew(deps, session, frame);
+      return detach(deps, session, "session.new", handleSessionNew(deps, session, frame));
     case "conversation.history":
       return handleConversationHistory(deps, session, frame);
     case "thread.open":
@@ -155,6 +206,8 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleJobList(deps, session, frame);
     case "job.set":
       return handleJobSet(deps, session, frame);
+    case "routine.domains.set":
+      return handleRoutineDomainsSet(deps, session, frame);
     case "job.delete":
       return handleJobDelete(deps, session, frame);
     case "task.list":
@@ -167,12 +220,18 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleTaskActivity(deps, session, frame);
     case "memory.list":
       return handleMemoryList(deps, session, frame);
+    case "memory.update":
+    case "memory.pin":
+    case "memory.forget":
+    case "memory.conflicts.list":
+    case "memory.conflict.resolve":
+      return handleMemoryEdit(deps, session, frame);
     case "task.update":
       return handleTaskUpdate(deps, session, frame);
     case "task.answer":
       return handleTaskAnswer(deps, session, frame);
     case "bind.direct":
-      return void handleBindDirect(deps, session, frame);
+      return detach(deps, session, "bind.direct", handleBindDirect(deps, session, frame));
     case "provider.add":
       return await handleProviderAdd(deps, session, frame);
     case "provider.model.set":
@@ -219,6 +278,28 @@ export async function dispatch(deps: DispatchDeps, session: Session, raw: string
       return handleAgentProfile(deps, session, frame);
     case "agent.create":
       return handleAgentCreate(deps, session, frame);
+    case "push.subscribe":
+      if (!requireAuth(deps, session)) return;
+      saveSubscription(deps.db, session.device!.id, frame.subscription);
+      return;
+    case "push.unsubscribe":
+      if (!requireAuth(deps, session)) return;
+      removeSubscription(deps.db, frame.endpoint);
+      return;
+    case "push.vapid.get":
+      if (!requireAuth(deps, session)) return;
+      if (!deps.push) return sendError(deps, session, "internal", "push is not available");
+      deps.reply({ type: "push.vapid", publicKey: deps.push.publicKey() });
+      return;
+    case "agent.proactivity":
+      return handleAgentProactivity(deps, session, frame);
+    case "channel.create":
+      return handleChannelCreate(deps, session, frame);
+    case "channel.list":
+      if (!requireAuth(deps, session)) return;
+      return void deps.reply({ type: "channel.list.ok", channels: listGroupChannels(deps.db).map((row) => channelInfo(deps.db, row)) });
+    case "channel.history":
+      return handleChannelHistory(deps, session, frame);
   }
 }
 
@@ -231,7 +312,10 @@ function handleHello(deps: DispatchDeps, session: Session, frame: Extract<Client
     deps.close(4002, "version mismatch");
     return;
   }
-  void verifyToken(deps.db, frame.token).then((device) => {
+  const authenticate = frame.token
+    ? verifyToken(deps.db, frame.token)
+    : Promise.resolve(session.cookieDevice && !isDeviceRevoked(deps.db, session.cookieDevice.id) ? session.cookieDevice : null);
+  detach(deps, session, "hello", authenticate.then((device) => {
     if (!device) {
       sendError(deps, session, "unauthorized", "unknown or revoked token — pair a device first");
       deps.close(4003, "unauthorized");
@@ -244,16 +328,20 @@ function handleHello(deps: DispatchDeps, session: Session, frame: Extract<Client
       session.helloTimer = undefined;
     }
     log.info(`hello from "${device.name}" (${device.id}) as agent ${session.agentID}`);
+    // H32: everything after hello.ok (including this handshake's own frames) waits for the resync replay.
+    session.held = [];
+    session.holdTimer = setTimeout(() => releaseHeld(deps, session), RESYNC_HOLD_MS);
     // lastSeq must equal the seq this very frame is about to receive; no
     // await can interleave between the read and the reply, so this is exact.
     // The handshake answer goes only to this connection and stays out of the
     // replay log — other clients never see it, and it is not stream state.
-    deps.reply({
+    const hello = deps.frameLog.next({
       type: "hello.ok",
       v: PROTOCOL_VERSION,
       serverTime: nowISO(),
       lastSeq: deps.frameLog.seq + 1,
-    });
+    }, { replay: false });
+    deps.send(hello);
     deps.emit({ type: "agents.update", agents: personaInfo(deps.db), mentions: mentionRoster(deps.db) });
     // A reconnect must not lose a password prompt that is still waiting.
     for (const pendingSecret of listPendingSecrets()) {
@@ -268,42 +356,97 @@ function handleHello(deps: DispatchDeps, session: Session, frame: Extract<Client
         ...(pendingSecret.conversationID ? { conversationID: pendingSecret.conversationID } : {}),
       });
     }
+    // H36: the same for approval and form cards a turn in this process is still waiting on.
+    for (const approval of deps.db.query<{ id: string; action: string; preview: string }, [string]>(
+      "SELECT id, action, preview FROM approvals WHERE status = 'pending' AND created_at >= ? ORDER BY created_at",
+    ).all(PROCESS_STARTED_AT)) {
+      deps.reply({ type: "approval.request", requestID: approval.id, action: approval.action, preview: approval.preview, buttons: ["once", "always", "reject"] });
+    }
+    for (const { id } of deps.db.query<{ id: string }, [string]>(
+      "SELECT id FROM forms WHERE status = 'pending' AND created_at >= ? ORDER BY created_at",
+    ).all(PROCESS_STARTED_AT)) {
+      const form = getForm(deps.db, id);
+      if (!form) continue;
+      deps.reply({
+        type: "form.request",
+        requestID: form.id,
+        question: form.question,
+        options: form.options.length > 0 ? form.options : undefined,
+        multiple: form.multiple,
+        kind: form.kind,
+        email: form.email ?? undefined,
+      });
+    }
     emitOnboardingIfNeeded(deps);
-  });
+  }));
 }
+
+/**
+ * Approval and form waiters live in memory, so only rows this process created
+ * can still wake a turn. shortcut: a pending row whose turn was aborted in this
+ * process is re-sent too; answering it is a no-op. Expose the waiter maps if that matters.
+ */
+const PROCESS_STARTED_AT = nowISO();
 
 function handleResync(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "resync" }>): void {
   if (!requireAuth(deps, session)) return;
   const { frames, gap, oldest } = deps.frameLog.since(frame.lastSeq);
   if (gap) {
     sendError(deps, session, "resync_gap", `cannot replay from ${frame.lastSeq}; oldest replayed frame is ${oldest}`);
+    releaseHeld(deps, session);
     return;
   }
-  for (const replay of frames) deps.send(replay);
+  releaseHeld(deps, session, frames);
 }
 
-interface PendingMessageBatch {
-  texts: string[];
-  frame: Extract<ClientFrame, { type: "msg.send" }>;
-  session: Session;
-  firstAt: number;
-  typing: boolean;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-const messageBatches = new WeakMap<DispatchDeps, Map<string, PendingMessageBatch>>();
-
-function batchKey(frame: Extract<ClientFrame, { type: "msg.send" }>, session: Session): string {
-  return `${frame.channelId ?? frame.conversationID ?? frame.threadID ?? session.agentID}:${frame.toAgentId ?? session.agentID}`;
-}
-
-/** A message the owner sent while its thread was mid-turn: run it next. */
 interface QueuedMessage {
   deps: DispatchDeps;
   frame: Extract<ClientFrame, { type: "msg.send" }>;
   session: Session;
   text: string;
+  rowIDs: string[];
 }
+
+/** H22: write the owner's message before anything acknowledges it. */
+function persistOwnerMessage(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "msg.send" }>, text: string): string {
+  const id = newID("qmsg");
+  deps.db.run(
+    "INSERT INTO queued_messages (id, frame, text, device_id, device_name, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    [id, JSON.stringify(frame), text, session.device?.id ?? "", session.device?.name ?? "You", nowISO()],
+  );
+  return id;
+}
+
+/** The message's turn has started (or it was dropped): it must not replay at boot. */
+function forgetOwnerMessages(db: Database, rowIDs: string[]): void {
+  for (const id of rowIDs) db.run("DELETE FROM queued_messages WHERE id = ?", [id]);
+}
+
+/**
+ * Boot: replay owner messages a previous process accepted but never started,
+ * oldest first. Messages for the same thread queue behind each other as usual.
+ */
+export function resumeQueuedMessages(deps: DispatchDeps): number {
+  const rows = deps.db.query<{ id: string; frame: string; text: string; device_id: string; device_name: string }, []>(
+    "SELECT id, frame, text, device_id, device_name FROM queued_messages ORDER BY created_at, rowid",
+  ).all();
+  for (const row of rows) {
+    if (isDeviceRevoked(deps.db, row.device_id)) {
+      forgetOwnerMessages(deps.db, [row.id]);
+      continue;
+    }
+    const session: Session = { ...newSession(), authed: true, device: { id: row.device_id, name: row.device_name } };
+    const frame = JSON.parse(row.frame) as Extract<ClientFrame, { type: "msg.send" }>;
+    dispatchUserMessage(deps, session, frame, row.text, [row.id]);
+  }
+  return rows.length;
+}
+
+/**
+ * Threads a message has been dispatched to whose turn has not claimed the
+ * thread yet: a second message in that gap queues instead of interrupting.
+ */
+const startingThreads = new Set<string>();
 
 /**
  * FIFO of messages waiting on a busy thread. Keyed by the database — the one
@@ -338,7 +481,8 @@ function targetThread(
     const conversation = getConversation(deps.db, frame.conversationID);
     return conversation ? activeSession(deps.db, conversation) : null;
   }
-  const mention = resolveAgentMention(deps.db, text);
+  const group = groupOf(deps.db, frame.channelId);
+  const mention = group ? groupResponder(deps.db, group, text) : resolveAgentMention(deps.db, text);
   const channelAgent = frame.channelId === "main"
     ? "ea"
     : frame.channelId?.startsWith("dm:")
@@ -362,13 +506,14 @@ function dispatchUserMessage(
   session: Session,
   frame: Extract<ClientFrame, { type: "msg.send" }>,
   text: string,
+  rowIDs: string[],
 ): void {
   const thread = targetThread(deps, session, frame, text);
-  if (thread && isThreadActive(thread.id)) {
+  if (thread && (isThreadActive(thread.id) || startingThreads.has(thread.id))) {
     const queues = threadQueues.get(deps.db) ?? new Map<string, QueuedMessage[]>();
     threadQueues.set(deps.db, queues);
     const queue = queues.get(thread.id) ?? [];
-    queue.push({ deps, frame, session, text });
+    queue.push({ deps, frame, session, text, rowIDs });
     queues.set(thread.id, queue);
     deps.emit({
       type: "status.update",
@@ -381,7 +526,15 @@ function dispatchUserMessage(
     });
     return;
   }
-  void runUserMessage(deps, session, frame, text);
+  if (thread) startingThreads.add(thread.id);
+  detach(deps, session, "msg.send", runUserMessage(deps, session, frame, text).finally(() => {
+    // Settled means the turn holds the thread (or the message ended early): either way it is no longer queued.
+    forgetOwnerMessages(deps.db, rowIDs);
+    if (!thread) return;
+    startingThreads.delete(thread.id);
+    // No turn claimed this thread (capture, early error, rollover to a new block): start the next waiting message.
+    if (!isThreadActive(thread.id)) drainThreadQueue(deps, thread.id);
+  }));
 }
 
 /** After a turn ends, start the next message waiting on that thread. */
@@ -389,11 +542,21 @@ function drainThreadQueue(deps: DispatchDeps, threadID: string): void {
   const queues = threadQueues.get(deps.db);
   const queue = queues?.get(threadID);
   if (!queues || !queue || queue.length === 0) return;
-  const next = queue.shift()!;
+  let next = queue.shift()!;
+  // A burst sent while the last turn ran becomes one turn, not one per message.
+  while (mergeable(next) && queue[0] && mergeable(queue[0])) {
+    const more = queue.shift()!;
+    next = { ...more, text: `${next.text}\n\n${more.text}`, rowIDs: [...next.rowIDs, ...more.rowIDs] };
+  }
   if (queue.length === 0) queues.delete(threadID);
   // A stop that somehow landed in the queue still means "stop", not a turn.
-  if (isStopCommand(next.text)) return;
-  dispatchUserMessage(next.deps, next.session, next.frame, next.text);
+  if (isStopCommand(next.text)) return forgetOwnerMessages(deps.db, next.rowIDs);
+  dispatchUserMessage(next.deps, next.session, next.frame, next.text, next.rowIDs);
+}
+
+/** Plain chat merges; files, stops and explicit remembers stay their own turn (GATE-003). */
+function mergeable(message: QueuedMessage): boolean {
+  return !message.frame.files?.length && !isStopCommand(message.text) && !bypassesBatch(classifyTurn(message.text).category);
 }
 
 /** Forget everything waiting on a thread; returns how many messages. */
@@ -402,6 +565,7 @@ function clearThreadQueue(deps: DispatchDeps, threadID: string): number {
   const queue = queues?.get(threadID);
   if (!queues || !queue) return 0;
   queues.delete(threadID);
+  for (const message of queue) forgetOwnerMessages(deps.db, message.rowIDs);
   return queue.length;
 }
 
@@ -445,70 +609,15 @@ function handleMsgSend(deps: DispatchDeps, session: Session, frame: Extract<Clie
       return;
     }
   }
-  // GATE-003: explicit remember/task commands are processed immediately — the
-  // debounce exists to merge a burst of chat, not to delay a direct command.
-  const gate = classifyTurn(combined);
-  if (frame.files?.length || bypassesBatch(gate.category)) {
-    dispatchUserMessage(deps, session, frame, combined);
-    return;
-  }
-  const batches = messageBatches.get(deps) ?? new Map<string, PendingMessageBatch>();
-  messageBatches.set(deps, batches);
-  const key = batchKey(frame, session);
-  const existing = batches.get(key);
-  if (existing) {
-    existing.texts.push(...parts);
-    existing.frame = frame;
-    existing.session = session;
-    clearTimeout(existing.timer);
-    existing.timer = setTimeout(() => flushMessageBatch(deps, key), 800);
-    return;
-  }
-
-  const pending: PendingMessageBatch = {
-    texts: [...parts],
-    frame,
-    session,
-    firstAt: Date.now(),
-    typing: false,
-    timer: setTimeout(() => flushMessageBatch(deps, key), 800),
-  };
-  batches.set(key, pending);
-  deps.emit({
-    type: "status.update",
-    channelId: frame.channelId ?? "main",
-    agentId: frame.toAgentId,
-    text: "Got it, looking into this…",
-    transient: true,
-  });
+  // Every message starts at once; one sent while a turn runs waits in the
+  // thread queue, where a burst merges into a single follow-up turn.
+  const rowID = persistOwnerMessage(deps, session, frame, combined);
+  dispatchUserMessage(deps, session, frame, combined, [rowID]);
 }
 
-function handleUserTyping(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "user.typing" }>): void {
-  if (!requireAuth(deps, session)) return;
-  const batches = messageBatches.get(deps);
-  if (!batches) return;
-  const prefix = `${frame.channelId ?? session.agentID}:`;
-  for (const [key, batch] of batches) {
-    if (!key.startsWith(prefix)) continue;
-    batch.typing = frame.isTyping;
-    if (!frame.isTyping) {
-      clearTimeout(batch.timer);
-      batch.timer = setTimeout(() => flushMessageBatch(deps, key), 0);
-    }
-  }
-}
-
-function flushMessageBatch(deps: DispatchDeps, key: string): void {
-  const batches = messageBatches.get(deps);
-  const batch = batches?.get(key);
-  if (!batches || !batch) return;
-  const elapsed = Date.now() - batch.firstAt;
-  if (batch.typing && elapsed < 2_000) {
-    batch.timer = setTimeout(() => flushMessageBatch(deps, key), Math.min(800, 2_000 - elapsed));
-    return;
-  }
-  batches.delete(key);
-  dispatchUserMessage(deps, batch.session, batch.frame, batch.texts.join("\n\n"));
+function handleUserTyping(deps: DispatchDeps, session: Session, _frame: Extract<ClientFrame, { type: "user.typing" }>): void {
+  // Accepted for older clients; messages no longer wait on typing.
+  requireAuth(deps, session);
 }
 
 async function runUserMessage(
@@ -531,8 +640,12 @@ async function runUserMessage(
   // `@friday write the email` is a message to Friday, not to whatever chat
   // is open. Routing happens before the turn starts: the text is appended to
   // that agent's DM and the executive assistant never sees it.
-  const mention = resolveAgentMention(deps.db, text);
-  const routedText = mention?.text ?? text;
+  // Phase 4: in a group the floor rule picks the bot, and the message stays
+  // in the room instead of moving to that bot's DM.
+  const groupChannel = groupOf(deps.db, frame.channelId);
+  const group = groupChannel ? groupResponder(deps.db, groupChannel, text) : null;
+  const mention = group ? null : resolveAgentMention(deps.db, text);
+  const routedText = group?.text ?? mention?.text ?? text;
   // The executive assistant's surface is `main`, not a DM channel; an
   // `@agni` mention must not create a second, invisible room.
   const mentionChannelID = mention
@@ -547,7 +660,7 @@ async function runUserMessage(
     channel = ensureDMChannel(deps.db, channelAgentID);
   }
   if (frame.channelId && !channel && !mention) return sendError(deps, session, "unknown_channel", `no channel ${frame.channelId}`);
-  const requestedAgentID = mention?.agentID ?? frame.toAgentId ?? (frame.channelId ? channel?.agent_id : session.agentID) ?? session.agentID;
+  const requestedAgentID = group?.agentID ?? mention?.agentID ?? frame.toAgentId ?? (frame.channelId ? channel?.agent_id : session.agentID) ?? session.agentID;
 
   // While the primary assistant is waiting for its first name, an ordinary
   // main-channel message is treated as the answer to the inline prompt.
@@ -610,15 +723,19 @@ async function runUserMessage(
   // salience. Temp turns stay visible in the transcript and the recent window
   // but are skipped by compaction (GATE-002, MEM/TAG).
   const gate = classifyTurn(routedText);
+  let userMessageID: string | undefined;
   if (channel) {
     const userMessage = appendChannelMessage(deps.db, {
       channelID,
       fromType: "user",
       fromID: session.device?.id ?? "user",
-      toAgentID: mention?.agentID ?? frame.toAgentId ?? null,
+      // In a group the row names the bot that took the floor, so the tagger
+      // batches each bot's exchanges separately.
+      toAgentID: group?.agentID ?? mention?.agentID ?? frame.toAgentId ?? null,
       text: routedText,
       salience: gate.salience,
     });
+    userMessageID = userMessage.id;
     linkAttachments(deps.db, userMessage.id, attachments.map((file) => file.id));
     deps.emit({
       attachments,
@@ -628,7 +745,7 @@ async function runUserMessage(
     });
   }
   if (!attachments.length && (isCapture(routedText) || isStoreQuery(routedText))) {
-    void captureMessage(deps, session, thread, persona.id, routedText);
+    detach(deps, session, "capture", captureMessage(deps, session, thread, persona.id, routedText));
     return;
   }
   const turnID = newID("trn");
@@ -639,6 +756,7 @@ async function runUserMessage(
     turnTimeoutMs: deps.config.turnTimeoutMs,
     // Mailboxes the owner connected in Settings → Plugins.
     mailAccounts: pluginMailResolver(deps.config.pluginsPath),
+    pluginsPath: deps.config.pluginsPath,
   };
   const turn = runTaskTurn(deps.db, deps.router, turnSettings, {
     attachmentIDs: attachments.map((file) => file.id),
@@ -651,6 +769,7 @@ async function runUserMessage(
     emit: deps.emit,
     signal: controller.signal,
     channelID: channel ? channelID : undefined,
+    ...(groupChannel ? { groupContext: groupContextBlock(groupChannel, groupHistory(deps.db, channelID, persona.id, userMessageID)) } : {}),
   });
 
   void turn
@@ -840,21 +959,92 @@ function handleMemoryList(deps: DispatchDeps, session: Session, frame: Extract<C
     callerAgentID: session.agentID,
     limit: frame.limit ?? 100,
   });
-  deps.reply({
-    type: "memory.list.ok",
-    memories: rows.map((row) => ({
-      id: row.id,
-      text: row.content,
-      scope: row.scope,
-      visibility: row.visibility,
-      source: row.source,
-      confidence: row.confidence,
-      salience: row.salience,
-      updatedAt: row.updated_at,
-      lastUsedAt: row.last_used_at,
-      useCount: row.use_count,
-    })),
-  });
+  deps.reply({ type: "memory.list.ok", memories: rows.map(memoryItem) });
+}
+
+function memoryItem(row: AgentMemoryRow) {
+  return {
+    id: row.id,
+    text: row.content,
+    scope: row.scope,
+    visibility: row.visibility,
+    source: row.source,
+    confidence: row.confidence,
+    salience: row.salience,
+    updatedAt: row.updated_at,
+    lastUsedAt: row.last_used_at,
+    useCount: row.use_count,
+  };
+}
+
+type MemoryEditFrame = Extract<ClientFrame, { type: "memory.update" | "memory.pin" | "memory.forget" | "memory.conflicts.list" | "memory.conflict.resolve" }>;
+
+/**
+ * Editable memory (Phase 1). Every edit goes through the same caller-filter
+ * as `memory.list`: a row the view would not show is `unknown_memory`.
+ */
+function handleMemoryEdit(deps: DispatchDeps, session: Session, frame: MemoryEditFrame): void {
+  if (!requireAuth(deps, session)) return;
+  const caller = session.agentID;
+  const visible = (id: string): AgentMemoryRow | null => {
+    const row = getAgentMemory(deps.db, id);
+    return row && memoryVisibleTo(row, caller) ? row : null;
+  };
+  const unknown = (id: string): void => sendError(deps, session, "unknown_memory", `no memory ${id}`);
+  switch (frame.type) {
+    case "memory.update": {
+      if (!visible(frame.id)) return unknown(frame.id);
+      const row = rewriteAgentMemory(deps.db, frame.id, frame.text);
+      if (!row) return unknown(frame.id);
+      deps.reply({ type: "memory.update.ok", memory: memoryItem(row) });
+      return;
+    }
+    case "memory.pin": {
+      if (!visible(frame.id)) return unknown(frame.id);
+      const row = setMemoryPinned(deps.db, frame.id, frame.pinned);
+      if (!row) return unknown(frame.id);
+      deps.reply({ type: "memory.pin.ok", memory: memoryItem(row) });
+      return;
+    }
+    case "memory.forget": {
+      if (!visible(frame.id)) return unknown(frame.id);
+      deps.reply({ type: "memory.forget.ok", id: frame.id, deleted: deleteAgentMemory(deps.db, frame.id) });
+      return;
+    }
+    case "memory.conflicts.list": {
+      // Only conflicts whose live side this caller can see.
+      const conflicts = listConflicts(deps.db, { limit: frame.limit ?? 50 })
+        .filter((conflict) => visible(conflict.memory_id))
+        .map((conflict) => ({
+          id: conflict.id,
+          memoryId: conflict.memory_id,
+          previousId: conflict.previous_id,
+          content: conflict.content,
+          previousContent: conflict.previous_content,
+          createdAt: conflict.created_at,
+        }));
+      deps.reply({ type: "memory.conflicts.list.ok", conflicts });
+      return;
+    }
+    case "memory.conflict.resolve": {
+      const conflict = getConflict(deps.db, frame.id);
+      if (!conflict || conflict.resolved) return sendError(deps, session, "unknown_conflict", `no open conflict ${frame.id}`);
+      if (frame.keepId !== conflict.memory_id && frame.keepId !== conflict.previous_id) {
+        return sendError(deps, session, "bad_frame", "keepId must be the conflict's memoryId or previousId");
+      }
+      // The live side must still be live and visible; a later write made the
+      // conflict stale, and the owner should look at the current list instead.
+      if (!visible(conflict.memory_id)) return unknown(conflict.memory_id);
+      const kept = frame.keepId === conflict.memory_id
+        ? getAgentMemory(deps.db, conflict.memory_id)
+        // Keeping the old value: it supersedes the newer one, as an owner edit.
+        : rewriteAgentMemory(deps.db, conflict.memory_id, conflict.previous_content);
+      if (!kept) return unknown(conflict.memory_id);
+      resolveConflict(deps.db, conflict.id);
+      deps.reply({ type: "memory.conflict.resolve.ok", id: conflict.id, memory: memoryItem(kept) });
+      return;
+    }
+  }
 }
 
 function handleTaskUpdate(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame,{type:"task.update"}>): void {
@@ -910,12 +1100,14 @@ function handleTaskAnswer(deps: DispatchDeps, session: Session, frame: Extract<C
   const job = enqueueJob(deps.db, {
     kind: "turn",
     payload: {
-      lane: "task",
       agentID: task.owner_agent_id ?? undefined,
       threadID: childThreadID,
       text: answer,
       notify: false,
       delegationTaskID: task.id,
+      // The answer resumes the task inside the chain it started in, so a
+      // stopped chain stays stopped.
+      chainID: briefChainID(task.brief),
     },
   });
   setDelegationJob(deps.db, task.id, job.id);
@@ -1131,6 +1323,7 @@ function handleApproveReply(
   );
   if (result.changes === 0) {
     sendError(deps, session, "unknown_request", `no pending approval ${frame.requestID}`);
+    return;
   }
   resolveApprovalWaiter(frame.requestID, frame.decision);
 }
@@ -1268,15 +1461,40 @@ function handleJobSet(
     case "pause":
       setJobEnabled(deps.db, job.id, false);
       break;
-    case "resume":
+    case "resume": {
       setJobEnabled(deps.db, job.id, true);
+      // A resumed routine starts its failure count over, or one more failure re-pauses it.
+      const routine = getRoutineByJobID(deps.db, job.id);
+      if (routine) updateRoutineState(deps.db, routine.id, { failureStreak: 0 });
       break;
-    case "run":
+    }
+    case "run": {
       // "Run now" resumes a paused job: a claim would skip it otherwise.
+      // Run now does not reset the failure streak: only resume does.
       wakeJob(deps.db, job.id);
       break;
+    }
   }
   // The write answers with the fresh list, so toggles never drift from truth.
+  deps.reply({ type: "job.list.ok", jobs: jobSnapshot(deps.db, 50) });
+}
+
+function handleRoutineDomainsSet(
+  deps: DispatchDeps,
+  session: Session,
+  frame: Extract<ClientFrame, { type: "routine.domains.set" }>,
+): void {
+  if (!requireAuth(deps, session)) return;
+  const job = getJobByPrefix(deps.db, frame.jobID);
+  const routine = job ? getRoutineByJobID(deps.db, job.id) : null;
+  if (!routine) return sendError(deps, session, "unknown_job", `no routine ${frame.jobID}`);
+  let domains: string[];
+  try {
+    domains = normalizeAllowedDomains(frame.domains);
+  } catch (error) {
+    return sendError(deps, session, "invalid_domains", error instanceof Error ? error.message : String(error));
+  }
+  updateRoutineState(deps.db, routine.id, { allowedDomains: domains });
   deps.reply({ type: "job.list.ok", jobs: jobSnapshot(deps.db, 50) });
 }
 
@@ -1288,7 +1506,10 @@ function handleJobDelete(
   if (!requireAuth(deps, session)) return;
   const job = getJobByPrefix(deps.db, frame.jobID);
   if (!job) return sendError(deps, session, "unknown_job", `no job ${frame.jobID}`);
-  if (!deleteJob(deps.db, job.id)) {
+  const deleted = job.kind === "routine"
+    ? deleteRoutineJob(deps.db, job.id)
+    : deleteJob(deps.db, job.id);
+  if (!deleted) {
     return sendError(deps, session, "job_running", `task ${job.id} is running and cannot be deleted yet`);
   }
   deps.reply({ type: "job.list.ok", jobs: jobSnapshot(deps.db, 50) });
@@ -1447,13 +1668,15 @@ function jobSnapshot(db: Database, limit: number): JobInfo[] {
   for (const row of [...listJobs(db, { limit }), ...listFinishedJobs(db, 10)]) {
     if (seen.has(row.id)) continue;
     seen.add(row.id);
-    jobs.push(jobInfo(row));
+    jobs.push(jobInfo(db, row));
   }
   return jobs;
 }
 
-function jobInfo(row: JobRow): JobInfo {
+function jobInfo(db: Database, row: JobRow): JobInfo {
   const payload = turnPayload(row);
+  const routine = row.kind === "routine" ? getRoutineByJobID(db, row.id) : null;
+  const recentRuns = routine ? listRuns(db, routine.id, 5) : [];
   return {
     id: row.id,
     kind: row.kind,
@@ -1465,6 +1688,16 @@ function jobInfo(row: JobRow): JobInfo {
     ...(payload.everyMs ? { everyMs: payload.everyMs } : {}),
     ...(payload.text ? { title: clip(payload.text, 120) } : {}),
     ...(payload.threadID ? { threadID: payload.threadID } : {}),
+    ...(routine ? {
+      title: routine.name,
+      ...(routine.threadID ? { threadID: routine.threadID } : {}),
+      routine: {
+        name: routine.name, cron: routine.cron, timezone: routine.timezone, misfire: routine.misfire,
+        preflight: routine.preflight.kind, maxTokens: routine.maxTokens, maxExecutionMs: routine.maxExecutionMs,
+        allowedDomains: routine.allowedDomains, successStreak: routine.successStreak, failureStreak: routine.failureStreak,
+        recentRuns: recentRuns.map((run) => ({ at: run.startedAt, outcome: run.outcome, tokens: run.tokens, ...(run.summary === null ? {} : { summary: run.summary }) })),
+      },
+    } : {}),
     ...(row.result ? { lastResult: row.result } : {}),
   };
 }
@@ -1492,9 +1725,27 @@ function requireAuth(deps: DispatchDeps, session: Session): boolean {
   return false;
 }
 
+/**
+ * Errors answer only the connection that caused them, and take no seq or ring
+ * slot: they reuse the current seq, which every authed socket has already
+ * received, so a client's lastSeq never skips a frame it has not seen.
+ */
 function sendError(deps: DispatchDeps, _session: Session, code: string, message: string): void {
-  deps.emit({ type: "error", code, message });
+  deps.send(errorFrame(deps.frameLog, code, message));
   log.debug(`error frame → ${code}: ${message}`);
+}
+
+export function errorFrame(frameLog: FrameLog, code: string, message: string): ServerFrame {
+  // shortcut: seq 1 before any frame exists, since the schema needs a positive seq.
+  return { type: "error", code, message, seq: Math.max(1, frameLog.seq) };
+}
+
+/** Run a promise off the frame's path; a failure is logged and answered, never fatal. */
+function detach(deps: DispatchDeps, session: Session, label: string, work: Promise<unknown>): void {
+  work.catch((error: unknown) => {
+    log.error(`${label} failed`, error);
+    sendError(deps, session, "internal", error instanceof Error ? error.message : String(error));
+  });
 }
 
 
@@ -1511,12 +1762,12 @@ function handleAgentProfile(
 ): void {
   if (!requireAuth(deps, session)) return;
   const role = frame.role?.trim();
-  if (!role && !frame.visibility) {
-    sendError(deps, session, "bad_frame", "give a role or a visibility to change");
+  if (!role && !frame.visibility && frame.model === undefined && frame.critic === undefined) {
+    sendError(deps, session, "bad_frame", "give a role, a visibility, a model or a critic to change");
     return;
   }
   try {
-    const updated = updatePersona(deps.db, frame.agentId, { role, visibility: frame.visibility });
+    const updated = updatePersona(deps.db, frame.agentId, { role, visibility: frame.visibility, model: frame.model, critic: frame.critic });
     if (!updated) {
       sendError(deps, session, "unknown_agent", `no agent with id ${frame.agentId}`);
       return;
@@ -1532,6 +1783,68 @@ function handleAgentProfile(
   } catch (error) {
     sendError(deps, session, "bad_frame", error instanceof Error ? error.message : "could not update the agent");
   }
+}
+
+function handleAgentProactivity(
+  deps: DispatchDeps,
+  session: Session,
+  frame: Extract<ClientFrame, { type: "agent.proactivity" }>,
+): void {
+  if (!requireAuth(deps, session)) return;
+  try {
+    const { agentId, ...patch } = frame;
+    const current = patch.quietStart === undefined && patch.quietEnd === undefined && patch.maxPerDay === undefined
+      ? getProactivity(deps.db, agentId)
+      : setProactivity(deps.db, agentId, { quietStart: patch.quietStart, quietEnd: patch.quietEnd, maxPerDay: patch.maxPerDay });
+    deps.reply({ type: "agent.proactivity", agentId, ...current });
+  } catch (error) {
+    sendError(deps, session, "bad_frame", error instanceof Error ? error.message : "could not set proactivity");
+  }
+}
+
+/** The group channel a frame targets, or null for main, DMs and threads. */
+function groupOf(db: Database, channelID: string | undefined): ChannelRow | null {
+  if (!channelID || channelID === "main" || channelID.startsWith("dm:")) return null;
+  const channel = getChannel(db, channelID);
+  return channel?.type === "group" ? channel : null;
+}
+
+function channelInfo(db: Database, row: ChannelRow) {
+  return { id: row.id, name: row.name, type: "group" as const, agentIds: channelAgentIDs(db, row), createdAt: row.created_at };
+}
+
+function handleChannelCreate(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "channel.create" }>): void {
+  if (!requireAuth(deps, session)) return;
+  const agentIDs = [...new Set(frame.agentIds.map(canonicalAgentID))];
+  const unknown = agentIDs.find((id) => !getPersona(id));
+  if (unknown) return sendError(deps, session, "unknown_agent", `no agent with id ${unknown}`);
+  if (agentIDs.length < 2) return sendError(deps, session, "bad_frame", "a group needs two or more different bots");
+  const row = createGroupChannel(deps.db, frame.name.trim(), agentIDs);
+  deps.emit({ type: "channel.created", channel: channelInfo(deps.db, row) });
+}
+
+function handleChannelHistory(deps: DispatchDeps, session: Session, frame: Extract<ClientFrame, { type: "channel.history" }>): void {
+  if (!requireAuth(deps, session)) return;
+  if (!groupOf(deps.db, frame.channelId)) return sendError(deps, session, "unknown_channel", `no group channel ${frame.channelId}`);
+  const rows = deps.db.query<{
+    id: string; text: string; created_at: string; turn_id: string | null; from_id: string; from_type: string;
+    sender_name: string | null; sender_color: string | null; device_name: string | null; ui_hint: string | null; to_agent_id: string | null;
+  }, [string, number]>(`SELECT * FROM (SELECT cm.id, cm.text, cm.created_at, cm.turn_id, cm.from_id, cm.from_type, cm.rowid AS rid,
+      a.display_name AS sender_name, a.avatar_color AS sender_color, d.name AS device_name, cm.ui_hint, cm.to_agent_id
+      FROM channel_messages cm LEFT JOIN agents a ON a.id = cm.from_id LEFT JOIN devices d ON d.id = cm.from_id
+      WHERE cm.channel_id = ? AND cm.internal = 0 ORDER BY cm.created_at DESC, cm.rowid DESC LIMIT ?) ORDER BY created_at, rid`)
+    .all(frame.channelId, frame.limit ?? 200);
+  const messages = rows.map((row) => {
+    const role = row.from_type === "user" ? "user" : row.from_type === "system" ? "system" : "assistant";
+    return {
+      attachments: messageAttachments(deps.db, row.id),
+      id: row.id, role, text: row.text, createdAt: row.created_at, turnID: row.turn_id ?? undefined,
+      senderName: role === "user" ? row.device_name ?? "You" : row.sender_name ?? row.from_id,
+      senderColor: row.sender_color ?? undefined, uiHint: row.ui_hint ?? undefined,
+      ...(row.to_agent_id ? { toAgentId: row.to_agent_id } : {}),
+    };
+  });
+  deps.reply({ type: "channel.history.ok", channelId: frame.channelId, messages });
 }
 
 function handleAgentCreate(
@@ -1629,7 +1942,7 @@ function emitOnboardingIfNeeded(deps: DispatchDeps): void {
     deps,
     "main",
     "ea",
-    `Hi ${firstName}, I'm ${primary.display_name ?? "Agni Bot"}, your personal assistant. I can help with work and everyday life, and take things off your plate.`,
+    `Hi ${firstName}, I'm ${primary.display_name ?? "New Bot"}, your personal assistant. I can help with work and everyday life, and take things off your plate.`,
     "normal",
   );
   emitOnboardingMessage(

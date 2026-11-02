@@ -12,8 +12,8 @@ interface ProviderOption {
 
 const OPTIONS: ProviderOption[] = [
   { id: "chatgpt", title: "ChatGPT", note: "Sign in with your existing ChatGPT account" },
-  { id: "groq", title: "Groq", note: "Fast · instant lane" },
-  { id: "cerebras", title: "Cerebras", note: "Fast · instant lane" },
+  { id: "groq", title: "Groq", note: "Fast" },
+  { id: "cerebras", title: "Cerebras", note: "Fast" },
   { id: "nim", title: "NVIDIA NIM", note: "Free credits · all lanes" },
   { id: "gemini", title: "Gemini", note: "Free tier · task and deep lanes" },
   { id: "openrouter", title: "OpenRouter", note: "Free models · deep lane" },

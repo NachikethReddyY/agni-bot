@@ -8,7 +8,7 @@ import { ToolRegistry } from "../src/tools/registry";
 import { registerDelegateTaskTool } from "../src/tools/delegate-task-tool";
 import { JobRunner } from "../src/jobs/runner";
 import { registerTurnJob } from "../src/jobs/turn";
-import { getTask, getTaskByJob, cancelDelegation, setDelegationState } from "../src/stores/tasks";
+import { getTask, getTaskByJob, cancelDelegation, setDelegationState, taskInfo } from "../src/stores/tasks";
 import { getJob } from "../src/stores/jobs";
 import { appendMessage, createThread } from "../src/stores/threads";
 import { conversationTranscript, ensureConversation } from "../src/stores/conversations";
@@ -65,6 +65,9 @@ describe("async delegation", () => {
     expect(task.parent_turn_id).toBe("trn_parent");
     expect(task.job_id).toBe(result.jobID);
     expect(task.brief).toContain("Find the source of the delay");
+    // An absent intent is a request, both in storage and in the task view.
+    expect(JSON.parse(task.brief!).intent).toBe("request");
+    expect(taskInfo(task).intent).toBe("request");
     expect(getJob(db, result.jobID)?.kind).toBe("turn");
     expect(getTaskByJob(db, result.jobID)?.id).toBe(task.id);
     expect(emitted.some((frame) => frame.type === "status.update")).toBe(true);
@@ -120,6 +123,61 @@ describe("async delegation", () => {
     expect(second.duplicate).toBe(true);
     const count = db.query<{ count: number }, []>("SELECT count(*) AS count FROM tasks").get();
     expect(count?.count).toBe(1);
+  });
+
+  test("the same goal from two different callers creates two tasks", async () => {
+    db = openDatabase(":memory:");
+    const ctx = { threadID: "thr_parent", turnID: "trn_parent", signal: new AbortController().signal };
+    const queue = async (caller: string): Promise<{ taskID: string; duplicate?: boolean }> => {
+      const registry = new ToolRegistry();
+      registerDelegateTaskTool(registry, { db: db!, emit: () => undefined, currentAgentID: caller });
+      const delegate = registry.get("delegate_task") as unknown as ToolHandler;
+      return (await delegate.handler({ toAgentID: "researcher", goal: "Same job" }, ctx)) as {
+        taskID: string; duplicate?: boolean;
+      };
+    };
+
+    const fromEA = await queue("ea");
+    const fromAnalyst = await queue("analyst");
+
+    expect(fromAnalyst.taskID).not.toBe(fromEA.taskID);
+    expect(fromAnalyst.duplicate).toBeUndefined();
+    const tasks = db.query<{ parent_agent_id: string | null }, []>(
+      "SELECT parent_agent_id FROM tasks ORDER BY created_at",
+    ).all();
+    expect(tasks.map((task) => task.parent_agent_id).sort()).toEqual(["analyst", "ea"]);
+    // And the same caller still dedupes its own retry.
+    const retry = await queue("analyst");
+    expect(retry.taskID).toBe(fromAnalyst.taskID);
+    expect(retry.duplicate).toBe(true);
+  });
+
+  test("an explicit intent is stored on the brief and exposed on the task", async () => {
+    db = openDatabase(":memory:");
+    const registry = new ToolRegistry();
+    registerDelegateTaskTool(registry, { db, emit: () => undefined, currentAgentID: "ea" });
+    const delegate = registry.get("delegate_task") as unknown as ToolHandler;
+    const result = (await delegate.handler(
+      { toAgentID: "researcher", goal: "Report where things stand", intent: "status" },
+      { threadID: "thr_parent", turnID: "trn_parent", signal: new AbortController().signal },
+    )) as { taskID: string };
+
+    const task = getTask(db, result.taskID)!;
+    expect(JSON.parse(task.brief!).intent).toBe("status");
+    expect(taskInfo(task).intent).toBe("status");
+  });
+
+  test("an unknown intent is refused", async () => {
+    db = openDatabase(":memory:");
+    const registry = new ToolRegistry();
+    registerDelegateTaskTool(registry, { db, emit: () => undefined, currentAgentID: "ea" });
+    const delegate = registry.get("delegate_task") as unknown as ToolHandler;
+    await expect(
+      delegate.handler(
+        { toAgentID: "researcher", goal: "Do it", intent: "shout" },
+        { threadID: "thr_parent", turnID: "trn_parent", signal: new AbortController().signal },
+      ),
+    ).rejects.toThrow("intent must be one of");
   });
 
   test("cancel closes the task and removes the queued job", async () => {

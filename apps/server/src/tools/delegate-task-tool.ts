@@ -8,7 +8,7 @@
  * transcript — and the result lands back on the task row plus a notification.
  */
 import type { Database } from "bun:sqlite";
-import type { ServerFrameBody } from "@agni/protocol";
+import { PEER_INTENTS, PeerIntentSchema, type PeerIntent, type ServerFrameBody } from "@agni/protocol";
 import type { ToolRegistry } from "./registry";
 import { teamRoster, resolvePersona } from "../agent/personas";
 import { DEFAULT_VISIBILITY, redactStoredForCaller } from "../agent/visibility";
@@ -23,11 +23,17 @@ import {
 } from "../stores/tasks";
 import { enqueueJob } from "../stores/jobs";
 import { readFacts } from "./expand-tool";
+import { checkPeerRequest, fingerprintPeerRequest } from "../stores/peer-chains";
+import { appendChannelMessage } from "../stores/channels";
+import { MAX_DEPTH } from "../agent/guardrails";
+import { listTaskNotes } from "../stores/task-notes";
 
 const objectSchema = (properties: Record<string, unknown>, required: string[]): Record<string, unknown> => ({
   type: "object", properties, required, additionalProperties: false,
 });
 const stringProp = { type: "string", minLength: 1 };
+/** H23: a turn at this depth may not delegate further; the same cap as `handoff`. */
+export const MAX_DELEGATION_DEPTH = MAX_DEPTH;
 
 export interface DelegateTaskToolDeps {
   db: Database;
@@ -39,6 +45,7 @@ export interface DelegateTaskToolDeps {
   parentTurnID?: string;
   /** The parent thread, so the answer to a question can go back to it. */
   parentThreadID?: string;
+  chainID?: string;
 }
 
 export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateTaskToolDeps): void {
@@ -60,6 +67,11 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
         ? { type: "string", enum: team.map((member) => member.id), description: team.map((member) => `${member.id}: ${member.role}`).join("; ") }
         : stringProp,
       goal: { type: "string", minLength: 1, description: "What the specialist must accomplish, in one or two sentences." },
+      intent: {
+        type: "string",
+        enum: [...PEER_INTENTS],
+        description: "What this delegation is for: request (default), result, question, status or fyi.",
+      },
       constraints: { type: "array", items: { type: "string" }, description: "Rules the result must respect." },
       deadline: { type: "string", description: "Optional ISO date/time by which the work is needed." },
       outputSchema: { type: "string", description: "Optional description of the shape of the result." },
@@ -79,24 +91,45 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
       }
       const goal = String(args.goal ?? "").trim();
       if (!goal) throw new Error("delegate_task requires a goal");
+      const depth = ctx.chain?.depth ?? 1;
+      if (depth >= MAX_DELEGATION_DEPTH) {
+        throw new Error(`delegation depth limit reached (depth ${depth} of ${MAX_DELEGATION_DEPTH}); do the work yourself or report back to the owner`);
+      }
 
       const factIDs = Array.isArray(args.factIDs) ? args.factIDs.map(String).slice(0, 20) : undefined;
       const brief: DelegationBrief = {
         goal,
+        intent: readIntent(args.intent),
         constraints: Array.isArray(args.constraints) ? args.constraints.map(String) : undefined,
         deadline: args.deadline === undefined ? null : String(args.deadline),
         outputSchema: args.outputSchema === undefined ? null : String(args.outputSchema),
         ...(factIDs && factIDs.length > 0 ? { factIDs } : {}),
       };      // Idempotency: the same goal already in flight for the same specialist
-      // is returned, not queued twice. A model retry must not double the work.
-      const existing = findActiveDelegation(deps.db, toAgentID, goal);
+      // from this caller is returned, not queued twice. A model retry must not
+      // double the work; two different callers asking the same thing are two
+      // pieces of work.
+      // The chain check runs before the in-flight lookup: an identical request
+      // already in flight is still a repeat. A stopped chain refuses everything.
+      const chainID = deps.chainID ?? `legacy:${deps.currentAgentID}`;
+      const check = checkPeerRequest(deps.db, chainID,
+        fingerprintPeerRequest(deps.currentAgentID, toAgentID, brief.intent ?? "request", goal));
+      if (check === "stop") {
+        const text = "Stopped: agents repeated the same request in this chain.";
+        const channelID = deps.channelID ?? "main";
+        const row = appendChannelMessage(deps.db, { channelID, fromType: "system", fromID: deps.currentAgentID, text, uiHint: "normal", peerInfluenced: Boolean(ctx.peerInput) });
+        deps.emit({ type: "msg.new", id: row.id, channelId: channelID, fromType: "system", fromId: deps.currentAgentID, senderName: deps.currentAgentID, text, internal: false, uiHint: "normal", createdAt: row.created_at });
+        return { stopped: true, note: "The chain is stopped; report to the owner." };
+      }
+      const existing = findActiveDelegation(deps.db, toAgentID, goal, deps.currentAgentID);
       if (existing) {
+        const repeated = check === "retry";
         if (args.mode === "wait") {
           const waited = await waitForDelegation(deps.db, existing.id, waitBudget(args.timeoutMs), ctx.signal);
           return {
             ...taskView(waited.task, deps),
             jobID: existing.job_id,
             duplicate: true,
+            repeated,
             waitTimedOut: waited.timedOut,
           };
         }
@@ -106,9 +139,12 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
           agentID: toAgentID,
           state: existing.delegate_state,
           duplicate: true,
+          repeated,
           message: `That work is already in flight with ${toAgentID}.`,
         };
       }
+      if (check === "retry") return { repeated: true, note: "That exact request was already sent in this chain. Say something new, or stop." };
+      brief.chainID = chainID;
       const task = createDelegationTask(deps.db, {
         ownerAgentID: toAgentID,
         brief,
@@ -124,11 +160,20 @@ export function registerDelegateTaskTool(registry: ToolRegistry, deps: DelegateT
       const job = enqueueJob(deps.db, {
         kind: "turn",
         payload: {
-          lane: "task",
+          chainID: brief.chainID,
+          // A brief is a peer's note, not the owner speaking: logged as system,
+          // so it is not replayed to the model as a bare user message later.
+          inputRole: "system",
           agentID: toAgentID,
           text: formatBrief(brief),
+          peer: {
+            from: deps.db.query<{ display_name: string | null }, [string]>("SELECT display_name FROM agents WHERE id = ?").get(deps.currentAgentID)?.display_name?.trim() || deps.currentAgentID,
+            intent: brief.intent ?? "request",
+            task: task.id,
+          },
           notify: true,
           delegationTaskID: task.id,
+          depth: depth + 1,
         },
       });
       setDelegationJob(deps.db, task.id, job.id);
@@ -175,6 +220,9 @@ function taskView(task: TaskRow, deps: DelegateTaskToolDeps): Record<string, unk
   const owner = task.owner_agent_id ?? "";
   const visibility = owner ? resolvePersona(deps.db, owner)?.visibility ?? DEFAULT_VISIBILITY : DEFAULT_VISIBILITY;
   const result = redactStoredForCaller(task.result, owner, deps.currentAgentID, visibility);
+  // The task's scratchpad crosses to the caller through the same filter.
+  const noteText = listTaskNotes(deps.db, task.id).map((note) => `- ${note.text}`).join("\n");
+  const notes = redactStoredForCaller(noteText, owner, deps.currentAgentID, visibility);
   return {
     taskID: task.id,
     agentID: task.owner_agent_id,
@@ -186,12 +234,21 @@ function taskView(task: TaskRow, deps: DelegateTaskToolDeps): Record<string, unk
     // DEL-004: the full result lives in an artifact. The reference is only
     // useful to a caller that may read it.
     artifactRef: result.redacted ? null : task.artifact_id,
+    ...(notes.value ? { notes: notes.value } : {}),
     question: task.pending_question,
     questionID: task.pending_question_id,
     terminal: task.delegate_state === "done" || task.delegate_state === "failed",
     jobID: task.job_id,
     updatedAt: task.updated_at,
   };
+}
+
+/** Read the optional intent; absent means "request", invalid is an error. */
+function readIntent(raw: unknown): PeerIntent {
+  if (raw === undefined || raw === null || raw === "") return "request";
+  const parsed = PeerIntentSchema.safeParse(raw);
+  if (!parsed.success) throw new Error(`intent must be one of ${PEER_INTENTS.join(", ")}`);
+  return parsed.data;
 }
 
 /** Clamp the wait budget so a model cannot pin a turn open indefinitely. */

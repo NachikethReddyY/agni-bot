@@ -183,6 +183,16 @@ function PreferencesGroup() {
           />
         </PreferenceRow>
         <PreferenceRow
+          label="Push when closed"
+          note="Reach this browser when the app is not open. Needs https (or localhost) and notification permission."
+        >
+          <Switch
+            label="Push when closed"
+            checked={preferences.push}
+            onChange={(next) => model.setPreference("push", next)}
+          />
+        </PreferenceRow>
+        <PreferenceRow
           label="Show that you are typing"
           note="Tells the agent you are mid-sentence, so it does not answer too early."
         >

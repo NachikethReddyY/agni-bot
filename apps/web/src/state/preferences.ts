@@ -15,6 +15,8 @@ export interface Preferences {
   typingIndicator: boolean;
   /** Draw the tool activity strip under each answer. */
   showActivity: boolean;
+  /** Web Push when the app is closed (needs https or localhost; opt-in). */
+  push: boolean;
   /** Agents pinned to the top of the roster. */
   favorites: string[];
 }
@@ -26,6 +28,7 @@ export function defaultPreferences(): Preferences {
     notifications: true,
     typingIndicator: true,
     showActivity: true,
+    push: false,
     favorites: [],
   };
 }
@@ -52,6 +55,7 @@ export function loadPreferences(): Preferences {
       typingIndicator:
         typeof parsed.typingIndicator === "boolean" ? parsed.typingIndicator : base.typingIndicator,
       showActivity: typeof parsed.showActivity === "boolean" ? parsed.showActivity : base.showActivity,
+      push: parsed.push === true,
       favorites: Array.isArray(parsed.favorites)
         ? parsed.favorites.filter((id): id is string => typeof id === "string")
         : base.favorites,

@@ -98,7 +98,7 @@ final class AppModel {
       secretKind = stored.kind
       tokenIsStored = true
     }
-    agents = [AgentInfo(id: "ea", name: "Agni Bot", color: "#f0b95a", model: nil, tools: [])]
+    agents = [AgentInfo(id: "ea", name: "New Bot", color: "#f0b95a", model: nil, tools: [])]
   }
 
   func start() {
@@ -169,7 +169,7 @@ final class AppModel {
     tokenIsStored = false
     secretKind = nil
     threads = []
-    agents = [AgentInfo(id: "ea", name: "Agni Bot", color: "#f0b95a", model: nil, tools: [])]
+    agents = [AgentInfo(id: "ea", name: "New Bot", color: "#f0b95a", model: nil, tools: [])]
     conversation = Conversation(agentID: "ea")
     health = nil
     configuredProviders = []

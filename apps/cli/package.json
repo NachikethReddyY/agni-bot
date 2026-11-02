@@ -1,0 +1,22 @@
+{
+  "name": "@agni/cli",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "agni": "./src/index.ts"
+  },
+  "scripts": {
+    "chat": "bun src/index.ts chat",
+    "ask": "bun src/index.ts ask",
+    "bench": "bun src/index.ts bench",
+    "ping": "bun src/index.ts ping",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agni/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.3",
+    "typescript": "^7"
+  }
+}

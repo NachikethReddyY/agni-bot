@@ -6,6 +6,7 @@ import type { ProviderConfig } from "../src/models/providers";
 import { Router } from "../src/models/router";
 import { runTaskTurn } from "../src/agent/task-loop";
 import { resetSecretBroker, resolveSecret } from "../src/agent/secret-broker";
+import { resolveApprovalWaiter } from "../src/agent/approval-broker";
 import type { ResolvedPersona } from "../src/agent/personas";
 import { createThread } from "../src/stores/threads";
 
@@ -81,6 +82,11 @@ describe("secure input through the task lane", () => {
       emit: (frame) => {
         const typed = frame as { type: string; [key: string]: unknown };
         emitted.push(typed);
+        // run_privileged gates on an approval card before the secret prompt.
+        if (typed.type === "approval.request") {
+          db!.run("UPDATE approvals SET status = 'decided', decision = 'once', decided_at = ? WHERE id = ?", [new Date().toISOString(), String(typed.requestID)]);
+          resolveApprovalWaiter(String(typed.requestID), "once");
+        }
         if (typed.type === "secret.request") {
           expect(resolveSecret(String(typed.requestID), "top-secret-value")).toBe(true);
         }

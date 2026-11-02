@@ -10,6 +10,31 @@ export interface SmtpConfig {
   pass: string;
 }
 
+const CRLF_RE = /[\r\n\0]/;
+
+export function checkHeaderValue(name: string, v: unknown): string {
+  if (typeof v !== "string" || CRLF_RE.test(v)) throw new Error(`invalid ${name}`);
+  return v;
+}
+
+export function checkAddress(v: unknown): string {
+  const a = checkHeaderValue("address", v);
+  if (!/^[^\s<>@,;"]+@[^\s<>@,;"]+$/.test(a)) throw new Error("invalid address");
+  return a;
+}
+
+/** to/cc/bcc: a string becomes [string]; anything else is rejected. */
+export function normalizeRecipients(v: unknown): string[] {
+  const list = typeof v === "string" ? [v] : v;
+  if (!Array.isArray(list) || list.length === 0) throw new Error("recipients must be an array of strings");
+  return list.map(checkAddress);
+}
+
+/** CRLF-normalise and dot-stuff a body (RFC 5321 4.5.2). */
+export function dotStuff(body: string): string {
+  return body.replace(/\r\n|\r|\n/g, "\r\n").replace(/^\./gm, "..");
+}
+
 export async function sendEmail(
   cfg: SmtpConfig,
   from: string,
@@ -17,14 +42,28 @@ export async function sendEmail(
   subject: string,
   body: string,
 ): Promise<{ ok: boolean; error?: string }> {
+  try {
+    from = checkAddress(from);
+    to = normalizeRecipients(to);
+    subject = checkHeaderValue("subject", subject);
+    body = dotStuff(String(body));
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
   return new Promise((resolve) => {
+    let rcptIdx = 0;
     const socket = tls.connect(cfg.port, cfg.host, { rejectUnauthorized: true });
     let buffer = "";
     let state = "greeting"; // greeting -> ehlo -> auth -> mailfrom -> rcpt -> data -> content -> quit
 
     const send = (line: string) => socket.write(line + "\r\n");
 
-    socket.on("data", (data) => {
+    socket.on("data", (data) => { try { onData(data); } catch (e) {
+      socket.destroy();
+      resolve({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    } });
+
+    const onData = (data: string | Buffer) => {
       buffer += data.toString();
       // Wait for complete response (last line starts with code + space, not code + -)
       const lines = buffer.split("\r\n").filter(Boolean);
@@ -65,22 +104,13 @@ export async function sendEmail(
           break;
         case "mailfrom":
           state = "rcpt";
-          send(`RCPT TO:<${to[0]}>`);
+          send(`RCPT TO:<${to[rcptIdx++]}>`);
           break;
-        case "rcpt": {
-          // If more recipients, send next RCPT TO
-          const sent = to.filter((_, i) => i < to.indexOf(to[to.length - 1]!) + 1).length;
-          // Simple: handle one recipient for now, or advance
-          state = "data";
-          if (to.length > 1) {
-            // Send remaining RCPT TO
-            for (let i = 1; i < to.length; i++) {
-              send(`RCPT TO:<${to[i]}>`);
-            }
-          }
-          send("DATA");
+        case "rcpt":
+          // One RCPT at a time; DATA only after every recipient is accepted.
+          if (rcptIdx < to.length) send(`RCPT TO:<${to[rcptIdx++]}>`);
+          else { state = "data"; send("DATA"); }
           break;
-        }
         case "data":
           state = "content";
           // Send headers + body + terminator
@@ -105,7 +135,7 @@ export async function sendEmail(
           resolve({ ok: true });
           break;
       }
-    });
+    };
 
     socket.on("error", (err) => {
       socket.destroy();

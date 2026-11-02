@@ -8,7 +8,7 @@ import { ProviderError, streamChat, type ChatMessage, type ChatResult, type Tool
 import type { ProviderConfig } from "./providers";
 import type { HealthTracker } from "./health";
 import { log } from "../log";
-import type { ChatGPTAuth } from "./chatgpt-auth";
+import { chatGPTEnabled, type ChatGPTAuth } from "./chatgpt-auth";
 import { streamChatGPT } from "./chatgpt-responses";
 
 export class RouterError extends Error {
@@ -40,10 +40,12 @@ export class MidStreamError extends Error {
   }
 }
 
-/** How many times to retry a single provider before moving to the next one. */
+/**
+ * How many times to try a single provider on a fast, retryable failure
+ * (network, 408, 429, 5xx). A timeout gets one attempt: retrying a stalled
+ * provider would eat the turn budget before the next provider is tried.
+ */
 const PROVIDER_RETRIES = 3;
-/** Base backoff between retries of the same provider (ms). */
-const RETRY_BACKOFF_MS = 2_000;
 
 export interface RouteOptions {
   messages: ChatMessage[];
@@ -56,6 +58,12 @@ export interface RouteOptions {
   toolChoice?: "auto" | "required" | "none" | { type: "function"; function: { name: string } };
   /** Bound each model response in the task lane. */
   maxTokens?: number;
+  /**
+   * A bot's own model (`agents.model`): `provider`, `provider:model`, or a
+   * configured model id. Tried first when that provider is usable; otherwise
+   * the normal list runs as if it were unset.
+   */
+  preferredModel?: string | null;
 }
 
 export interface RouteResult {
@@ -85,10 +93,14 @@ export interface ProviderStatus {
 }
 
 export class Router {
+  /** Base backoff between retries of the same provider (ms). Tests set it to 0. */
+  static retryBackoffMs = 2_000;
   private activeRoutes = 0;
   private chatgpt?: ChatGPTAuth;
 
   setChatGPT(connection: ChatGPTAuth): void { this.chatgpt = connection; }
+  /** ChatGPT is selectable only when AGNI_CHATGPT=1; otherwise bots fall back to free providers. */
+  private get chatGPT(): ChatGPTAuth | undefined { return chatGPTEnabled() ? this.chatgpt : undefined; }
   connectionReady(providerID: string): void { this.health.markSuccess(providerID); }
 
   constructor(
@@ -109,7 +121,7 @@ export class Router {
   }
 
   async listModels(providerID: string): Promise<string[]> {
-    if (providerID === "chatgpt" && this.chatgpt) return (await this.chatgpt.models()).map((model) => model.id);
+    if (providerID === "chatgpt" && this.chatGPT) return (await this.chatGPT.models()).map((model) => model.id);
     const provider = this.providers.find((candidate) => candidate.id === providerID);
     if (!provider) throw new Error("Provider is not configured on the daemon.");
     const response = await this.fetchFn(`${provider.baseUrl.replace(/\/$/, "")}/models`, {
@@ -127,7 +139,7 @@ export class Router {
   candidates(): ProviderConfig[] {
     // Choosing ChatGPT is an explicit billing choice. Never silently fall back
     // to API-key billing when its grant, usage allowance, or connection fails.
-    const chatgpt = this.chatgpt?.provider();
+    const chatgpt = this.chatGPT?.provider();
     if (chatgpt) return [chatgpt];
     const healthy = this.providers.filter((provider) => this.health.isAvailable(provider.id));
     const cooling = this.providers.filter((provider) => !this.health.isAvailable(provider.id));
@@ -152,7 +164,10 @@ export class Router {
 
   private async routeWithSlot(options: RouteOptions): Promise<RouteResult> {
     const needsVision = options.messages.some((message) => message.images?.length);
-    const candidates = this.candidates().filter((provider) => !needsVision || provider.supportsVision === true);
+    const capable = this.candidates().filter((provider) => !needsVision || provider.supportsVision === true);
+    // Cooling providers are a last resort only when nothing healthy is left.
+    const healthy = capable.filter((provider) => this.health.isAvailable(provider.id));
+    const candidates = healthy.length > 0 ? healthy : capable;
     if (needsVision && candidates.length === 0) {
       throw new RouterError("no_provider", "No vision model configured. Set AGNI_VISION_MODELS to a configured model ID that supports images.");
     }
@@ -165,7 +180,7 @@ export class Router {
 
     const errors: string[] = [];
     let attempts = 0;
-    for (const provider of candidates) {
+    for (const provider of preferFirst(candidates, options.preferredModel)) {
       let lastError: ProviderError | null = null;
       for (let retry = 0; retry < PROVIDER_RETRIES; retry++) {
         attempts += 1;
@@ -217,13 +232,20 @@ export class Router {
             throw new RouterError("provider_failed", providerError.message);
           }
           lastError = providerError;
-          const cooldownMs = this.cooldownFor(providerError);
-          this.health.markFailure(provider.id, cooldownMs, providerError.message);
           errors.push(`${provider.id}#${retry + 1}: ${providerError.message}`);
-          log.info(`provider ${provider.id} attempt ${retry + 1}/${PROVIDER_RETRIES} failed (${providerError.message}) — retry in ${RETRY_BACKOFF_MS}ms`);
-          if (retry < PROVIDER_RETRIES - 1) {
-            await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS));
+          // A bad request (oversized prompt, unknown model) says nothing about the provider's health.
+          if (!isRequestError(providerError)) {
+            this.health.markFailure(provider.id, this.cooldownFor(providerError), providerError.message);
           }
+          // A 429 won't clear in a retry's time: fail over now (it is already cooling) unless this is the last candidate.
+          const skipRetry = providerError.status === 429 && provider !== candidates[candidates.length - 1];
+          if (!isRetryable(providerError) || skipRetry || retry === PROVIDER_RETRIES - 1) {
+            log.info(`provider ${provider.id} attempt ${retry + 1} failed (${providerError.message}) — failing over`);
+            break;
+          }
+          log.info(`provider ${provider.id} attempt ${retry + 1}/${PROVIDER_RETRIES} failed (${providerError.message}) — retry in ${Router.retryBackoffMs}ms`);
+          await sleep(Router.retryBackoffMs, options.signal);
+          if (options.signal?.aborted) throw new ProviderError("cancelled", { kind: "aborted" });
         }
       }
     }
@@ -233,6 +255,7 @@ export class Router {
   }
 
   private cooldownFor(error: ProviderError): number {
+    // 401/403 still cool the provider: its credentials are bad, not the prompt.
     // Bad key or revoked access: back off hard, it is not a momentary blip.
     if (error.status === 401 || error.status === 403) return 5 * 60_000;
     if (error.retryAfterMs !== undefined) return Math.max(error.retryAfterMs, 2_000);
@@ -243,7 +266,7 @@ export class Router {
   }
 
   status(): ProviderStatus[] {
-    const chatgpt = this.chatgpt?.provider();
+    const chatgpt = this.chatGPT?.provider();
     return [...(chatgpt ? [chatgpt] : []), ...this.providers].map((provider) => {
       const snapshot = this.health.snapshot([provider.id])[0];
       return {
@@ -257,4 +280,38 @@ export class Router {
       };
     });
   }
+}
+
+/** 4xx other than auth, 408 and 429: the request itself is bad, on any provider. */
+function isRequestError(error: ProviderError): boolean {
+  const status = error.status;
+  return status !== undefined && status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status);
+}
+
+/** Worth another try on the same provider: a quick transient failure, not a stall or a rejection. */
+function isRetryable(error: ProviderError): boolean {
+  if (error.kind === "network") return true;
+  const status = error.status;
+  return status === 408 || status === 429 || (status !== undefined && status >= 500);
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const done = (): void => { clearTimeout(timer); signal?.removeEventListener("abort", done); resolve(); };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+/** Move the preferred provider (with its model, when one is named) to the front. */
+export function preferFirst(candidates: ProviderConfig[], preferred: string | null | undefined): ProviderConfig[] {
+  const want = preferred?.trim();
+  if (!want) return candidates;
+  const index = candidates.findIndex((provider) =>
+    want === provider.id || want.startsWith(`${provider.id}:`) || want === provider.model);
+  if (index < 0) return candidates;
+  const match = candidates[index]!;
+  const model = want.startsWith(`${match.id}:`) ? want.slice(match.id.length + 1) || match.model : match.model;
+  return [{ ...match, model }, ...candidates.filter((_, at) => at !== index)];
 }

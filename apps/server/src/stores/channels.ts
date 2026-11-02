@@ -32,6 +32,7 @@ export interface ChannelMessageRow {
   salience: string;
   turn_id: string | null;
   ui_hint: string | null;
+  peer_influenced?: number;
   created_at: string;
 }
 
@@ -158,6 +159,7 @@ export function appendChannelMessage(
     uiHint?: string | null;
     /** Gate salience; defaults to recent_turns when the caller does not classify. */
     salience?: string;
+    peerInfluenced?: boolean;
   },
 ): ChannelMessageRow {
   const row: ChannelMessageRow = {
@@ -175,8 +177,8 @@ export function appendChannelMessage(
     created_at: nowISO(),
   };
   db.run(
-    `INSERT INTO channel_messages (id, channel_id, from_type, from_id, to_agent_id, text, internal, compacted, salience, turn_id, ui_hint, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO channel_messages (id, channel_id, from_type, from_id, to_agent_id, text, internal, compacted, salience, turn_id, ui_hint, created_at, peer_influenced)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       row.id,
       row.channel_id,
@@ -190,6 +192,7 @@ export function appendChannelMessage(
       row.turn_id,
       row.ui_hint,
       row.created_at,
+      input.peerInfluenced ? 1 : 0,
     ],
   );
   return row;
@@ -208,7 +211,7 @@ export function uncompactedMessages(db: Database, channelID: string, limit = 200
   return db
     .query<ChannelMessageRow, [string, number]>(
       `SELECT id, channel_id, from_type, from_id, to_agent_id, text, internal, compacted, salience, turn_id, ui_hint, created_at
-       FROM channel_messages WHERE channel_id = ? AND compacted = 0 AND salience <> 'temp' ORDER BY created_at, rowid LIMIT ?`,
+       FROM channel_messages WHERE channel_id = ? AND compacted = 0 AND salience <> 'temp' AND from_type <> 'system' AND peer_influenced = 0 ORDER BY created_at, rowid LIMIT ?`,
     )
     .all(channelID, limit);
 }
@@ -268,4 +271,37 @@ export function getChannelSummary(db: Database, channelID: string): ChannelSumma
       )
       .get(channelID) ?? null
   );
+}
+
+// --- groups (Phase 4) -------------------------------------------------------
+
+/** Member bots of a channel, the primary (`channels.agent_id`) first. */
+export function channelAgentIDs(db: Database, channel: ChannelRow): string[] {
+  const members = db
+    .query<{ participant_id: string }, [string]>(
+      "SELECT participant_id FROM channel_members WHERE channel_id = ? AND participant_type = 'agent' ORDER BY rowid",
+    )
+    .all(channel.id)
+    .map((row) => row.participant_id);
+  return [channel.agent_id, ...members.filter((id) => id !== channel.agent_id)];
+}
+
+/** A group channel: the owner plus two or more bots; the first bot is the primary. */
+export function createGroupChannel(db: Database, name: string, agentIDs: string[]): ChannelRow {
+  const ids = [...new Set(agentIDs)];
+  if (ids.length < 2) throw new Error("a group needs two or more different bots");
+  return db.transaction(() => {
+    const row = createChannel(db, { type: "group", visibility: "public", name, agentID: ids[0]! });
+    addChannelMember(db, row.id, "user", "user");
+    ids.forEach((id, index) => addChannelMember(db, row.id, "agent", id, index === 0 ? "primary" : "member"));
+    return row;
+  })();
+}
+
+export function listGroupChannels(db: Database): ChannelRow[] {
+  return db
+    .query<ChannelRow, []>(
+      "SELECT id, type, visibility, name, agent_id, parent_turn_id, created_at, updated_at FROM channels WHERE type = 'group' ORDER BY created_at",
+    )
+    .all();
 }

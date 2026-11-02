@@ -282,3 +282,31 @@ describe("ephemeral turns", () => {
     expect(pending).toBe(0);
   });
 });
+
+describe("group channels", () => {
+  test("a batch holds one bot's exchanges and writes them as that bot's", async () => {
+    db = openDatabase(":memory:");
+    const { createGroupChannel } = await import("../src/stores/channels");
+    const group = createGroupChannel(db, "Launch", ["ea", "researcher"]);
+    appendChannelMessage(db, { channelID: group.id, fromType: "user", fromID: "u", toAgentID: "ea", text: "to ea" });
+    appendChannelMessage(db, { channelID: group.id, fromType: "agent", fromID: "ea", text: "ea reply" });
+    appendChannelMessage(db, { channelID: group.id, fromType: "user", fromID: "u", toAgentID: "researcher", text: "to researcher" });
+    appendChannelMessage(db, { channelID: group.id, fromType: "agent", fromID: "researcher", text: "researcher reply" });
+    const transcripts: string[] = [];
+    const router = {
+      route: async (options: { messages: Array<{ content: string }> }) => {
+        transcripts.push(options.messages.at(-1)!.content);
+        return { text: JSON.stringify({ items: [], ephemeral: true }) };
+      },
+    } as unknown as Router;
+    scheduleTagger(db, { channelID: group.id, agentID: "researcher", turns: 5 });
+    const runner = new JobRunner(db, () => undefined, { maxPerTick: 5 });
+    registerTaggerJob(runner, { db, router, emit: () => undefined });
+    await runner.tick();
+    expect(transcripts[0]).toContain("researcher reply");
+    expect(transcripts[0]).toContain("to researcher");
+    expect(transcripts[0]).not.toContain("ea reply");
+    const untagged = db.query<{ text: string }, []>("SELECT text FROM channel_messages WHERE tagged_at IS NULL ORDER BY rowid").all();
+    expect(untagged.map((row) => row.text)).toEqual(["to ea", "ea reply"]);
+  });
+});

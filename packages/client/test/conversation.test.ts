@@ -107,6 +107,16 @@ describe("transcript", () => {
     expect(effects).toContainEqual({ kind: "refreshThreadList" });
   });
 
+  test("a reset token clears tool-step narration from the bubble", () => {
+    const conversation = new Conversation("agni", "thr_1");
+    conversation.apply(startFrame("trn_1", "thr_1"));
+    conversation.apply(tokenFrame("trn_1", "thr_1", "Checking the list."));
+    conversation.apply(wire({ type: "token", seq: 101, turnID: "trn_1", threadID: "thr_1", delta: "", reset: true }));
+    conversation.apply(tokenFrame("trn_1", "thr_1", "No open tasks.", 102));
+    expect(conversation.messages.length).toBe(1);
+    expect(conversation.messages[0]?.text).toBe("No open tasks.");
+  });
+
   test("a progress update is its own bubble during a streamed turn", () => {
     const conversation = new Conversation("agni", "thr_1");
     conversation.apply(startFrame("trn_1", "thr_1"));

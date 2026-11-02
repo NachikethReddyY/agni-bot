@@ -1,8 +1,15 @@
-# Agni
+# Agni Bot
 
-Speed-first personal assistant. Our own harness, our own server, our own apps.
-No walled gardens: free model tiers called by API, a Gmail mailbox, and clients
-we control. Full plan: [`docs/blueprint-v3.html`](docs/blueprint-v3.html).
+Agni Bot is a messaging app for bots. You talk to named, specialised bots to get
+work done. Each bot has its own name, role, and memory. It is like messaging a
+friend, with the people removed and bots in their place. Performance comes
+before UI polish. Our own server, our own apps, free model tiers called by API,
+and a Gmail mailbox for the agent. Full plan:
+[`docs/blueprint-v3.html`](docs/blueprint-v3.html). Doc index:
+[`docs/README.md`](docs/README.md).
+
+**Source-available, not open source.** License terms are being finalised and
+are not yet in this repo.
 
 ## Layout
 
@@ -11,17 +18,41 @@ we control. Full plan: [`docs/blueprint-v3.html`](docs/blueprint-v3.html).
 | `apps/server` | Bun + TypeScript core: WebSocket protocol, agent loop, model router, SQLite stores, daemon lifecycle, job queue. Runs on this Mac now, bb-1 later. |
 | `apps/web` | React + Vite web client, a faithful port of the native Mac UI. Shares `@agni/client` with future shells. |
 | `apps/mac` | Native SwiftUI macOS client (`AgniApp` + `AgniKit`). Token in Keychain, resumable streaming. |
-| `apps/app` | Tauri 2 clients (macOS + Android) from one codebase. P1 — Rust toolchain not installed yet. |
+| `apps/app` | Planned Tauri 2 client (macOS + Android). README only; no runnable code yet. |
 | `packages/client` | Client core: frame decoding, connection loop, conversation reducer, settings, formatting. Used by the web app; the reference for the Swift port. |
 | `packages/protocol` | Wire protocol v2: typed frames shared by server and every client. This is the contract. |
-| `tools/cli` | Protocol client: `chat` (interactive), `ask`, `bench`, `ping`. The P0 proof gate lives here. |
+| `apps/cli` | Protocol client: `chat` (interactive), `ask`, `bench`, `ping`. The P0 proof gate lives here. |
+| `infra` | Deploy material: `install.sh`, `launchd/`, `systemd/`, `env.example`, `firecrawl.compose.yml`, `wrangler.toml`. See `infra/README.md`. |
+| `tools` | Dev tools only (mock provider, read-only audit). |
 | `docs` | Blueprint v3 (canonical), architecture notes, protocol spec. |
 
 ## Quickstart
 
+Install and run as a login service (macOS launchd, Linux systemd --user):
+
+```sh
+npm i -g agni-bot           # or: bun add -g agni-bot  (needs Bun 1.3+)
+agni setup                  # ~/.agni, login service, opens the browser already paired
+```
+
+Or with the install script (clones the repo into `~/.agni/app`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Nachikethreddyy/agni-bot/main/infra/install.sh | bash
+# or, from a checkout: bash infra/install.sh
+agni open                   # pair another browser
+agni service status
+```
+
+The installer installs deps, builds the web app, writes `~/.agni/config.env`,
+installs the `agni` command, and registers the service. Manage it with
+`agni service install|uninstall|status`.
+
+Dev flow from a checkout:
+
 ```sh
 bun install
-cp .env.example .env        # add at least GROQ_API_KEY and/or NVIDIA_API_KEY
+cp infra/env.example .env   # add at least GROQ_API_KEY and/or NVIDIA_API_KEY
 bun run migrate
 bun run daemon start        # run the server detached in the background
 bun run pair --name Mac     # prints a device token once — save it
@@ -31,8 +62,10 @@ bun run daemon status       # pid, uptime, provider health, usage today
 ```
 
 Foreground alternative while hacking: `bun run dev` (watch mode). Both modes are
-the same process; the daemon just detaches it, writes `data/agni.pid`, appends
-to `data/agni.log`, and waits for `/health` before reporting success.
+the same process; the daemon just detaches it, writes `~/.agni/run/agni.pid`,
+appends to `~/.agni/logs/agni.log`, and waits for `/health` before reporting
+success. (Paths come from `AGNI_PID_PATH` and `AGNI_LOG_PATH`; see `infra/env.example`.)
+All state lives in `AGNI_HOME` (default `~/.agni`).
 
 On Windows, shell tools require Git for Windows (Git Bash). Agni uses that
 host-native shell rather than the Windows WSL launcher. Temporary credentials
@@ -40,30 +73,32 @@ and privileged scripts use an owner-only Windows ACL; Unix hosts use file modes.
 
 ### Web app
 
-`apps/web` is the React port of the SwiftUI client. It runs on pnpm + Turborepo
-alongside the Bun server; the workspace still uses Bun for the server, CLI, and
-tests.
+`apps/web` is the React port of the SwiftUI client. The workspace runs on Bun
+workspaces for the server, CLI, web, and tests.
 
 ```sh
-pnpm install
+bun install
 bun run daemon start
-bun run pair --name Web     # copy the one-time token
-pnpm web                    # http://127.0.0.1:5173
+bun run open                # opens the browser already paired (one-time code, 10 min)
+bun run web                 # Vite dev server on http://127.0.0.1:5173 (proxies to 8787)
 ```
 
-Enter the daemon address (`127.0.0.1:8787`, or its Tailscale address) and the
-token in the browser. The token is kept in `localStorage`; **Forget this
-device** clears it. The page checks `/health` before connecting, so a daemon on
-another origin needs CORS, which `/health` already sends.
+Outside development the daemon serves the web app itself at
+`http://127.0.0.1:8787`; no Vite server is needed. Pairing uses a one-time code
+(`ABCD-EFGH`, 10 minutes, single use) that `agni open` fills in for you. The
+browser then holds an HttpOnly, SameSite=Strict cookie; the token is no longer
+kept in `localStorage`. `bun run pair` still prints a device token for the Mac
+app and CLI. For remote access, run `tailscale serve --bg 8787` and set
+`AGNI_PUBLIC_ORIGIN=https://<machine>.<tailnet>.ts.net` in `~/.agni/config.env`.
 
 Useful commands:
 
 ```sh
-pnpm check                  # typecheck + web/client Vitest + Bun server tests
-pnpm web:build              # production bundle in apps/web/dist
-pnpm --filter @agni/client smoke   # headless client core against a live daemon
-pnpm --filter @agni/web smoke:ui   # Playwright smoke (needs AGNI_URL/AGNI_TOKEN
-                                   # and a running Vite dev server)
+bun run check               # typecheck + web/client Vitest + Bun server tests
+bun run web:build           # production bundle in apps/web/dist
+bun run --filter @agni/client smoke   # headless client core against a live daemon
+bun run --filter @agni/web smoke:ui   # Playwright smoke (needs AGNI_URL/AGNI_TOKEN
+                                      # and a running Vite dev server)
 ```
 
 ### Connect a ChatGPT plan
@@ -82,16 +117,16 @@ disconnect. Disconnecting returns routing to your other configured providers.
 Your ChatGPT conversations and memories are not imported.
 
 The daemon owns OAuth, token renewal, and Responses streaming. Registration and
-tokens live in `data/chatgpt/accounts.json` beside the configured database, with
+tokens live in `~/.agni/data/chatgpt/accounts.json` beside the configured database, with
 owner-only Unix permissions or a restricted Windows ACL. Browser storage, frame
 replay, and model prompts never receive those credentials. Remote sign-out is
 attempted before the disconnect completes; a warning explains when revocation
 could not be confirmed.
 
-This uses the official [Sign in with ChatGPT open-source flow](https://developers.openai.com/siwc/token-sharing-open-source).
-It targets local/open-source installations; commercial or hosted distribution
-has separate OpenAI access requirements. `provider.auth.*` frames are additive
-to protocol v2.
+Optional ChatGPT sign-in is off by default. Set `AGNI_CHATGPT=1` to enable it.
+It uses OpenAI's [Sign in with ChatGPT token-sharing documentation](https://developers.openai.com/siwc/token-sharing-open-source).
+Eligibility under OpenAI's terms is unconfirmed; that is an owner decision still pending.
+`provider.auth.*` frames are additive to protocol v2.
 
 ### Background work (the daemon doing things on its own)
 
@@ -174,7 +209,7 @@ bun run eval           # the deterministic evals
 bun run eval:nightly   # the same, with the nightly policy
 ```
 
-Six evals, each measuring a promise the system makes and failing when the
+Seven evals, each measuring a promise the system makes and failing when the
 promise breaks:
 
 | Eval | What it measures |
@@ -185,6 +220,7 @@ promise breaks:
 | EVAL-004 | leaks — private and scoped content never reaches the caller |
 | EVAL-005 | cost — the retrieval is cheap enough to sit on the turn's path |
 | EVAL-006 | drift — the summary and the source still agree |
+| EVAL-007 | provider-backed quality — checks that need a live model provider |
 
 They run against an in-memory database and a stub model, so they measure
 the *system* rather than the luck of a provider. The provider-backed checks
@@ -309,14 +345,21 @@ AGNI_TOKEN=… bun run ask "what is 2+2"    # → mock(mock-model): what is 2+2
 
 ## Environment
 
-All configuration lives in `.env` at the repo root (Bun loads it automatically;
-it is gitignored). See [`.env.example`](.env.example) for the full list —
-providers are enabled by the presence of their key, everything else has a
-working default.
+Configuration lives in `~/.agni/config.env` (mode 600), written by the installer.
+A repo-root `.env` still works in dev and wins over it. See
+[`infra/env.example`](infra/env.example) for the full list — providers are enabled
+by the presence of their key, everything else has a working default. API keys
+added in the web UI are written to `~/.agni/config.env`.
 
-Model choices changed in the Mac app are stored on the daemon in
-`data/providers.json` (mode 600). Provider API keys remain in the daemon's
-mode-600 `.env`; the JSON file contains model IDs only.
+Everything lives under `AGNI_HOME` (default `~/.agni`): `config.env`,
+`providers.json`, `plugins.json`, `data/agni.sqlite` (with `backups/`, `share/`,
+`attachments/`, `chatgpt/`), `scratch/`, `skills/`, `logs/agni.log`, and
+`run/agni.pid`. Old files are moved there automatically on first run. Per-file
+overrides (`AGNI_DB_PATH`, `AGNI_PID_PATH`, `AGNI_LOG_PATH`, `AGNI_PLUGINS_PATH`,
+`AGNI_PROVIDER_CONFIG_PATH`, `AGNI_SCRATCH_DIR`, `AGNI_SHARE_DIR`) still work.
+Model choices changed in the Mac app are stored in `~/.agni/providers.json`
+(mode 600). Provider API keys stay in `config.env`; the JSON file contains model
+IDs only. `AGNI_HOME` itself must be set in the process environment.
 
 ## Phases
 
@@ -353,11 +396,11 @@ upload fails so it can be retried. Attachments remain available in chat history.
 Supported: PNG/JPEG/WebP, UTF-8 text/source files, and PDFs with selectable text.
 Up to five files per message, 10 MB each; large text/PDF inputs have extraction
 and model-context limits. Scanned PDFs require OCR, which is not included.
-To enable image analysis, set `AGNI_VISION_MODELS` in the server's `.env` to the
+To enable image analysis, set `AGNI_VISION_MODELS` in the server's `config.env` to the
 exact IDs of already-configured models that support image input. A missing
 vision model is reported before the message is sent; text/PDF uploads do not
 need vision. Provider keys continue to live only on the server.
 
 After installing this update, restart the daemon (`bun run daemon restart`)
-and Vite (`Ctrl+C`, then `pnpm web`). Database migrations apply automatically at
+and Vite (`Ctrl+C`, then `bun run web`). Database migrations apply automatically at
 server startup. The native SwiftUI app has not gained attachment controls yet.

@@ -90,7 +90,7 @@ HTML artifacts in `artifacts/`.
 ## 12. Context management research (open)
 
 See `docs/research-context-management.md` for the research brief and
-`docs/audit-context-memory-spec.md` for the audit of the resulting spec against
+`legacy/docs/audit-context-memory-spec.md` for the audit of the resulting spec against
 the codebase. Many items (memory schema, vector/FTS retrieval, async handoff,
 etc.) are MISSING or PARTIAL — see the audit for the full breakdown and build
 order.

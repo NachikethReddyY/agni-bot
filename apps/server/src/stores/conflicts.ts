@@ -61,3 +61,7 @@ export function resolveConflict(db: Database, id: string): boolean {
   );
   return result.changes > 0;
 }
+
+export function getConflict(db: Database, id: string): MemoryConflictRow | null {
+  return db.query<MemoryConflictRow, [string]>(`SELECT ${COLUMNS} FROM memory_conflicts WHERE id = ?`).get(id) ?? null;
+}

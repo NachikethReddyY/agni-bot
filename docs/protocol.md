@@ -17,11 +17,15 @@ never reason about thread ids.
 
 ## Envelope
 
-- One WebSocket per client: `GET /ws` (HTTP upgrade). No auth on upgrade; the
-  first frame must be `hello`.
+- One WebSocket per client: `GET /ws` (HTTP upgrade). The upgrade is refused
+  (403) when an `Origin` header names a non-loopback host other than
+  `AGNI_HOST`; native clients send no `Origin`. The first frame must be
+  `hello`; every other frame before auth gets `error {code:"unauthorized"}`.
 - Frames are JSON text. Client frames carry no sequence number. **Every**
   server frame carries `seq`: a positive, monotonically increasing integer
-  assigned by the server.
+  assigned by the server. Exception: `error` frames go only to the
+  connection that caused them and reuse the current `seq` without advancing
+  it, so they never take a replay slot.
 - A client that misses frames reconnects and sends `resync {lastSeq}`; the
   server replays every frame after `lastSeq`. If the gap is older than the
   bounded replay log, the client gets `error {code: "resync_gap"}` and reloads
@@ -39,13 +43,20 @@ never reason about thread ids.
 
 | Frame | Payload | Notes |
 | --- | --- | --- |
-| `hello` | `{v, token, device}` | First frame. `v` is the protocol version. |
+| `hello` | `{v, token?, device}` | First frame. `v` is the protocol version. `token` may be left out only when a paired browser's `agni_session` cookie authenticated the socket upgrade. |
 | `resync` | `{lastSeq}` | Replay everything after `lastSeq`. |
 | `msg.send` | `{threadID?, text, files?, conversationID?, channelId?, toAgentId?, texts?}` | Channel clients target a channel (default `main`) and may address an agent. `texts` batches multiple bodies; legacy clients continue to send `text`. A message sent while its thread is mid-turn is queued and runs when the turn ends; `stop` (or `cancel`, `never mind`) is a control message that interrupts that turn instead. |
 | `user.typing` | `{channelId?, isTyping}` | Extends server-side message coalescing while the user is typing. |
 | `agent.rename` | `{agentId, name}` | Renames an agent and completes primary-agent onboarding. |
-| `agent.profile` | `{agentId, role?, visibility?}` | Edits an agent's profile from the app: `role` is the tag the roster shows ("chief of staff"), `visibility` is what other agents may see of its work (`private \| summary \| shared`). At least one field is required. The answer is an `agent.updated` carrying the new `role` and `visibility`; the same change the `update_agent` chat tool makes, so the two cannot drift apart. |
+| `agent.profile` | `{agentId, role?, visibility?, model?, critic?}` | Edits an agent's profile from the app: `role` is the tag the roster shows ("chief of staff"), `visibility` is what other agents may see of its work (`private \| summary \| shared`), `model` is the bot's own model (`provider`, `provider:model` or a model id; `null` or `""` clears it), which the router tries first and falls back from when that provider is unavailable. `critic` (opt-in) names another bot that reviews this bot's email drafts before the approval card; its notes ride on the card. `null` or `""` turns it off. At least one field is required. The answer is an `agent.updated` carrying the new `role` and `visibility`; the same change the `update_agent` chat tool makes, so the two cannot drift apart. |
 | `agent.create` | `{name, prompt, role?, id?, color?}` | Creates an agent from the app's roster — the "+" button. `prompt` is its system prompt, `role` its tag. The same creation the `create_agent` chat tool performs, so a bot made here and a bot made in chat are the same kind of thing; the roster comes back in an `agents.update`. |
+| `push.subscribe` | `{subscription: {endpoint, keys: {p256dh, auth}}}` | Stores this device's Web Push subscription (replacing any for the same endpoint). The server pushes a `notify` there only when no authed socket is connected. APNs for the Mac app is not built. |
+| `push.unsubscribe` | `{endpoint}` | Drops that subscription. |
+| `push.vapid.get` | `{}` | Asks for the VAPID public key; answer: `push.vapid`. |
+| `agent.proactivity` | `{agentId, quietStart?, quietEnd?, maxPerDay?}` | Per-bot quiet hours (`"HH:MM"`, server time zone; both or neither, `null` clears) and a cap on unprompted pushes per local day (`null` removes it). Held messages still land in the transcript; only the push and sound are held. Always answered with the current values as `agent.proactivity`, so an empty set reads them. |
+| `channel.create` | `{name, agentIds}` | Phase 4. Creates a group channel: the owner and 2–8 bots. The first id is the primary bot. Answered (to every client) by `channel.created`. |
+| `channel.list` | `{}` | Phase 4. The group channels; answered by `channel.list.ok`. |
+| `channel.history` | `{channelId, limit?}` | Phase 4. A group channel's messages, last N chronological (default 200, max 500); answered by `channel.history.ok`. |
 | `form.answer` | `{requestID, answer}` | The owner answered a question the agent asked — the option they chose, or their own words if they typed instead of choosing. The answer lands on the `forms` row and the turn waiting on it carries on with it. |
 | `msg.cancel` | `{turnID}` | Interrupts the turn: providers abort, partial output is kept. |
 | `approve.reply` | `{requestID, decision}` | `decision`: `once \| always \| reject`. |
@@ -114,7 +125,7 @@ accountLabel?, error?, connectedAt?}`.
 | Frame | Payload | Notes |
 | --- | --- | --- |
 | `hello.ok` | `{v, serverTime, lastSeq}` | `lastSeq` = seq of this frame. |
-| `token` | `{turnID, threadID, delta}` | One streaming chunk. |
+| `token` | `{turnID, threadID, delta, reset?}` | One streaming chunk. `reset: true` means the text streamed for the current step was narration before a tool call; the client clears the bubble, then applies `delta` (usually empty). |
 | `turn.start` | `{turnID, threadID, agentID, conversationID?}` | Turn accepted; called before any `token`. |
 | `turn.end` | `{turnID, threadID, stopReason, usage?, conversationID?}` | `stopReason`: `end \| cancelled \| error \| timeout \| budget`; `usage`: `{provider, model, inputTokens?, outputTokens?, latencyMs?}` (latencyMs is server-measured model call time). |
 | `tool.start` | `{callID, name, preview?}` | Tool activity strip. |
@@ -124,7 +135,7 @@ accountLabel?, error?, connectedAt?}`.
 | `secret.request` | `{requestID, purpose, command, kind, expiresAt, threadID?, conversationID?}` | A command needs the owner's password. The frame carries no secret; the owner types it into a secure field. Replayable on reconnect; expires after two minutes. |
 | `secret.cancel` | `{requestID, reason}` | The prompt was resolved, expired, cancelled, or its turn stopped. Replayable. |
 | `form.request` | `{requestID, question, options?, multiple?, kind?, email?}` | A question the agent put to the owner. `kind` is `choice` (a list of options) or `email` (a draft to approve: `email` carries `from`, `to`, `subject`, `body`). `multiple` means more than one option may be chosen. The owner answers on the `form.answer` frame — or types instead of choosing, which dismisses the question and steers the work with their message. |
-| `notify` | `{title, body, sound?, threadID?}` | Push-worthy event; Mac opens the referenced thread when clicked. |
+| `notify` | `{title, body, sound?, threadID?, agentId?}` | Push-worthy event; Mac opens the referenced thread when clicked. |
 | `agents.update` | `{agents: [{id, name, color?, model?, role?, tools?, onboarded?, visibility?}]}` | Roster snapshot. `onboarded` is set once the agent has been named, which settles the "what should I call you?" prompt. `role` is what the agent is for, in the owner's words ("inbox manager"). `visibility` is what other agents may see of that agent's work: `private` (a receipt only), `summary` (one line) or `shared` (full text). |
 | `thread.list.ok` | `{threads: [{id, agentID, title?, updatedAt}]}` | Answer to `thread.list`; addressed to the requester. |
 | `thread.history.ok` | `{threadID, title?, messages: [{id, role, text, createdAt, turnID?}]}` | Answer to `thread.history`; addressed to the requester. |
@@ -133,7 +144,7 @@ accountLabel?, error?, connectedAt?}`.
 | `conversation.history.ok` | `{conversationID, messages: [{id, role, text, createdAt, turnID?, sessionID?}]}` | Answer to `conversation.history`; addressed to the requester. Clients render a session divider wherever consecutive `sessionID`s differ. |
 | `thread.export.ok` | `{conversationID, url, token, records, createdAt}` | Answer to `thread.export`; addressed to the requester, not replayed. `url` is absolute and served by this daemon at `GET /share/<token>`; the token is the only access control on the file, so it is never logged or replayed. |
 | `job.list.ok` | `{jobs: [...]}` | Answer to `job.list`, `job.set`, or `job.delete`; addressed to the requester. |
-| `task.list.ok` | `{tasks: [...], lists: [...]}` | Task snapshots include due date, deadline, priority, workflow status (`not_started`, `in_progress`, `ai_review`), current progress note, list/collection, labels, optional parent, notes, reminder time, repeat cadence and attachment IDs. Lists include open task counts. A delegation task also carries `ownerAgentId`, `origin`, `delegateState`, `jobId`, `result` and `resultRedacted`. The owner sees every result; `resultRedacted` is true when a result exists that this viewer may not see. |
+| `task.list.ok` | `{tasks: [...], lists: [...]}` | Task snapshots include due date, deadline, priority, workflow status (`not_started`, `in_progress`, `ai_review`), current progress note, list/collection, labels, optional parent, notes, reminder time, repeat cadence and attachment IDs. Lists include open task counts. A delegation task also carries `ownerAgentId`, `origin`, `intent`, `delegateState`, `jobId`, `result` and `resultRedacted`. `intent` is what the delegation is for (`request`, `result`, `question`, `status`, `fyi`) and reads as `request` when absent. The owner sees every result; `resultRedacted` is true when a result exists that this viewer may not see. |
 | `task.create.ok` | `{task: {...}}` | Newly persisted task. |
 | `task.list.create.ok` | `{lists: [...]}` | Updated task list navigation. |
 | `task.activity.ok` | `{taskID, activity: [...]}` | Recent task activity, newest first. |
@@ -146,8 +157,13 @@ accountLabel?, error?, connectedAt?}`.
 | `provider.auth.state` | `{providerID: "chatgpt", connection}` | Public state: `status`, saved `accounts [{id,label,connected}]`, `activeAccountID`, selected `model`, eligible `models [{id,label}]`, optional safe `message` and first-sign-in `showWelcome`. Never includes credentials. |
 | `presence` | `{state}` | `online \| offline`. |
 | `status.update` | `{channelId, agentId?, text, transient}` | Activity text; transient updates clear on the next message. |
-| `msg.new` | `{id, channelId, fromType, fromId, senderName, senderColor?, text, internal, uiHint?, toAgentId?, taskId?, questionId?, createdAt}` | Durable channel message; `uiHint` can be `onboarding_name_prompt`, `handoff_notice`, `progress`, `needs_input`, or `normal`. `toAgentId` names the agent a handoff notice is about, so the client can render the name as a link to that agent's chat. `taskId` + `questionId` mark a question from a delegated task: the client renders an answer field that sends `task.answer`. |
+| `msg.new` | `{id, channelId, fromType, fromId, senderName, senderColor?, text, internal, uiHint?, intent?, toAgentId?, taskId?, questionId?, createdAt}` | Durable channel message; `uiHint` can be `onboarding_name_prompt`, `handoff_notice`, `progress`, `needs_input`, or `normal`. `intent` says what an agent-to-agent message is for (`request`, `result`, `question`, `status`, `fyi`); it is absent on ordinary messages. The live frame for a handoff notice always carries one, defaulting to `request`; a notice reloaded from history has none, because channel rows do not store intent. `toAgentId` names the agent a handoff notice is about, so the client can render the name as a link to that agent's chat. `taskId` + `questionId` mark a question from a delegated task: the client renders an answer field that sends `task.answer`. |
 | `agent.updated` | `{agentId, displayName, onboarded, role?, visibility?}` | Agent rename/onboarding state changed. `role` and `visibility` are present when the change touched them (an `agent.profile` edit). |
+| `push.vapid` | `{publicKey}` | Answer to `push.vapid.get`: the base64url VAPID public key for `pushManager.subscribe`. |
+| `agent.proactivity` | `{agentId, quietStart, quietEnd, maxPerDay}` | A bot's proactivity settings (answer to the client frame of the same name). |
+| `channel.created` | `{channel: ChannelInfo}` | Phase 4. A group channel exists. `ChannelInfo` is `{id, name, type: "group", agentIds, createdAt}`; `agentIds[0]` is the primary bot. |
+| `channel.list.ok` | `{channels: ChannelInfo[]}` | Phase 4. Answer to `channel.list`. |
+| `channel.history.ok` | `{channelId, messages: MessageInfo[]}` | Phase 4. Answer to `channel.history`. |
 | `error` | `{code, message, retryAfter?}` | See codes below. |
 
 A task turn speaks in messages, not one growing reply: each completed assistant
@@ -157,12 +173,13 @@ open a fresh bubble for the next chunks. `uiHint: "progress"` rows (`say`) are
 separate messages and never seal the answer.
 
 In the task lane the narration a model writes *between* its tool calls stays in
-the model's own context: it is never published as a message and never streamed
-to clients. Only `say` progress rows and the final answer become messages. A
-turn that is backed by a channel (the web and Mac clients) buffers the answer's
-deltas and emits it as one `token` frame before the `msg.new` that seals it, so
-a channel client shows one bubble per answer; a direct client (the CLI) keeps
-live streaming.
+the model's own context: it is never published as a message. Only `say`
+progress rows and the final answer become messages. Every step streams live,
+because the server cannot know a step is narration until the step ends. When a
+step that streamed text turns out to call tools, the server sends one
+`token {delta: "", reset: true}` and the client clears that text from the
+bubble. A client that ignores `reset` still shows the right answer: the sealing
+`msg.new` replaces the bubble's text.
 
 ## Error codes (v2)
 
@@ -239,3 +256,56 @@ attachments. `POST /backgrounds` accepts one PNG, JPEG, or WebP image up to
 Bearer token. `DELETE /backgrounds/:id` refuses to remove an image referenced
 by a saved profile. Paths are generated server-side, bytes are content-sniffed,
 and the assets are never sent to a model. Theme JSON exports omit image bytes.
+
+### Routines (additive v2 extension)
+
+A `routine`-kind job in `job.list.ok` may carry an optional `routine` object
+on its `JobInfo`: `{name, cron, timezone, misfire: "skip"|"run_once",
+preflight: "http"|"sql"|"none", maxTokens, maxExecutionMs, allowedDomains,
+successStreak, failureStreak, recentRuns}`, where `recentRuns` holds at most
+the last five runs (`{at, outcome, tokens, summary?}`, `outcome`:
+`ran | skipped_no_delta | failed | timed_out | budget_exceeded`). This is an
+optional-field change: no new frames and no version bump, and the Swift
+client ignores unknown fields. Ordinary `turn` jobs never carry `routine`.
+
+One new client frame, `routine.domains.set` `{jobID, domains}`, replaces a
+routine's `allowedDomains` (at most 20 bare hosts, no scheme, slash or port).
+Malformed input returns `invalid_domains`. Only the owner's connection can send
+it; a bot's tools cannot, so a bot cannot widen its own egress. The reply is
+`job.list.ok`, as for `job.set`.
+
+### Editable memory (additive v2 extension)
+
+The memory view can change what a bot remembers, not only read it. Every
+frame below acts only on a row the caller would see in `memory.list` (the
+same scope and visibility filter retrieval uses); any other id answers
+`unknown_memory`. All are additive: no version bump.
+
+| client → server | Fields | Effect |
+| --- | --- | --- |
+| `memory.list` | `{scope?, limit?}` | Lists memories (`global_user` by default, or `agent`). Answer: `memory.list.ok {memories}`. |
+| `memory.update` | `{id, text}` | Replaces the text. The old text is kept as a superseded version; the new one is owner-stated (`source: user`). Answer: `memory.update.ok {memory}`. |
+| `memory.pin` | `{id, pinned}` | Pinned memories (salience 1.0) lead the owner profile in every prompt; unpinning sets salience 0.5. Answer: `memory.pin.ok {memory}`. |
+| `memory.forget` | `{id}` | Hard-deletes the memory and its whole version chain. Answer: `memory.forget.ok {id, deleted}`. |
+| `memory.conflicts.list` | `{limit?}` | Unresolved conflicts: a fact that replaced an older, different one. Answer: `memory.conflicts.list.ok {conflicts: [{id, memoryId, previousId, content, previousContent, createdAt}]}`. |
+| `memory.conflict.resolve` | `{id, keepId}` | `keepId` is the conflict's `memoryId` (keep the new value) or `previousId` (restore the old value, as an owner edit). Answer: `memory.conflict.resolve.ok {id, memory}` with the memory now live. |
+
+Errors: `unknown_memory` (not visible, or no longer live), `unknown_conflict`
+(no open conflict with that id), `bad_frame` (`keepId` is neither side).
+
+## Group channels (Phase 4)
+
+A group channel holds the owner and two or more bots. Send into it with
+`msg.send {channelId}`. Floor rule: a message that starts with a member
+bot's `@name` goes to that bot; anything else goes to the primary bot
+(`agentIds[0]`), which may hand off. A mention of a bot outside the group
+does not move the message out of the room. Every message and every reply
+is a `msg.new` on the group's `channelId`.
+
+Each bot answers from its own conversation, so its memory stays its own.
+It sees the room as a short block of recent group messages in its model
+input; every other bot's line passes through the visibility filter, so a
+`private` bot shows as "(replied; private)" and a `summary` bot as one
+line. The group has no shared summary and is not compacted, and the tagger
+batches each bot's exchanges separately. These frames are additive and
+optional: `PROTOCOL_VERSION` stays 2.
