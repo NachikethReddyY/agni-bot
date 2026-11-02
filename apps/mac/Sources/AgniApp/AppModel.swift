@@ -56,6 +56,14 @@ final class AppModel {
   private(set) var memories: [MemoryItem] = []
   private(set) var appearance = AppearanceRuntime.profile
   private(set) var appearanceProfiles: [AppearanceProfile] = [AppearanceRuntime.profile]
+  private(set) var appearanceSaveStatus = AppearanceRuntime.load("appearance.pending.v2") == nil ? "Saved" : "Waiting to sync · reconnecting"
+  private var pendingAppearance = AppearanceRuntime.load("appearance.pending.v2")
+  private var appearanceInFlight: AppearanceProfile?
+  private var appearanceSaveTask: Task<Void, Never>?
+  private var appearanceAckTask: Task<Void, Never>?
+  private(set) var appearanceHistory: [AppearanceProfile] = []
+  private var appearanceGesture = false
+  private var appearanceGestureRecorded = false
   private(set) var backgroundImage: NSImage?
   private(set) var isAddingProvider = false
   private(set) var providerAddError: String?
@@ -495,6 +503,10 @@ final class AppModel {
     case .state(let state):
       let wasReady = connectionState.isReady
       connectionState = state
+      if !state.isReady, pendingAppearance != nil {
+        appearanceAckTask?.cancel(); appearanceInFlight = nil
+        appearanceSaveStatus = "Waiting to sync · reconnecting"
+      }
       switch state {
       case .ready:
         if var acceptedPairing = pendingPairing {
@@ -667,9 +679,21 @@ final class AppModel {
 
     case .appearanceListOK(let result), .appearanceUpdated(let result):
       appearanceProfiles = result.profiles
-      appearance = result.profiles.first { $0.id == result.activeID } ?? result.profiles.first ?? AppearanceRuntime.profile
+      let remote = result.profiles.first { $0.id == result.activeID } ?? result.profiles.first ?? AppearanceRuntime.defaultProfile
+      if remote == pendingAppearance {
+        pendingAppearance = nil; appearanceInFlight = nil
+        appearanceAckTask?.cancel()
+        UserDefaults.standard.removeObject(forKey: "appearance.pending.v2")
+        appearanceSaveStatus = "Saved"
+      } else if remote == appearanceInFlight {
+        appearanceInFlight = nil; appearanceAckTask?.cancel()
+        if appearanceSaveTask == nil { retryAppearanceSave() }
+      }
+      let oldAsset = appearance.background.assetID
+      appearance = pendingAppearance ?? remote
       AppearanceRuntime.profile = appearance
-      loadBackground()
+      AppearanceRuntime.cache(appearance, key: "appearance.current.v2")
+      if oldAsset != appearance.background.assetID || backgroundImage == nil { loadBackground() }
 
     case .helloOK:
       break
@@ -768,21 +792,70 @@ final class AppModel {
 
   func refreshAppearance() {
     guard let connection, connectionState.isReady else { return }
-    Task { try? await connection.send(.appearanceList) }
+    if pendingAppearance != nil { retryAppearanceSave() }
+    else { Task { try? await connection.send(.appearanceList) } }
+    if backgroundImage == nil { loadBackground() }
   }
 
-  func saveAppearance(_ profile: AppearanceProfile) {
+  func beginAppearanceAdjustment() { appearanceGesture = true; appearanceGestureRecorded = false }
+  func endAppearanceAdjustment() { appearanceGesture = false; appearanceGestureRecorded = false }
+
+  func saveAppearance(_ profile: AppearanceProfile, recordHistory: Bool = true) {
     var next = profile
-    next.name = next.name.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !next.name.isEmpty else { return }
-    next.updatedAt = ISO8601DateFormatter().string(from: Date())
-    appearance = next
+    next.id = appearance.id; next.name = appearance.name
+    next.updatedAt = appearance.updatedAt
+    guard next != appearance else { return }
+    if recordHistory && (!appearanceGesture || !appearanceGestureRecorded) {
+      appearanceHistory = Array(appearanceHistory.suffix(29)) + [appearance]
+      appearanceGestureRecorded = true
+    }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let previous = formatter.date(from: appearance.updatedAt) ?? .distantPast
+    next.updatedAt = formatter.string(from: max(Date(), previous.addingTimeInterval(0.001)))
+    let oldAsset = appearance.background.assetID
+    appearance = next; pendingAppearance = next
     AppearanceRuntime.profile = next
-    if let index = appearanceProfiles.firstIndex(where: { $0.id == next.id }) { appearanceProfiles[index] = next }
-    else { appearanceProfiles.insert(next, at: 0) }
-    guard let connection, connectionState.isReady else { return }
-    Task { try? await connection.send(.appearanceSave(profile: next, activate: true)) }
+    AppearanceRuntime.cache(next, key: "appearance.pending.v2")
+    AppearanceRuntime.cache(next, key: "appearance.current.v2")
+    appearanceProfiles = [next]
+    if oldAsset != next.background.assetID { loadBackground() }
+    appearanceSaveStatus = connectionState.isReady ? "Saving…" : "Waiting to sync · reconnecting"
+    appearanceSaveTask?.cancel()
+    appearanceSaveTask = Task {
+      do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
+      appearanceSaveTask = nil
+      retryAppearanceSave()
+    }
   }
+
+  func retryAppearanceSave() {
+    appearanceSaveTask?.cancel()
+    appearanceSaveTask = nil
+    guard let next = pendingAppearance, appearanceInFlight == nil else { return }
+    guard let connection, connectionState.isReady else {
+      appearanceSaveStatus = "Waiting to sync · reconnecting"; return
+    }
+    appearanceInFlight = next
+    appearanceSaveStatus = "Saving…"
+    appearanceAckTask = Task {
+      do {
+        try await connection.send(.appearanceSave(profile: next, activate: true))
+        try await Task.sleep(for: .seconds(8))
+      } catch { if Task.isCancelled { return } }
+      guard appearanceInFlight == next else { return }
+      appearanceInFlight = nil
+      appearanceSaveStatus = "Could not sync changes"
+    }
+  }
+
+  func undoAppearance() {
+    guard let previous = appearanceHistory.popLast() else { return }
+    endAppearanceAdjustment()
+    saveAppearance(previous, recordHistory: false)
+  }
+
+  func resetAppearance() { endAppearanceAdjustment(); saveAppearance(AppearanceRuntime.defaultProfile) }
 
   func activateAppearance(_ id: String) {
     guard let selected = appearanceProfiles.first(where: { $0.id == id }) else { return }
@@ -831,6 +904,7 @@ final class AppModel {
     Task {
       guard let (data, response) = try? await URLSession.shared.data(for: request),
             (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+      guard appearance.background.assetID == id else { return }
       backgroundImage = NSImage(data: data)
     }
   }

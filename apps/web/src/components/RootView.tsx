@@ -35,13 +35,15 @@ export function RootView() {
   }, []);
 
   useEffect(() => {
-    if (!backgroundAssetID) { setBackgroundURL(null); return; }
+    setBackgroundURL(null);
+    if (!backgroundAssetID) return;
     const controller = new AbortController();
     let url: string | null = null;
     void model.backgroundBlob(backgroundAssetID, controller.signal).then((blob) => {
+      if (controller.signal.aborted) return;
       url = URL.createObjectURL(blob);
       setBackgroundURL(url);
-    }).catch(() => setBackgroundURL(null));
+    }).catch(() => { if (!controller.signal.aborted) setBackgroundURL(null); });
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
   }, [backgroundAssetID, model]);
 

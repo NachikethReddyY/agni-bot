@@ -5214,3 +5214,21 @@ button:disabled {
   .debug-main { overflow: visible; padding: 12px; }
   .debug-flow-node { grid-template-columns: 1fr; gap: 4px; }
 }
+
+/* Live appearance controls */
+.appearance-save-status { margin-left: auto; font-size: var(--text-caption); color: var(--ink-secondary); }
+.colour-control { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.colour-control label { display: flex; align-items: center; gap: 10px; font-size: var(--text-meta); }
+.colour-control input[type="color"] { width: 42px; height: 34px; border: 1px solid var(--hairline); border-radius: 6px; padding: 2px; background: var(--surface); cursor: pointer; }
+.colour-control input[type="text"] { width: 100px; min-height: 34px; border: 1px solid var(--hairline); border-radius: 6px; background: var(--surface); color: var(--ink); padding: 6px 8px; font-family: monospace; }
+.colour-control input[aria-invalid="true"] { border-color: #dd6655; }
+.colour-control small { color: var(--ink-secondary); }
+.appearance-colour-sample { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; background: var(--surface); color: var(--ink-secondary); padding: 12px 0; font-size: var(--text-meta); }
+.appearance-sample-button { padding: 8px 14px; border-radius: var(--row-radius); background: var(--ember); color: var(--accent-ink); }
+.gradient-presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; }
+.gradient-presets button { min-height: 56px; border: 1px solid rgb(255 255 255 / 20%); border-radius: 8px; color: #fff; text-shadow: 0 1px 3px #000; }
+.gradient-preview { height: 70px; border: 1px solid var(--hairline); border-radius: 8px; }
+.appearance-slider { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: var(--text-meta); color: var(--ink-secondary); }
+.appearance-slider input { flex: 1; min-width: 100px; accent-color: var(--ember); }
+.appearance-slider output { min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
+.background-thumbnail { width: 180px; max-width: 100%; height: 100px; object-fit: cover; border-radius: 8px; border: 1px solid var(--hairline); }

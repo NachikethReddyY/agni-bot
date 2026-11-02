@@ -8,6 +8,7 @@ import AgniProtocol
 
 struct RootView: View {
   var model: AppModel
+  var systemReduceMotion = Environment(\.accessibilityReduceMotion)
 
   var body: some View {
     ZStack {
@@ -19,6 +20,11 @@ struct RootView: View {
         chat
       }
       if let toast = model.toast { toastOverlay(toast) }
+    }
+    .preferredColorScheme(model.appearance.mode == "system" ? nil : model.appearance.mode == "dark" ? .dark : .light)
+    .environment(\.accessibilityReduceMotion, model.appearance.motion == "system" ? systemReduceMotion.wrappedValue : model.appearance.motion == "reduced")
+    .transaction { transaction in
+      if model.appearance.motion == "reduced" || (model.appearance.motion == "system" && systemReduceMotion.wrappedValue) { transaction.disablesAnimations = true }
     }
     .foregroundStyle(Palette.ink)
     .sheet(isPresented: model.agentSwitcherBinding) {
@@ -48,16 +54,8 @@ struct RootView: View {
     .background(model.appearance.background.kind == "none" ? Palette.canvas : Color.clear)
   }
 
-  @ViewBuilder private var appearanceBackground: some View {
-    let background = model.appearance.background
-    if background.kind == "image", let image = model.backgroundImage {
-      Image(nsImage: image).resizable().scaledToFill().blur(radius: background.blur ?? 0)
-        .overlay(Color.black.opacity(background.dim ?? 0.68)).clipped()
-    } else if background.kind == "gradient" {
-      LinearGradient(colors: [Color(serverHex: background.from ?? "#111827"), Color(serverHex: background.to ?? "#3b1520")], startPoint: .topLeading, endPoint: .bottomTrailing)
-    } else if background.kind == "solid" {
-      Color(serverHex: background.color ?? "#111827")
-    } else { Palette.canvas }
+  private var appearanceBackground: some View {
+    AppearanceBackgroundView(background: model.appearance.background, image: model.backgroundImage)
   }
 
   private func toastOverlay(_ toast: NoticeRow) -> some View {

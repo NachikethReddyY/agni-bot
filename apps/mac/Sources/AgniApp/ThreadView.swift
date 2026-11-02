@@ -55,7 +55,7 @@ struct ThreadView: View {
   private var transcript: some View {
     ScrollViewReader { proxy in
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 16) {
+        LazyVStack(alignment: .leading, spacing: model.appearance.density == "compact" ? 10 : 16) {
           Color.clear.frame(height: 1).id(topAnchor)
           ForEach(Array(model.conversation.messages.enumerated()), id: \.element.id) { index, message in
             if isNewDay(index: index) {
