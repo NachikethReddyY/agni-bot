@@ -1,4 +1,37 @@
-# The web UI, built for a phone
+# Desktop messaging V3
+
+The desktop web and native Mac clients now follow the owner's Messages-style
+reference: charcoal surfaces, blue outgoing bubbles, grey incoming bubbles,
+a centred bot identity, pinned bot tiles, a search field, and a pill composer
+with a separate attachment/actions button. V2 live appearance editing continues.
+
+- Bot identity and app accent remain independent from the outgoing bubble colour.
+- More options exposes outgoing bubble colour, comfortable/wide conversations,
+  and subtle/off header transparency. Optional protocol fields preserve V2 data.
+- The desktop sidebar resizes from 260 to 380 px and can collapse. Width is local.
+- Consecutive messages from one sender within five minutes group visually, with
+  a tail on the last bubble. Stored messages are never split or merged.
+- "Sent" means the server has acknowledged a user message. Local echoes show
+  "Sending…". Neither status implies the bot has read or answered it.
+- Enter sends and Shift-Enter adds a line. Web paste/drop attachments, Markdown,
+  code blocks, and tables retain their existing functionality.
+- The web header keeps connection details, debugging, and the inspector in its
+  conversation menu. Native Mac keeps export, connection, and bot switching.
+- Mobile redesign is deferred; retain the existing narrow-window drawer.
+
+## Deferred customization follow-up (T3 Code inspired)
+
+This is a future plan, not part of V3: generate a palette from base/accent colours,
+select a preview area to edit its colour, provide guided and advanced editing,
+choose separate light/dark palettes, reset individual controls, and retain JSON
+appearance sharing without reintroducing named-profile management.
+
+Reference: https://github.com/pingdotgg/t3code/blob/main/docs/user/appearance.md
+
+## Earlier mobile design rationale (historical)
+
+The following describes the previous mobile-first design and is superseded by
+the desktop decisions above where they differ.
 
 The web app was a desktop app that happened to fit in a browser window. It is
 now a phone app that grows into a desktop one. This is the reasoning behind

@@ -64,7 +64,7 @@ export function newAppearanceID(): string {
 }
 
 const darkPresets = {
-  agni: ["#0d0d0f", "#08080a", "#17171a", "#1f1f23", "#1b1b1e", "#f4f4f6", "#9a9aa1", "#6d6d76"],
+  agni: ["#1e1e1e", "#272625", "#303030", "#393939", "#3a3a3c", "#f4f4f6", "#9a9aa1", "#6d6d76"],
   midnight: ["#080b14", "#050811", "#111827", "#1c2538", "#151d2d", "#f3f7ff", "#9ba9c1", "#64748b"],
   graphite: ["#111315", "#0b0d0e", "#1c2022", "#272c2f", "#202527", "#f3f4f4", "#a3aaad", "#70787c"],
   paper: ["#171512", "#100f0d", "#24211d", "#302c27", "#29251f", "#fffaf1", "#b8ac9b", "#807568"],
@@ -124,12 +124,18 @@ export function appearanceVariables(
     overlay = dark ? "rgb(0 0 0 / 8%)" : "rgb(255 255 255 / 10%)";
   }
   return {
+    "--outgoing-bubble": profile.bubbleColor ?? "#0070e8",
+    "--outgoing-ink": contrastInk(profile.bubbleColor ?? "#0070e8"),
+    "--conversation-width": profile.conversationWidth === "comfortable" ? "1100px" : "none",
+    "--bubble-max": profile.conversationWidth === "comfortable" ? "720px" : "960px",
+    "--chrome-blur": profile.transparency === "off" ? "none" : "blur(12px)",
     "--canvas": canvas, "--sidebar": sidebar, "--surface": surface,
     "--surface-raised": raised, "--incoming-bubble": incoming,
     "--ink": ink, "--ink-secondary": secondary, "--ink-tertiary": tertiary,
     "--hairline": dark ? "rgb(255 255 255 / 9%)" : "rgb(24 24 27 / 12%)",
     "--ember": accent, "--ember-deep": themeFor(accent).accentDeep,
     "--accent-ink": contrastInk(accent), "--agent-accent-ink": contrastInk(agentTheme.accent),
+    "--bubble-radius": profile.corners === "square" ? "6px" : profile.corners === "soft" ? "24px" : "20px",
     "--row-radius": radius, "--card-radius": profile.corners === "soft" ? "18px" : radius,
     "--text-display": `${22 * scale}px`, "--text-title": `${15 * scale}px`,
     "--text-body": `${14 * scale}px`, "--text-row-title": `${14 * scale}px`,

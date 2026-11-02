@@ -29,6 +29,15 @@ struct AppearanceSettingsView: View {
       Divider()
       DisclosureGroup("More options") {
         VStack(spacing: 12) {
+          AppearanceColourControl(label: "Outgoing bubble", value: model.appearance.bubbleColor ?? "#0070e8") { hex in update { $0.bubbleColor = hex } }
+          HStack {
+            Text("Conversation width"); Spacer()
+            Picker("Conversation width", selection: Binding(get: { model.appearance.conversationWidth ?? "wide" }, set: { value in update { $0.conversationWidth = value } })) { Text("Comfortable").tag("comfortable"); Text("Wide").tag("wide") }.labelsHidden()
+          }
+          HStack {
+            Text("Transparency"); Spacer()
+            Picker("Transparency", selection: Binding(get: { model.appearance.transparency ?? "subtle" }, set: { value in update { $0.transparency = value } })) { Text("Subtle").tag("subtle"); Text("Off").tag("off") }.labelsHidden()
+          }
           choice("Text size", \.textScale, ["small", "default", "large"])
           choice("Density", \.density, ["compact", "comfortable"])
           choice("Corners", \.corners, ["square", "standard", "soft"])

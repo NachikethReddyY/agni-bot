@@ -159,6 +159,9 @@ export function AppearanceView() {
     </section>
     <button type="button" className="advanced-toggle" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>More options <span>{advanced ? "−" : "+"}</span></button>
     {advanced ? <section className="settings-group appearance-advanced">
+      {colour("Outgoing bubble", draft.bubbleColor ?? "#0070e8", (bubbleColor) => change({ ...model.getSnapshot().appearance, bubbleColor }, "bubble"))}
+      <Choice label="Conversation width" value={draft.conversationWidth ?? "wide"} options={["comfortable", "wide"]} onChange={(v) => update("conversationWidth", v as AppearanceProfile["conversationWidth"])} />
+      <Choice label="Transparency" value={draft.transparency ?? "subtle"} options={["subtle", "off"]} onChange={(v) => update("transparency", v as AppearanceProfile["transparency"])} />
       <Choice label="Text size" value={draft.textScale} options={["small", "default", "large"]} onChange={(v) => update("textScale", v as AppearanceProfile["textScale"])} />
       <Choice label="Density" value={draft.density} options={["compact", "comfortable"]} onChange={(v) => update("density", v as AppearanceProfile["density"])} />
       <Choice label="Corners" value={draft.corners} options={["square", "standard", "soft"]} onChange={(v) => update("corners", v as AppearanceProfile["corners"])} />

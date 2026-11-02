@@ -120,20 +120,21 @@ export function RootView() {
 }
 
 function ChatView() {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const snapshot = useAppSnapshot();
   const model = useAppModel();
   return (
     <>
-      <SidebarView />
+      <SidebarView collapsed={sidebarCollapsed} onCollapse={() => setSidebarCollapsed(true)} />
       {snapshot.isSidebarPresented ? (
         <div className="drawer-backdrop" onClick={() => model.closeSidebar()} />
       ) : null}
-      {snapshot.isTasksPresented ? <TasksView /> : <main className="chat-main">
+      {snapshot.isTasksPresented ? <TasksView sidebarCollapsed={sidebarCollapsed} onToggleSidebar={() => setSidebarCollapsed((value) => !value)} /> : <main className="chat-main">
         {snapshot.isNewChatPresented ? (
           <NewChatView />
         ) : (
           <>
-            <ThreadHeader />
+            <ThreadHeader onToggleSidebar={() => setSidebarCollapsed((value) => !value)} />
             <ThreadView />
           </>
         )}

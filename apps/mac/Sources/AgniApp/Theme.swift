@@ -23,7 +23,7 @@ import Observation
 enum Palette {
   private static var values: [UInt32] {
     let dark: [String: [UInt32]] = [
-      "agni": [0x0D0D0F, 0x08080A, 0x17171A, 0x1F1F23, 0x1B1B1E, 0xF4F4F6, 0x9A9AA1, 0x6D6D76],
+      "agni": [0x1E1E1E, 0x272625, 0x303030, 0x393939, 0x3A3A3C, 0xF4F4F6, 0x9A9AA1, 0x6D6D76],
       "midnight": [0x080B14, 0x050811, 0x111827, 0x1C2538, 0x151D2D, 0xF3F7FF, 0x9BA9C1, 0x64748B],
       "graphite": [0x111315, 0x0B0D0E, 0x1C2022, 0x272C2F, 0x202527, 0xF3F4F4, 0xA3AAAD, 0x70787C],
       "paper": [0x171512, 0x100F0D, 0x24211D, 0x302C27, 0x29251F, 0xFFFAF1, 0xB8AC9B, 0x807568],
@@ -48,7 +48,8 @@ enum Palette {
   static var surface: Color { Color(hex: values[2]) }
   static var surfaceRaised: Color { Color(hex: values[3]) }
   static var incomingBubble: Color { Color(hex: values[4]) }
-  static var outgoingBubble: Color { Color(hex: 0xE8E8E3) }
+  static var outgoingBubble: Color { Color(serverHex: AppearanceRuntime.profile.bubbleColor ?? "#0070e8") }
+  static var outgoingInk: Color { AppearanceRuntime.contrast(AppearanceRuntime.profile.bubbleColor ?? "#0070e8", Color.white) >= 4.5 ? .white : .black }
   static var hairline: Color { ink.opacity(0.10) }
   static var ink: Color { Color(hex: values[5]) }
   static var inkSecondary: Color { Color(hex: values[6]) }
@@ -65,7 +66,7 @@ enum Metrics {
   static let inspectorMin: CGFloat = 280
   static let inspectorIdeal: CGFloat = 320
   /// Chat column caps the measure so prose stays under ~80 characters.
-  static let measure: CGFloat = 680
+  static var measure: CGFloat { AppearanceRuntime.profile.conversationWidth == "comfortable" ? 720 : 960 }
   static let gutter: CGFloat = 20
   static var rowRadius: CGFloat { AppearanceRuntime.profile.corners == "square" ? 4 : AppearanceRuntime.profile.corners == "soft" ? 18 : 10 }
   static var bubbleRadius: CGFloat { AppearanceRuntime.profile.corners == "square" ? 7 : AppearanceRuntime.profile.corners == "soft" ? 24 : 18 }

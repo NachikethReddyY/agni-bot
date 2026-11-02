@@ -24,6 +24,7 @@ export function ThreadView() {
   const snapshot = useAppSnapshot();
   const conversation = snapshot.conversation;
   const messages = conversation.messages;
+  const lastOutgoingID = messages.findLast((message) => message.role === "user")?.id;
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -105,6 +106,7 @@ export function ThreadView() {
                 index={index}
                 messages={messages}
                 agent={model.agent}
+                showSendStatus={message.id === lastOutgoingID}
                 selected={selected.has(message.id)}
                 onToggleSelect={() => toggleSelection(message.id)}
               />
@@ -156,6 +158,7 @@ function MessageBlock({
   messages,
   agent,
   selected,
+  showSendStatus,
   onToggleSelect,
 }: {
   message: ChatMessage;
@@ -163,6 +166,7 @@ function MessageBlock({
   messages: ChatMessage[];
   agent: AgentInfo | null | undefined;
   selected: boolean;
+  showSendStatus: boolean;
   onToggleSelect: () => void;
 }) {
   return (
@@ -175,6 +179,9 @@ function MessageBlock({
       <MessageRowView
         message={message}
         agent={agent}
+        showSendStatus={showSendStatus}
+        groupStart={!sameMessageGroup(messages[index - 1], message)}
+        groupEnd={!sameMessageGroup(message, messages[index + 1])}
         isSelected={selected}
         onToggleSelect={onToggleSelect}
       />
@@ -447,4 +454,12 @@ function SecretCard({
       </div>
     </div>
   );
+}
+
+/** Visual grouping never combines or splits durable messages. */
+export function sameMessageGroup(a: ChatMessage | undefined, b: ChatMessage | undefined): boolean {
+  if (!a || !b || a.role === "system" || a.role !== b.role || a.agentID !== b.agentID || a.uiHint !== b.uiHint) return false;
+  if (!a.createdAt || !b.createdAt) return false;
+  const gap = b.createdAt.getTime() - a.createdAt.getTime();
+  return gap >= 0 && gap < 5 * 60_000 && a.createdAt.toDateString() === b.createdAt.toDateString();
 }

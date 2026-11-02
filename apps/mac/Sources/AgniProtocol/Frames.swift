@@ -307,6 +307,9 @@ public struct AppearanceProfile: Sendable, Equatable, Codable, Identifiable {
   public var preset: String
   public var accent: String
   public var customAccent: String?
+  public var bubbleColor: String?
+  public var conversationWidth: String?
+  public var transparency: String?
   public var background: AppearanceBackground
   public var textScale: String
   public var density: String

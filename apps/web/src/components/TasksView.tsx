@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { CalendarDays, ChevronLeft, ChevronRight, Check, Plus, RefreshCw, X, Mic, Paperclip, Activity, MoreHorizontal } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Check, Plus, RefreshCw, X, Mic, Paperclip, Activity, MoreHorizontal, PanelLeft } from "lucide-react";
 import { format, type TaskInfo } from "@agni/client";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 
-export function TasksView() {
+export function TasksView({ onToggleSidebar, sidebarCollapsed = false }: { onToggleSidebar?: () => void; sidebarCollapsed?: boolean }) {
   const model = useAppModel();
   const snapshot = useAppSnapshot();
   useEffect(() => {
@@ -29,7 +29,7 @@ export function TasksView() {
   const calendarTasks = calendarDay ? monthTasks.filter((task) => dateKey(new Date(taskSchedule(task)!)) === dateKey(calendarDay)) : monthTasks;
   const currentList = snapshot.taskLists.find((list) => list.id === selectedList);
   const view = snapshot.taskView.kind;
-  const pageTitle = view === "today" ? "Today" : view === "inbox" ? "Inbox" : view === "calendar" ? "Calendar" : currentList?.name ?? "Tasks";
+  const pageTitle = view === "today" ? "Today" : view === "inbox" ? "Inbox" : view === "calendar" ? "Calendar" : view === "upcoming" ? "Upcoming" : view === "completed" ? "Completed" : currentList?.name ?? "Tasks";
   const visibleTasks = view === "today" ? todayTasks : view === "inbox" ? inbox : view === "upcoming" ? upcoming : view === "completed" ? completed : view === "list" ? listTasks : [];
   const upcomingGroups = [...new Set(upcoming.map((task) => dateKey(new Date(taskSchedule(task)!))))].sort().map((key) => ({
     key,
@@ -56,6 +56,10 @@ export function TasksView() {
     <main className="tasks-page">
       <div className="tasks-content">
         <header className="tasks-page-header">
+          <button type="button" className="icon-btn tasks-sidebar-toggle" aria-label="Toggle sidebar" title={sidebarCollapsed ? "Open sidebar" : "Toggle sidebar"} onClick={() => {
+            if (typeof matchMedia !== "undefined" && matchMedia("(min-width: 721px)").matches) onToggleSidebar?.();
+            else model.openSidebar();
+          }}><PanelLeft size={18} /></button>
           <div className="tasks-heading-copy">
             <h1>{pageTitle}</h1>
             {view === "today" ? <p>{today.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</p> : null}

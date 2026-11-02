@@ -5,7 +5,7 @@
  * Each agent has one enduring conversation surface; sessions are seams in it,
  * not list entries (blueprint v3 §5).
  */
-import { CalendarDays, CheckCircle2, CheckSquare, Clock3, Inbox, Plus, Search, Star, X } from "lucide-react";
+import { CalendarDays, CheckCircle2, CheckSquare, Clock3, Inbox, PanelLeftClose, Plus, Search, Star, X } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useAppModel, useAppSnapshot } from "../state/use-app-model";
 import { AppTile, SidebarAgentBadge, connectionShortStatus, initials } from "./bits";
@@ -17,7 +17,15 @@ function stateLabel(state: string): string {
   return "Idle";
 }
 
-export function SidebarView() {
+export function SidebarView({ onCollapse, collapsed = false }: { onCollapse?: () => void; collapsed?: boolean }) {
+  const [width, setWidth] = useState(() => {
+    try { return Math.max(260, Math.min(380, Number(localStorage.getItem("dev.agni.sidebar.width")) || 300)); } catch { return 300; }
+  });
+  const resize = (next: number) => {
+    const clamped = Math.max(260, Math.min(380, next));
+    setWidth(clamped);
+    try { localStorage.setItem("dev.agni.sidebar.width", String(clamped)); } catch { /* storage unavailable */ }
+  };
   const model = useAppModel();
   const snapshot = useAppSnapshot();
   const [newCollectionOpen, setNewCollectionOpen] = useState(false);
@@ -34,7 +42,7 @@ export function SidebarView() {
   const owner = profileName(snapshot.settings.deviceName);
 
   /** The newest thing each agent said, one line. */
-  const previewFor = (agentID: string): string | undefined => {
+  const previewFor = (agentID: string): { updatedAt: string; preview?: string } | undefined => {
     let newest: { updatedAt: string; preview?: string } | undefined;
     for (const thread of snapshot.threads) {
       if (thread.agentID !== agentID) continue;
@@ -42,7 +50,7 @@ export function SidebarView() {
         newest = { updatedAt: thread.updatedAt, preview: thread.preview };
       }
     }
-    return newest?.preview;
+    return newest;
   };
 
   const row = (agent: (typeof roster)[number]) => {
@@ -75,10 +83,11 @@ export function SidebarView() {
         <span className="sidebar-row-text">
           <span className="sidebar-row-top">
             <span className="sidebar-row-title">{agent.name}</span>
+            {preview ? <time className="sidebar-row-time" dateTime={preview.updatedAt}>{new Date(preview.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time> : null}
             {agent.role ? <span className="sidebar-tag-chip">{agent.role}</span> : null}
           </span>
           <span className="sidebar-row-subtitle">
-            {preview ?? agent.role ?? agent.model ?? "Assistant"}
+            {preview?.preview ?? agent.role ?? agent.model ?? "Assistant"}
             {visibilityNote}
           </span>
         </span>
@@ -113,9 +122,16 @@ export function SidebarView() {
   };
 
   return (
-    <aside className={`sidebar${snapshot.isSidebarPresented ? " open" : ""}`}>
+    <aside className={`sidebar${snapshot.isSidebarPresented ? " open" : ""}${collapsed ? " desktop-collapsed" : ""}`} style={{ "--sidebar-width": `${width}px` } as React.CSSProperties}>
+      <div className="sidebar-resizer" role="separator" tabIndex={0} aria-label="Sidebar width" aria-orientation="vertical" aria-valuemin={260} aria-valuemax={380} aria-valuenow={width}
+        onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); event.preventDefault(); }}
+        onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) resize(event.clientX - event.currentTarget.parentElement!.getBoundingClientRect().left); }}
+        onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
+        onKeyDown={(event) => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); resize(width + (event.key === "ArrowRight" ? 10 : -10)); } }} />
       <div className="sidebar-bar">
+        <span className="sidebar-title">{snapshot.isTasksPresented ? "Tasks" : "Messages"}</span>
         <span className="sidebar-bar-spacer" />
+        <button type="button" className="icon-btn sidebar-collapse" aria-label="Collapse sidebar" onClick={onCollapse}><PanelLeftClose size={17} /></button>
         <button
           type="button"
           className={`icon-btn${snapshot.isTasksPresented ? " active" : ""}`}
@@ -153,6 +169,7 @@ export function SidebarView() {
         </button>
       </div>
 
+      {!snapshot.isTasksPresented ? <label className="sidebar-search"><Search size={16} /><input aria-label="Search bots" placeholder="Search" value={snapshot.searchText} onChange={(event) => model.setSearchText(event.target.value)} /></label> : null}
       {snapshot.isTasksPresented ? (
         <div className="sidebar-sections task-nav">
           <div className="task-nav-primary">

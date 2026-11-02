@@ -324,3 +324,13 @@ The profile wire format and legacy list/activate/delete frames remain available
 for compatibility. V2 updates the current profile in place and removes profile
 management from both settings interfaces; existing stored profiles are retained.
 No protocol version change or database migration is required.
+
+### Desktop appearance V3
+
+Optional appearance fields `bubbleColor` (six-digit hex), `conversationWidth`
+(`comfortable` or `wide`), and `transparency` (`subtle` or `off`) extend version-1
+appearance profiles without changing protocol version 2. Missing fields use blue
+outgoing bubbles, wide conversations, and subtle header transparency. Bot identity
+and app accent remain separate from the outgoing bubble colour. V2 live saving,
+backgrounds, undo and reset continue to work. Sidebar width and pinned bots are
+local device preferences. Visual grouping never changes stored message boundaries.
