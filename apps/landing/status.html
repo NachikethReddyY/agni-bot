@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agni Bot · Deploy status</title>
+  <meta name="description" content="Is the latest Agni Bot build on main deployed?">
+  <link rel="icon" type="image/svg+xml" href="assets/fire.svg">
+  <style>
+    :root {
+      --paper: #ECEFEA; --card: #FBFCFA; --ink: #142019; --muted: #56655C;
+      --rule: #C7CFC8; --ok: #4E9A56; --wait: #E0A93B; --bad: #C8482A;
+      --sans: "Hanken Grotesk", system-ui, sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 var(--sans);
+           min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+    main { width: 100%; max-width: 520px; background: var(--card); border: 1px solid var(--rule);
+           border-radius: 14px; padding: 28px; }
+    .state { display: flex; align-items: center; gap: 12px; font-size: 28px; font-weight: 700; margin: 0 0 6px; }
+    .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--muted); flex: none; }
+    [data-state="ok"] .dot { background: var(--ok); }
+    [data-state="wait"] .dot { background: var(--wait); animation: pulse 1.2s infinite; }
+    [data-state="bad"] .dot { background: var(--bad); }
+    @keyframes pulse { 50% { opacity: .3; } }
+    @media (prefers-reduced-motion: reduce) { .dot { animation: none !important; } }
+    p { margin: 0; color: var(--muted); }
+    dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 20px 0 0; font-size: 14px; }
+    dt { color: var(--muted); }
+    dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+    a { color: inherit; }
+    footer { margin-top: 20px; font-size: 13px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main id="box" aria-live="polite">
+    <h1 class="state"><span class="dot"></span><span id="title">Checking…</span></h1>
+    <p id="sub">Reading the latest build on main.</p>
+    <dl id="facts" hidden>
+      <dt>Commit</dt><dd><a id="sha" target="_blank" rel="noopener"></a></dd>
+      <dt>Change</dt><dd id="msg"></dd>
+      <dt>Pushed</dt><dd id="when"></dd>
+      <dt>Build</dt><dd><a id="run" target="_blank" rel="noopener"></a></dd>
+    </dl>
+    <footer>Refreshes every 60 s · <a href="/">Back to Agni Bot</a></footer>
+  </main>
+  <script>
+    // Public repo, so GitHub's unauthenticated API works (60 requests/hour per visitor).
+    const API = "https://api.github.com/repos/NachikethReddyY/agni-bot";
+    const $ = (id) => document.getElementById(id);
+
+    function show(state, title, sub) {
+      $("box").dataset.state = state;
+      $("title").textContent = title;
+      $("sub").textContent = sub;
+    }
+
+    async function check() {
+      try {
+        const res = await fetch(`${API}/actions/runs?branch=main&event=push&per_page=1`);
+        if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+        const run = (await res.json()).workflow_runs[0];
+        if (!run) return show("", "No builds yet", "Nothing has been pushed to main.");
+
+        if (run.status !== "completed") show("wait", "Deploying", "A new build is running now.");
+        else if (run.conclusion === "success") show("ok", "Deployed", "The latest change on main passed and is live.");
+        else show("bad", "Deploy failed", `The latest build ended: ${run.conclusion}.`);
+
+        $("sha").textContent = run.head_sha.slice(0, 7);
+        $("sha").href = `https://github.com/NachikethReddyY/agni-bot/commit/${run.head_sha}`;
+        $("msg").textContent = run.head_commit.message.split("\n")[0];
+        $("when").textContent = new Date(run.head_commit.timestamp).toLocaleString();
+        $("run").textContent = `${run.name} #${run.run_number}`;
+        $("run").href = run.html_url;
+        $("facts").hidden = false;
+      } catch (err) {
+        show("", "Status unknown", `Could not reach GitHub (${err.message}). Try again shortly.`);
+      }
+    }
+
+    check();
+    setInterval(check, 60000);
+  </script>
+</body>
+</html>
