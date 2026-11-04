@@ -6,27 +6,29 @@
   <title>Agni Bot · Message the bots that do the work</title>
   <meta name="description" content="Agni Bot is a messaging app for named, specialised bots. Each bot has its own role and memory. It runs on your machine. Source-available, not open source.">
   <link rel="icon" type="image/svg+xml" href="assets/fire.svg">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500&family=Hanken+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <meta name="theme-color" content="#0d0d0f">
   <style>
+    /* Agni's design tokens: apps/web/src/styles/tokens.css and apps/mac/DESIGN.md. */
     :root {
-      --paper: #ECEFEA;
-      --card: #FBFCFA;
-      --ink: #142019;
-      --muted: #56655C;
-      --rule: #C7CFC8;
-      --ember: #C8482A;
-      --ember-ink: #A63B24;
+      color-scheme: dark;
+      --paper: #0d0d0f;
+      --surface: #17171a;
+      --card: #1f1f23;
+      --ink: #f4f4f6;
+      --muted: #9a9aa1;
+      --rule: #2a2a2e;
+      --ember: #ff3146;
+      --ember-ink: #ff5a6a;
 
-      --dot-new: #E0A93B;
-      --dot-research: #4A86C5;
-      --dot-code: #4E9A56;
-      --dot-analyst: #8A6BC4;
+      --dot-new: #f0b95a;
+      --dot-research: #5a9be0;
+      --dot-code: #5fb36a;
+      --dot-analyst: #a487dc;
 
-      --serif: "Newsreader", Georgia, serif;
-      --sans: "Hanken Grotesk", system-ui, sans-serif;
-      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      /* One family (SF Pro via the system font), SF Mono for machine values. */
+      --serif: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
       --measure: 66ch;
     }
@@ -124,7 +126,7 @@
       text-decoration: none;
       border-radius: 999px;
     }
-    .btn:hover { background: #22332A; }
+    .btn:hover { background: #ffffff; }
     .link {
       font-weight: 600;
       text-decoration: underline;
@@ -134,7 +136,7 @@
 
     /* The thread: the product itself, as the hero */
     .thread {
-      background: #DFE5E0;
+      background: var(--surface);
       border-radius: 22px;
       padding: 22px;
       border: 1px solid var(--rule);
@@ -267,7 +269,7 @@
     .ledger code,
     .inline-code {
       font: 400 0.875rem/1 var(--mono);
-      background: #DFE5E0;
+      background: var(--surface);
       padding: 2px 6px;
       border-radius: 4px;
     }
@@ -326,8 +328,9 @@
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      background: var(--ink);
-      color: #E4EAE5;
+      background: var(--surface);
+      border: 1px solid var(--rule);
+      color: var(--ink);
       border-radius: 12px;
       padding: 12px 14px;
       font: 400 0.875rem/1.5 var(--mono);
@@ -337,13 +340,13 @@
       flex: none;
       font: 500 0.8125rem/1 var(--sans);
       background: transparent;
-      color: #E4EAE5;
-      border: 1px solid #50605A;
+      color: var(--ink);
+      border: 1px solid #3a3a40;
       border-radius: 999px;
       padding: 7px 11px;
       cursor: pointer;
     }
-    .cmd button:hover { border-color: #E4EAE5; }
+    .cmd button:hover { border-color: var(--ink); }
 
     footer {
       border-top: 1px solid var(--rule);
@@ -388,6 +391,16 @@
       .ledger dd { border-top: 0; padding-bottom: 14px; }
       .ledger dd + dt { border-top: 1px solid var(--rule); padding-top: 14px; }
     }
+
+    .deploy { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 18px;
+              padding: 4px 12px; border: 1px solid var(--rule); border-radius: 999px;
+              background: var(--card); font: 13px/1.4 var(--mono); color: var(--muted); text-decoration: none; }
+    .deploy .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--rule); flex: none; }
+    .deploy[data-state="ok"] .dot { background: var(--dot-code); }
+    .deploy[data-state="wait"] .dot { background: var(--dot-new); animation: pulse 1.2s infinite; }
+    .deploy[data-state="bad"] .dot { background: var(--ember); }
+    @keyframes pulse { 50% { opacity: .3; } }
+    @media (prefers-reduced-motion: reduce) { .deploy .dot { animation: none; } }
   </style>
 </head>
 <body>
@@ -410,6 +423,9 @@
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">
         <div>
+          <a class="deploy" id="deploy" href="https://github.com/NachikethReddyY/agni-bot/actions" target="_blank" rel="noopener" aria-live="polite">
+            <span class="dot"></span><span id="deploy-text">Checking deploy…</span>
+          </a>
           <h1 id="hero-title">Message the bots that do the work.</h1>
           <p class="lede">Each bot has its own name, its own job, and its own memory. You talk to them the way you would message a friend. The server runs on your machine, and speed comes before polish.</p>
           <div class="actions">
@@ -587,6 +603,28 @@
         setTimeout(() => { button.textContent = "Copy"; }, 1600);
       });
     });
+
+    // Deploy status: latest CI run on main, from GitHub's public API (60 requests/hour per visitor).
+    async function checkDeploy() {
+      const pill = document.getElementById("deploy");
+      const text = document.getElementById("deploy-text");
+      try {
+        const res = await fetch("https://api.github.com/repos/NachikethReddyY/agni-bot/actions/runs?branch=main&event=push&per_page=1");
+        if (!res.ok) throw new Error(res.status);
+        const run = (await res.json()).workflow_runs[0];
+        if (!run) { text.textContent = "No deploys yet"; return; }
+        const state = run.status !== "completed" ? "wait" : run.conclusion === "success" ? "ok" : "bad";
+        const label = { ok: "Deployed", wait: "Deploying", bad: "Deploy failed" }[state];
+        pill.dataset.state = state;
+        pill.href = run.html_url;
+        text.textContent = `${label} · ${run.head_sha.slice(0, 7)} · ${new Date(run.head_commit.timestamp).toLocaleDateString()}`;
+      } catch {
+        delete pill.dataset.state;
+        text.textContent = "Deploy status unavailable";
+      }
+    }
+    checkDeploy();
+    setInterval(checkDeploy, 60000);
   </script>
 </body>
 </html>
