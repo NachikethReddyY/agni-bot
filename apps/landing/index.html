@@ -42,14 +42,17 @@
     }
 
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     html { scroll-padding-top: 24px; }
     @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
     body {
       margin: 0;
       background: var(--canvas);
       color: var(--ink);
-      font: 400 17px/1.55 var(--sans);
+      font: 400 1.0625rem/1.55 var(--sans);
       -webkit-font-smoothing: antialiased;
+      font-optical-sizing: auto;
+      overflow-wrap: anywhere;
     }
     img { display: block; max-width: 100%; height: auto; }
     a { color: inherit; }
@@ -60,14 +63,14 @@
     .skip:focus { top: 12px; }
     .wrap { width: min(1120px, 100% - 48px); margin-inline: auto; }
 
-    /* Header */
-    .top { display: flex; align-items: center; gap: 32px; padding: 20px 0; }
+    /* Header: a translucent layer the page scrolls under, fading out instead of a divider */
+    .bar { position: sticky; top: 0; z-index: 5; background: rgb(13 13 15 / 86%); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%); }
+    .bar::after { content: ""; position: absolute; inset: 100% 0 auto; height: 16px; background: linear-gradient(rgb(13 13 15 / 50%), transparent); pointer-events: none; }
+    .top { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 32px; padding: 12px 0; }
     .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; text-decoration: none; }
-    .nav { display: flex; gap: 24px; list-style: none; margin: 0; padding: 0; font-size: 15px; }
+    .nav { display: flex; gap: 24px; list-style: none; margin: 0; padding: 0; font-size: 0.9375rem; }
     .nav a { color: var(--ink-2); text-decoration: none; transition: color var(--snappy); }
-    .nav a:hover { color: var(--ink); }
-    .deploy { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; font: 400 12px/1.4 var(--mono); color: var(--ink-2); text-decoration: none; white-space: nowrap; }
-    .deploy:hover { color: var(--ink); }
+    .deploy { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; font: 400 0.75rem/1.4 var(--mono); color: var(--ink-2); text-decoration: none; white-space: nowrap; }
     .deploy .dot { background: var(--hairline-strong); }
     .deploy[data-state="ok"] .dot { background: var(--ok); }
     .deploy[data-state="wait"] .dot { background: var(--wait); animation: pulse 1.2s infinite; }
@@ -79,23 +82,21 @@
     /* Hero: the words, then the app itself */
     .hero { padding: clamp(32px, 6vw, 72px) 0 0; }
     .hero-text { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 24px 64px; align-items: end; margin-bottom: clamp(32px, 5vw, 56px); }
-    h1 { margin: 0; font: 500 clamp(44px, 6.6vw, 80px)/1 var(--sans); letter-spacing: -0.03em; text-wrap: balance; }
-    .hero .lede { color: var(--ink-2); font-size: 19px; line-height: 1.45; margin-bottom: 24px; }
+    h1 { margin: 0; font: 500 clamp(2.75rem, 6.6vw, 5rem)/1 var(--sans); letter-spacing: -0.03em; text-wrap: balance; }
+    .hero .lede { color: var(--ink-2); font-size: 1.1875rem; line-height: 1.45; margin-bottom: 24px; }
     .actions { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
-    .btn { display: inline-block; padding: 12px 20px; border-radius: 12px; background: var(--light); color: var(--on-light); font-size: 16px; font-weight: 600; line-height: 1.25; text-decoration: none; transition: background-color var(--snappy); }
-    .btn:hover { background: #fff; }
+    .btn { display: inline-block; padding: 12px 20px; border-radius: 12px; background: var(--light); color: var(--on-light); font-size: 1rem; font-weight: 600; line-height: 1.25; text-decoration: none; }
     .link { font-weight: 500; text-decoration: underline; text-decoration-color: var(--hairline-strong); text-underline-offset: 4px; transition: text-decoration-color var(--snappy); }
-    .link:hover { text-decoration-color: currentColor; }
     .app { border-radius: 14px; border: 1px solid var(--hairline-strong); overflow: hidden; }
     .app img { width: 100%; }
     figure { margin: 0; }
-    figcaption { margin-top: 12px; color: var(--ink-2); font-size: 14px; }
+    figcaption { margin-top: 12px; color: var(--ink-2); font-size: 0.875rem; }
 
     /* A section is one exchange: your message, then a bot's answer */
     .turn { padding-top: clamp(72px, 10vw, 128px); }
-    .ask { width: fit-content; max-width: 80%; margin: 0 0 32px auto; padding: 10px 16px; border-radius: 20px 20px 4px 20px; background: var(--outgoing); color: #fff; font: 400 clamp(17px, 1.7vw, 20px)/1.35 var(--sans); }
-    .who { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--ink-2); font-size: 14px; }
-    .lead { max-width: 20ch; margin-bottom: 40px; font-size: clamp(32px, 4.2vw, 52px); font-weight: 500; line-height: 1.08; letter-spacing: -0.022em; text-wrap: balance; }
+    .ask { width: fit-content; max-width: 80%; margin: 0 0 32px auto; padding: 10px 16px; border-radius: 20px 20px 4px 20px; background: var(--outgoing); color: #fff; font: 400 clamp(1.0625rem, 1.7vw, 1.25rem)/1.35 var(--sans); }
+    .who { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--ink-2); font-size: 0.875rem; }
+    .lead { max-width: 20ch; margin-bottom: 40px; font-size: clamp(2rem, 4.2vw, 3.25rem); font-weight: 500; line-height: 1.08; letter-spacing: -0.022em; text-wrap: balance; }
     .prose { color: var(--ink-2); max-width: 56ch; }
     .prose + .prose { margin-top: 16px; }
     .prose b { color: var(--ink); font-weight: 500; }
@@ -109,12 +110,12 @@
     .avatar { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: var(--c); color: var(--on-light); font-weight: 600; }
     .avatar.add { background: none; border: 1px dashed var(--hairline-strong); color: var(--ink-2); font-weight: 400; }
     .roster b { display: block; font-weight: 500; line-height: 1.35; }
-    .roster p { color: var(--ink-2); font-size: 15px; line-height: 1.45; }
+    .roster p { color: var(--ink-2); font-size: 0.9375rem; line-height: 1.45; }
 
     /* The morning brief: the one lit sheet on a dark page */
     .brief { grid-template-columns: minmax(0, 4fr) minmax(0, 7fr); }
     .brief .prose { margin-bottom: 24px; }
-    .bubble { width: fit-content; max-width: 100%; padding: 12px 16px; border-radius: 20px 20px 20px 4px; background: var(--incoming); border: 1px solid var(--hairline); font-size: 15px; line-height: 1.4; }
+    .bubble { width: fit-content; max-width: 100%; padding: 12px 16px; border-radius: 20px 20px 20px 4px; background: var(--incoming); border: 1px solid var(--hairline); font-size: 0.9375rem; line-height: 1.4; }
     .bubble p + p { margin-top: 12px; }
     .bubble span { display: block; color: var(--ink-2); }
     .sheet img { border-radius: 8px 8px 0 0; -webkit-mask-image: linear-gradient(#000 80%, transparent); mask-image: linear-gradient(#000 80%, transparent); }
@@ -123,16 +124,16 @@
     .abilities { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px 40px; margin: 0; }
     .abilities div { padding-top: 16px; border-top: 1px solid var(--hairline-strong); }
     .abilities dt { font-weight: 500; margin-bottom: 4px; }
-    .abilities dd { margin: 0; color: var(--ink-2); font-size: 15px; line-height: 1.45; }
+    .abilities dd { margin: 0; color: var(--ink-2); font-size: 0.9375rem; line-height: 1.45; }
 
     /* Approval: the thread you can actually press */
     .thread { padding: 20px; border-radius: 20px; background: var(--surface); border: 1px solid var(--hairline); }
     .msg { max-width: 88%; margin-bottom: 12px; }
-    .msg .name { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; color: var(--ink-2); font-size: 13px; }
-    .msg p { width: fit-content; padding: 8px 14px; border-radius: 18px 18px 18px 4px; background: var(--raised); font-size: 15px; line-height: 1.4; }
+    .msg .name { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; color: var(--ink-2); font-size: 0.8125rem; }
+    .msg p { width: fit-content; padding: 8px 14px; border-radius: 18px 18px 18px 4px; background: var(--raised); font-size: 0.9375rem; line-height: 1.4; }
     .msg.you { margin-left: auto; }
     .msg.you p { margin-left: auto; border-radius: 18px 18px 4px 18px; background: var(--outgoing); color: #fff; }
-    .approval { margin-top: 16px; padding: 12px 16px; border-left: 3px solid var(--ember); border-radius: 0 12px 12px 0; background: var(--raised); font-size: 15px; transition: border-color var(--snappy); }
+    .approval { margin-top: 16px; padding: 12px 16px; border-left: 3px solid var(--ember); border-radius: 0 12px 12px 0; background: var(--raised); font-size: 0.9375rem; transition: border-color var(--snappy); }
     .approval[data-state="approved"] { border-color: var(--ok); }
     .approval[data-state="declined"] { border-color: var(--hairline-strong); }
     .approval p { margin-bottom: 12px; }
@@ -140,12 +141,10 @@
     .approval[data-state] b { color: var(--ink); }
     .approval[data-state] p { margin-bottom: 0; }
     .choices { display: flex; gap: 8px; }
-    .choices button { min-height: 36px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--hairline-strong); background: none; color: var(--ink); font: 500 14px/1 var(--sans); cursor: pointer; transition: background-color var(--snappy), transform var(--snappy); }
-    .choices button:hover { background: var(--hairline); }
-    .choices button:active { transform: scale(0.97); }
+    .choices button { min-height: 36px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--hairline-strong); background: none; color: var(--ink); font: 500 0.875rem/1 var(--sans); cursor: pointer; }
     .choices .yes { background: var(--light); border-color: var(--light); color: var(--on-light); }
-    .choices .yes:hover { background: #fff; }
-    .note { margin-top: 12px; color: var(--ink-2); font-size: 14px; }
+    .again { min-height: 36px; margin-top: 4px; padding: 0; border: 0; background: none; color: var(--ink-2); font: 500 0.875rem/1 var(--sans); text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
+    .note { margin-top: 12px; color: var(--ink-2); font-size: 0.875rem; }
     .gated { margin: 24px 0 0; padding: 0; list-style: none; }
     .gated li { padding: 12px 0; border-top: 1px solid var(--hairline); }
     .gated li:last-child { border-bottom: 1px solid var(--hairline); }
@@ -153,7 +152,7 @@
     /* Speed: the limits are the design */
     .limits { margin: 0; }
     .limits div { display: grid; grid-template-columns: minmax(120px, 2fr) minmax(0, 7fr); gap: 4px 32px; align-items: baseline; padding: 16px 0; border-top: 1px solid var(--hairline-strong); }
-    .limits dt { font-size: clamp(28px, 3.4vw, 40px); font-weight: 500; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .limits dt { font-size: clamp(1.75rem, 3.4vw, 2.5rem); font-weight: 500; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .limits dd { margin: 0; color: var(--ink-2); max-width: 60ch; }
     .limits dd b { color: var(--ink); font-weight: 500; }
 
@@ -171,12 +170,23 @@
     .steps p { color: var(--ink-2); margin-bottom: 12px; }
     .steps p:last-child { margin-bottom: 0; }
     .steps p b { color: var(--ink); }
-    .cmd { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px 8px 16px; border-radius: 12px; background: var(--surface); border: 1px solid var(--hairline); font: 400 14px/1.5 var(--mono); }
+    .cmd { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px 8px 16px; border-radius: 12px; background: var(--surface); border: 1px solid var(--hairline); font: 400 0.875rem/1.5 var(--mono); }
     .cmd span { overflow-x: auto; white-space: nowrap; }
-    .cmd button { flex: none; min-height: 32px; padding: 0 12px; border: 1px solid var(--hairline-strong); border-radius: 8px; background: none; color: var(--ink); font: 500 13px/1 var(--sans); cursor: pointer; transition: background-color var(--snappy); }
-    .cmd button:hover { background: var(--hairline); }
+    .cmd button { flex: none; min-height: 32px; padding: 0 12px; border: 1px solid var(--hairline-strong); border-radius: 8px; background: none; color: var(--ink); font: 500 0.8125rem/1 var(--sans); cursor: pointer; }
 
-    footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; margin-top: clamp(72px, 10vw, 128px); padding: 24px 0 40px; border-top: 1px solid var(--hairline); color: var(--ink-2); font-size: 15px; }
+    .coming { margin-top: clamp(72px, 10vw, 128px); color: var(--ember); font-size: min(13.2vw, 168px); font-weight: 500; line-height: 1; letter-spacing: -0.04em; text-wrap: balance; }
+
+    footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; margin-top: clamp(40px, 5vw, 64px); padding: 24px 0 40px; border-top: 1px solid var(--hairline); color: var(--ink-2); font-size: 0.9375rem; }
+
+    /* Press feedback is instant, on the way down */
+    .btn, .choices button, .cmd button, .again { touch-action: manipulation; -webkit-tap-highlight-color: transparent; transition: background-color var(--snappy), transform 100ms ease-out; }
+    .btn:active, .choices button:active, .cmd button:active { transform: scale(0.97); }
+    @media (hover: hover) {
+      .nav a:hover, .deploy:hover, .again:hover { color: var(--ink); }
+      .link:hover { text-decoration-color: currentColor; }
+      .btn:hover, .choices .yes:hover { background: #fff; }
+      .choices button:not(.yes):hover, .cmd button:hover { background: var(--hairline); }
+    }
 
     /* One orchestrated moment: the thread arrives message by message */
     @media (prefers-reduced-motion: no-preference) {
@@ -184,9 +194,21 @@
       .thread.playing > :nth-child(2) { animation-delay: 300ms; }
       .thread.playing > :nth-child(3) { animation-delay: 900ms; }
       .thread.playing > :nth-child(4) { animation-delay: 1500ms; }
+      .approval[data-state] #approval-text { animation: arrive var(--enter) both; }
       @keyframes arrive { from { opacity: 0; transform: translateY(8px); } }
     }
-    @media (prefers-reduced-motion: reduce) { .deploy .dot { animation: none !important; } }
+    @media (prefers-reduced-motion: reduce) {
+      .deploy .dot { animation: none !important; }
+      .btn:active, .choices button:active, .cmd button:active { transform: none; }
+    }
+    @media (prefers-reduced-transparency: reduce) {
+      .bar { background: var(--canvas); -webkit-backdrop-filter: none; backdrop-filter: none; }
+    }
+    @media (prefers-contrast: more) {
+      :root { --ink-2: #d4d4da; --hairline: rgb(255 255 255 / 28%); --hairline-strong: rgb(255 255 255 / 48%); }
+      .bar { background: var(--canvas); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 1px 0 var(--hairline-strong); }
+      .bar::after { display: none; }
+    }
 
     @media (max-width: 860px) {
       .nav { display: none; }
@@ -200,15 +222,17 @@
       .abilities { grid-template-columns: minmax(0, 1fr); gap: 20px; }
       .limits div { grid-template-columns: minmax(0, 1fr); }
       .status div { grid-template-columns: minmax(0, 1fr); }
-      .deploy { font-size: 11px; }
+      .top { column-gap: 16px; }
+      .deploy { font-size: 0.6875rem; white-space: normal; }
+      .coming { font-size: 21vw; }
     }
   </style>
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
 
-  <div class="wrap">
-    <header class="top">
+  <header class="bar">
+    <div class="wrap top">
       <a class="brand" href="#">
         <img src="assets/fire.svg" alt="" width="20" height="20">
         Agni Bot
@@ -216,14 +240,16 @@
       <ul class="nav">
         <li><a href="#bots">Bots</a></li>
         <li><a href="#brief">Morning brief</a></li>
-        <li><a href="#control">Control</a></li>
+        <li><a href="#control">Approvals</a></li>
         <li><a href="#run">Install</a></li>
       </ul>
       <a class="deploy" id="deploy" href="https://github.com/NachikethReddyY/agni-bot/actions" target="_blank" rel="noopener" aria-live="polite">
         <span class="dot"></span><span id="deploy-text">Checking deploy</span>
       </a>
-    </header>
+    </div>
+  </header>
 
+  <div class="wrap">
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-text">
@@ -319,11 +345,12 @@
               <div class="msg"><div class="name"><span class="dot" style="--c: var(--bot-researcher)"></span>Researcher</div><p>Found the city housing rule and two tenant guides. Each claim links to its source.</p></div>
               <div class="msg"><div class="name"><span class="dot" style="--c: var(--bot-new)"></span>New Bot</div><p>Rent can rise once every twelve months, with 60 days' written notice. I drafted a reply to your landlord.</p></div>
               <div class="approval" id="approval">
-                <p id="approval-text"><b>Needs your approval:</b> send this reply from your Gmail.</p>
+                <p id="approval-text" aria-live="polite"><b>Needs your approval:</b> send this reply from your Gmail.</p>
                 <div class="choices" id="choices">
                   <button class="yes" type="button" data-choice="approved">Approve</button>
                   <button type="button" data-choice="declined">Not now</button>
                 </div>
+                <button class="again" id="again" type="button" hidden>Start over</button>
               </div>
             </div>
             <p class="note">An example thread. Nothing here is really sent.</p>
@@ -379,6 +406,7 @@
           </div></li>
         </ol>
       </section>
+      <p class="coming">Coming in 2027</p>
     </main>
 
     <footer>
@@ -405,15 +433,26 @@
       approved: "<b>Approved.</b> The reply went out from your Gmail.",
       declined: "<b>Not sent.</b> The bot will not send it unless you ask again.",
     };
-    document.querySelectorAll("#choices button").forEach((button) => {
+    const approval = document.getElementById("approval");
+    const approvalText = document.getElementById("approval-text");
+    const choices = document.getElementById("choices");
+    const again = document.getElementById("again");
+    const approvalAsk = approvalText.innerHTML;
+    choices.querySelectorAll("button").forEach((button) => {
       button.addEventListener("click", () => {
-        const approval = document.getElementById("approval");
         approval.dataset.state = button.dataset.choice;
-        document.getElementById("approval-text").innerHTML = approvalCopy[button.dataset.choice];
-        document.getElementById("choices").remove();
-        approval.tabIndex = -1;
-        approval.focus({ preventScroll: true });
+        approvalText.innerHTML = approvalCopy[button.dataset.choice];
+        choices.hidden = true;
+        again.hidden = false;
+        again.focus({ preventScroll: true });
       });
+    });
+    again.addEventListener("click", () => {
+      delete approval.dataset.state;
+      approvalText.innerHTML = approvalAsk;
+      choices.hidden = false;
+      again.hidden = true;
+      choices.querySelector("button").focus({ preventScroll: true });
     });
 
     // Play the thread once, when it first comes into view.
