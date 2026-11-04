@@ -3,599 +3,423 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Agni Bot · Message the bots that do the work</title>
-  <meta name="description" content="Agni Bot is a messaging app for named, specialised bots. Each bot has its own role and memory. It runs on your machine. Source-available, not open source.">
+  <title>Agni Bot: message the bots that do the work</title>
+  <meta name="description" content="Agni Bot is a messaging app for named, specialised bots. Each bot has its own job and memory, and the server runs on your own machine. Source-available, not open source.">
   <link rel="icon" type="image/svg+xml" href="assets/fire.svg">
   <meta name="theme-color" content="#0d0d0f">
   <style>
-    /* Agni's design tokens: apps/web/src/styles/tokens.css and apps/mac/DESIGN.md. */
+    /* Agni's tokens: apps/web/src/styles/tokens.css. The page is one conversation:
+       every section opens with the visitor's own message, and a bot answers. */
     :root {
       color-scheme: dark;
-      --paper: #0d0d0f;
+      --canvas: #0d0d0f;
       --surface: #17171a;
-      --card: #1f1f23;
+      --raised: #1f1f23;
+      --incoming: #1b1b1e;
+      /* The app's sent-message blue, sampled from the real client. */
+      --outgoing: #0371eb;
+      --hairline: rgb(255 255 255 / 8%);
+      --hairline-strong: rgb(255 255 255 / 16%);
       --ink: #f4f4f6;
-      --muted: #9a9aa1;
-      --rule: #2a2a2e;
+      --ink-2: #a3a3aa;
+      --on-light: #101012;
+      --light: #f1f1ec;
       --ember: #ff3146;
-      --ember-ink: #ff5a6a;
+      --ember-ink: #ff6b7a;
+      --ok: #65a765;
+      --wait: #f0b95a;
 
-      --dot-new: #f0b95a;
-      --dot-research: #5a9be0;
-      --dot-code: #5fb36a;
-      --dot-analyst: #a487dc;
+      /* The colours the server assigns each bot (agent/personas.ts). */
+      --bot-new: #f0b95a;
+      --bot-researcher: #5b9bd5;
+      --bot-coder: #65a765;
+      --bot-analyst: #9a7bd1;
 
-      /* One family (SF Pro via the system font), SF Mono for machine values. */
-      --serif: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-
-      --measure: 66ch;
+      --snappy: 160ms cubic-bezier(0.2, 0.9, 0.3, 1);
+      --enter: 520ms cubic-bezier(0.16, 1, 0.3, 1);
     }
 
     * { box-sizing: border-box; }
-
-    html { scroll-behavior: smooth; }
-
+    [hidden] { display: none !important; }
+    html { scroll-padding-top: 24px; }
+    @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
     body {
       margin: 0;
-      background: var(--paper);
+      background: var(--canvas);
       color: var(--ink);
-      font: 400 1.0625rem/1.6 var(--sans);
+      font: 400 1.0625rem/1.55 var(--sans);
       -webkit-font-smoothing: antialiased;
-    }
-
-    a { color: inherit; }
-
-    :focus-visible {
-      outline: 2px solid var(--ember);
-      outline-offset: 3px;
-      border-radius: 2px;
-    }
-
-    .skip {
-      position: absolute;
-      left: 12px;
-      top: -48px;
-      background: var(--ink);
-      color: var(--paper);
-      padding: 8px 12px;
-      z-index: 10;
-    }
-    .skip:focus { top: 12px; }
-
-    .wrap {
-      width: min(1120px, 100% - 48px);
-      margin-inline: auto;
-    }
-
-    /* Header */
-    .top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 24px;
-      padding: 22px 0;
-    }
-    .brand {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      font: 500 1.125rem/1 var(--serif);
-      text-decoration: none;
-    }
-    .brand img { width: 22px; height: 22px; }
-    .nav {
-      display: flex;
-      gap: 26px;
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      font-size: 0.9375rem;
-    }
-    .nav a { text-decoration: none; color: var(--muted); }
-    .nav a:hover { color: var(--ink); }
-
-    /* Hero */
-    .hero {
-      display: grid;
-      grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
-      gap: clamp(32px, 6vw, 80px);
-      align-items: center;
-      padding: clamp(40px, 8vw, 96px) 0 clamp(56px, 9vw, 112px);
-    }
-    .hero h1 {
-      font: 400 clamp(2.6rem, 5.4vw, 4.4rem)/1.02 var(--serif);
-      letter-spacing: -0.015em;
-      margin: 0 0 24px;
       font-optical-sizing: auto;
+      overflow-wrap: anywhere;
     }
-    .lede {
-      font-size: 1.1875rem;
-      color: var(--muted);
-      max-width: var(--measure);
-      margin: 0 0 32px;
-    }
-    .actions { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
-    .btn {
-      display: inline-block;
-      padding: 13px 22px;
-      background: var(--ink);
-      color: var(--paper);
-      font: 600 1rem/1 var(--sans);
-      text-decoration: none;
-      border-radius: 999px;
-    }
-    .btn:hover { background: #ffffff; }
-    .link {
-      font-weight: 600;
-      text-decoration: underline;
-      text-decoration-thickness: 1px;
-      text-underline-offset: 4px;
-    }
+    img { display: block; max-width: 100%; height: auto; }
+    a { color: inherit; }
+    p { margin: 0; }
+    :focus-visible { outline: 2px solid var(--ember); outline-offset: 3px; border-radius: 4px; }
 
-    /* The thread: the product itself, as the hero */
-    .thread {
-      background: var(--surface);
-      border-radius: 22px;
-      padding: 22px;
-      border: 1px solid var(--rule);
-    }
-    .thread-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      padding: 0 4px 16px;
-      border-bottom: 1px solid var(--rule);
-      margin-bottom: 18px;
-      font-family: var(--serif);
-      font-size: 1.125rem;
-    }
-    .thread-head small {
-      font: 400 0.8125rem/1 var(--sans);
-      color: var(--muted);
-    }
-    .msg {
-      max-width: 88%;
-      margin: 0 0 14px;
-    }
-    .msg .who {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.8125rem;
-      color: var(--muted);
-      margin-bottom: 5px;
-    }
-    .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
-    .msg p {
-      margin: 0;
-      background: var(--card);
-      border: 1px solid var(--rule);
-      border-radius: 16px 16px 16px 4px;
-      padding: 10px 14px;
-      font-size: 0.9375rem;
-    }
-    .msg.you { margin-left: auto; text-align: right; }
-    .msg.you .who { justify-content: flex-end; }
-    .msg.you p {
-      background: var(--ink);
-      color: var(--paper);
-      border-color: var(--ink);
-      border-radius: 16px 16px 4px 16px;
-      text-align: left;
-    }
-    .approval {
-      margin: 4px 0 0;
-      border-left: 3px solid var(--ember);
-      background: var(--card);
-      padding: 12px 14px;
-      border-radius: 0 12px 12px 0;
-      font-size: 0.9375rem;
-    }
-    .approval .ask { margin: 0 0 10px; }
-    .approval .ask b { color: var(--ember-ink); font-weight: 700; }
-    .approval .choices { display: flex; gap: 8px; }
-    .pill {
-      font: 600 0.875rem/1 var(--sans);
-      padding: 8px 12px;
-      border-radius: 999px;
-      border: 1px solid var(--ink);
-      color: var(--ink);
-    }
-    .pill.primary { background: var(--ink); color: var(--paper); }
-    .sample-note {
-      margin: 14px 4px 0;
-      font-size: 0.8125rem;
-      color: var(--muted);
-    }
+    .skip { position: absolute; left: 12px; top: -48px; z-index: 10; padding: 8px 12px; background: var(--light); color: var(--on-light); }
+    .skip:focus { top: 12px; }
+    .wrap { width: min(1120px, 100% - 48px); margin-inline: auto; }
 
-    /* Sections: a label column and a content column, split by a rule */
-    .section {
-      border-top: 1px solid var(--rule);
-      padding: clamp(40px, 6vw, 72px) 0;
-      display: grid;
-      grid-template-columns: minmax(0, 3fr) minmax(0, 7fr);
-      gap: clamp(24px, 5vw, 64px);
-    }
-    .section > h2 {
-      font: 400 1.75rem/1.2 var(--serif);
-      margin: 0;
-    }
-    .section > .body { max-width: var(--measure); }
-    .section p { margin: 0 0 16px; }
-    .section p:last-child { margin-bottom: 0; }
-
-    /* Roster: rows, not cards */
-    .roster {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-    }
-    .roster li {
-      display: grid;
-      grid-template-columns: 170px minmax(0, 1fr);
-      gap: 20px;
-      padding: 18px 0;
-      border-top: 1px solid var(--rule);
-    }
-    .roster li:first-child { border-top: 0; padding-top: 0; }
-    .roster .name {
-      font: 500 1.25rem/1.2 var(--serif);
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .roster .role { margin: 0; color: var(--muted); }
-
-    /* Speed ledger: a definition list */
-    .ledger {
-      margin: 0;
-      display: grid;
-      grid-template-columns: 170px minmax(0, 1fr);
-      gap: 0;
-    }
-    .ledger dt,
-    .ledger dd {
-      padding: 16px 0;
-      border-top: 1px solid var(--rule);
-      margin: 0;
-    }
-    .ledger dt { font-weight: 700; }
-    .ledger dd { color: var(--ink); }
-    .ledger dt:first-of-type,
-    .ledger dt:first-of-type + dd { border-top: 0; padding-top: 0; }
-
-    .ledger code,
-    .inline-code {
-      font: 400 0.875rem/1 var(--mono);
-      background: var(--surface);
-      padding: 2px 6px;
-      border-radius: 4px;
-    }
-
-    /* Connections: two plain lists */
-    .two {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 32px;
-    }
-    .two h3 {
-      font: 500 1.125rem/1.3 var(--serif);
-      margin: 0 0 12px;
-    }
-    .two ul {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-    }
-    .two li {
-      padding: 9px 0;
-      border-top: 1px solid var(--rule);
-    }
-    .two li:first-child { border-top: 0; padding-top: 0; }
-    .planned { color: var(--muted); }
-    .two h3.later { margin-top: 24px; }
-
-    /* Quickstart: a real sequence, so numbered */
-    .steps {
-      list-style: none;
-      counter-reset: step;
-      margin: 0;
-      padding: 0;
-    }
-    .steps li {
-      counter-increment: step;
-      display: grid;
-      grid-template-columns: 2.25rem minmax(0, 1fr);
-      gap: 0 14px;
-      padding: 18px 0;
-      border-top: 1px solid var(--rule);
-    }
-    .steps li:first-child { border-top: 0; padding-top: 0; }
-    .steps li::before {
-      content: counter(step);
-      font: 500 1.125rem/1.6 var(--serif);
-      color: var(--muted);
-    }
-    .steps h3 {
-      font: 500 1.125rem/1.3 var(--serif);
-      margin: 0 0 8px;
-    }
-    .steps p { margin: 0 0 10px; color: var(--muted); }
-    .cmd {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      background: var(--surface);
-      border: 1px solid var(--rule);
-      color: var(--ink);
-      border-radius: 12px;
-      padding: 12px 14px;
-      font: 400 0.875rem/1.5 var(--mono);
-      overflow-x: auto;
-    }
-    .cmd button {
-      flex: none;
-      font: 500 0.8125rem/1 var(--sans);
-      background: transparent;
-      color: var(--ink);
-      border: 1px solid #3a3a40;
-      border-radius: 999px;
-      padding: 7px 11px;
-      cursor: pointer;
-    }
-    .cmd button:hover { border-color: var(--ink); }
-
-    footer {
-      border-top: 1px solid var(--rule);
-      padding: 28px 0 40px;
-      color: var(--muted);
-      font-size: 0.9375rem;
-    }
-    footer p { margin: 0; }
-
-    /* One orchestrated moment: the thread writes itself in */
-    @media (prefers-reduced-motion: no-preference) {
-      .thread .msg,
-      .thread .approval {
-        animation: arrive 0.5s ease both;
-      }
-      .thread .msg:nth-of-type(2) { animation-delay: 0.35s; }
-      .thread .msg:nth-of-type(3) { animation-delay: 1.05s; }
-      .thread .approval { animation-delay: 1.75s; }
-      @keyframes arrive {
-        from { opacity: 0; transform: translateY(6px); }
-        to { opacity: 1; transform: none; }
-      }
-    }
-
-    /* Small screens */
-    @media (max-width: 860px) {
-      .hero,
-      .section,
-      .two {
-        grid-template-columns: 1fr;
-      }
-      .nav { display: none; }
-      .roster li,
-      .ledger {
-        grid-template-columns: 1fr;
-        gap: 6px;
-      }
-      .ledger dt { padding-bottom: 0; border-top: 0; }
-      .ledger dt + dd { padding-top: 4px; }
-      .ledger dt:first-of-type,
-      .ledger dt:first-of-type + dd { border-top: 0; }
-      .ledger dd { border-top: 0; padding-bottom: 14px; }
-      .ledger dd + dt { border-top: 1px solid var(--rule); padding-top: 14px; }
-    }
-
-    .deploy { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 18px;
-              padding: 4px 12px; border: 1px solid var(--rule); border-radius: 999px;
-              background: var(--card); font: 13px/1.4 var(--mono); color: var(--muted); text-decoration: none; }
-    .deploy .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--rule); flex: none; }
-    .deploy[data-state="ok"] .dot { background: var(--dot-code); }
-    .deploy[data-state="wait"] .dot { background: var(--dot-new); animation: pulse 1.2s infinite; }
+    /* Header: a translucent layer the page scrolls under, fading out instead of a divider */
+    .bar { position: sticky; top: 0; z-index: 5; background: rgb(13 13 15 / 86%); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%); }
+    .bar::after { content: ""; position: absolute; inset: 100% 0 auto; height: 16px; background: linear-gradient(rgb(13 13 15 / 50%), transparent); pointer-events: none; }
+    .top { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 32px; padding: 12px 0; }
+    .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; text-decoration: none; }
+    .nav { display: flex; gap: 24px; list-style: none; margin: 0; padding: 0; font-size: 0.9375rem; }
+    .nav a { color: var(--ink-2); text-decoration: none; transition: color var(--snappy); }
+    .deploy { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; font: 400 0.75rem/1.4 var(--mono); color: var(--ink-2); text-decoration: none; white-space: nowrap; }
+    .deploy .dot { background: var(--hairline-strong); }
+    .deploy[data-state="ok"] .dot { background: var(--ok); }
+    .deploy[data-state="wait"] .dot { background: var(--wait); animation: pulse 1.2s infinite; }
     .deploy[data-state="bad"] .dot { background: var(--ember); }
-    @keyframes pulse { 50% { opacity: .3; } }
-    @media (prefers-reduced-motion: reduce) { .deploy .dot { animation: none; } }
+    @keyframes pulse { 50% { opacity: 0.3; } }
+
+    .dot { display: inline-block; width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--c); }
+
+    /* Hero: the words, then the app itself */
+    .hero { padding: clamp(32px, 6vw, 72px) 0 0; }
+    .hero-text { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 24px 64px; align-items: end; margin-bottom: clamp(32px, 5vw, 56px); }
+    h1 { margin: 0; font: 500 clamp(2.75rem, 6.6vw, 5rem)/1 var(--sans); letter-spacing: -0.03em; text-wrap: balance; }
+    .hero .lede { color: var(--ink-2); font-size: 1.1875rem; line-height: 1.45; margin-bottom: 24px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
+    .btn { display: inline-block; padding: 12px 20px; border-radius: 12px; background: var(--light); color: var(--on-light); font-size: 1rem; font-weight: 600; line-height: 1.25; text-decoration: none; }
+    .link { font-weight: 500; text-decoration: underline; text-decoration-color: var(--hairline-strong); text-underline-offset: 4px; transition: text-decoration-color var(--snappy); }
+    .app { border-radius: 14px; border: 1px solid var(--hairline-strong); overflow: hidden; }
+    .app img { width: 100%; }
+    figure { margin: 0; }
+    figcaption { margin-top: 12px; color: var(--ink-2); font-size: 0.875rem; }
+
+    /* A section is one exchange: your message, then a bot's answer */
+    .turn { padding-top: clamp(72px, 10vw, 128px); }
+    .ask { width: fit-content; max-width: 80%; margin: 0 0 32px auto; padding: 10px 16px; border-radius: 20px 20px 4px 20px; background: var(--outgoing); color: #fff; font: 400 clamp(1.0625rem, 1.7vw, 1.25rem)/1.35 var(--sans); }
+    .who { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--ink-2); font-size: 0.875rem; }
+    .lead { max-width: 20ch; margin-bottom: 40px; font-size: clamp(2rem, 4.2vw, 3.25rem); font-weight: 500; line-height: 1.08; letter-spacing: -0.022em; text-wrap: balance; }
+    .prose { color: var(--ink-2); max-width: 56ch; }
+    .prose + .prose { margin-top: 16px; }
+    .prose b { color: var(--ink); font-weight: 500; }
+    code { padding: 2px 6px; border-radius: 4px; background: var(--raised); color: var(--ink); font: 400 0.85em/1 var(--mono); }
+    .split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 40px 64px; align-items: start; }
+
+    /* Bots: the real chat list, not a set of cards */
+    .roster { list-style: none; margin: 0; padding: 8px; border-radius: 16px; background: var(--surface); }
+    .roster li { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; padding: 12px; }
+    .roster li + li { box-shadow: 0 -1px 0 var(--hairline); }
+    .avatar { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: var(--c); color: var(--on-light); font-weight: 600; }
+    .avatar.add { background: none; border: 1px dashed var(--hairline-strong); color: var(--ink-2); font-weight: 400; }
+    .roster b { display: block; font-weight: 500; line-height: 1.35; }
+    .roster p { color: var(--ink-2); font-size: 0.9375rem; line-height: 1.45; }
+
+    /* The morning brief: the one lit sheet on a dark page */
+    .brief { grid-template-columns: minmax(0, 4fr) minmax(0, 7fr); }
+    .brief .prose { margin-bottom: 24px; }
+    .bubble { width: fit-content; max-width: 100%; padding: 12px 16px; border-radius: 20px 20px 20px 4px; background: var(--incoming); border: 1px solid var(--hairline); font-size: 0.9375rem; line-height: 1.4; }
+    .bubble p + p { margin-top: 12px; }
+    .bubble span { display: block; color: var(--ink-2); }
+    .sheet img { border-radius: 8px 8px 0 0; -webkit-mask-image: linear-gradient(#000 80%, transparent); mask-image: linear-gradient(#000 80%, transparent); }
+
+    /* What else */
+    .abilities { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px 40px; margin: 0; }
+    .abilities div { padding-top: 16px; border-top: 1px solid var(--hairline-strong); }
+    .abilities dt { font-weight: 500; margin-bottom: 4px; }
+    .abilities dd { margin: 0; color: var(--ink-2); font-size: 0.9375rem; line-height: 1.45; }
+
+    /* Approval: the thread you can actually press */
+    .thread { padding: 20px; border-radius: 20px; background: var(--surface); border: 1px solid var(--hairline); }
+    .msg { max-width: 88%; margin-bottom: 12px; }
+    .msg .name { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; color: var(--ink-2); font-size: 0.8125rem; }
+    .msg p { width: fit-content; padding: 8px 14px; border-radius: 18px 18px 18px 4px; background: var(--raised); font-size: 0.9375rem; line-height: 1.4; }
+    .msg.you { margin-left: auto; }
+    .msg.you p { margin-left: auto; border-radius: 18px 18px 4px 18px; background: var(--outgoing); color: #fff; }
+    .approval { margin-top: 16px; padding: 12px 16px; border-left: 3px solid var(--ember); border-radius: 0 12px 12px 0; background: var(--raised); font-size: 0.9375rem; transition: border-color var(--snappy); }
+    .approval[data-state="approved"] { border-color: var(--ok); }
+    .approval[data-state="declined"] { border-color: var(--hairline-strong); }
+    .approval p { margin-bottom: 12px; }
+    .approval b { font-weight: 600; color: var(--ember-ink); }
+    .approval[data-state] b { color: var(--ink); }
+    .approval[data-state] p { margin-bottom: 0; }
+    .choices { display: flex; gap: 8px; }
+    .choices button { min-height: 36px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--hairline-strong); background: none; color: var(--ink); font: 500 0.875rem/1 var(--sans); cursor: pointer; }
+    .choices .yes { background: var(--light); border-color: var(--light); color: var(--on-light); }
+    .again { min-height: 36px; margin-top: 4px; padding: 0; border: 0; background: none; color: var(--ink-2); font: 500 0.875rem/1 var(--sans); text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
+    .note { margin-top: 12px; color: var(--ink-2); font-size: 0.875rem; }
+    .gated { margin: 24px 0 0; padding: 0; list-style: none; }
+    .gated li { padding: 12px 0; border-top: 1px solid var(--hairline); }
+    .gated li:last-child { border-bottom: 1px solid var(--hairline); }
+
+    /* Speed: the limits are the design */
+    .limits { margin: 0; }
+    .limits div { display: grid; grid-template-columns: minmax(120px, 2fr) minmax(0, 7fr); gap: 4px 32px; align-items: baseline; padding: 16px 0; border-top: 1px solid var(--hairline-strong); }
+    .limits dt { font-size: clamp(1.75rem, 3.4vw, 2.5rem); font-weight: 500; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .limits dd { margin: 0; color: var(--ink-2); max-width: 60ch; }
+    .limits dd b { color: var(--ink); font-weight: 500; }
+
+    /* Where it lives */
+    .status { margin: 0; }
+    .status div { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 4px 16px; padding: 16px 0; border-top: 1px solid var(--hairline-strong); }
+    .status dt { font-weight: 500; }
+    .status dd { margin: 0; color: var(--ink-2); }
+
+    /* Install: a real sequence, so it is numbered */
+    .steps { list-style: none; counter-reset: step; margin: 0; padding: 0; max-width: 760px; }
+    .steps li { counter-increment: step; display: grid; grid-template-columns: 32px minmax(0, 1fr); padding: 20px 0; border-top: 1px solid var(--hairline-strong); }
+    .steps li::before { content: counter(step); color: var(--ink-2); font-weight: 500; }
+    .steps b { font-weight: 500; }
+    .steps p { color: var(--ink-2); margin-bottom: 12px; }
+    .steps p:last-child { margin-bottom: 0; }
+    .steps p b { color: var(--ink); }
+    .cmd { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px 8px 16px; border-radius: 12px; background: var(--surface); border: 1px solid var(--hairline); font: 400 0.875rem/1.5 var(--mono); }
+    .cmd span { overflow-x: auto; white-space: nowrap; }
+    .cmd button { flex: none; min-height: 32px; padding: 0 12px; border: 1px solid var(--hairline-strong); border-radius: 8px; background: none; color: var(--ink); font: 500 0.8125rem/1 var(--sans); cursor: pointer; }
+
+    .coming { margin-top: clamp(72px, 10vw, 128px); color: var(--ember); font-size: min(13.2vw, 168px); font-weight: 500; line-height: 1; letter-spacing: -0.04em; text-wrap: balance; }
+
+    footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; margin-top: clamp(40px, 5vw, 64px); padding: 24px 0 40px; border-top: 1px solid var(--hairline); color: var(--ink-2); font-size: 0.9375rem; }
+
+    /* Press feedback is instant, on the way down */
+    .btn, .choices button, .cmd button, .again { touch-action: manipulation; -webkit-tap-highlight-color: transparent; transition: background-color var(--snappy), transform 100ms ease-out; }
+    .btn:active, .choices button:active, .cmd button:active { transform: scale(0.97); }
+    @media (hover: hover) {
+      .nav a:hover, .deploy:hover, .again:hover { color: var(--ink); }
+      .link:hover { text-decoration-color: currentColor; }
+      .btn:hover, .choices .yes:hover { background: #fff; }
+      .choices button:not(.yes):hover, .cmd button:hover { background: var(--hairline); }
+    }
+
+    /* One orchestrated moment: the thread arrives message by message */
+    @media (prefers-reduced-motion: no-preference) {
+      .thread.playing > * { animation: arrive var(--enter) both; }
+      .thread.playing > :nth-child(2) { animation-delay: 300ms; }
+      .thread.playing > :nth-child(3) { animation-delay: 900ms; }
+      .thread.playing > :nth-child(4) { animation-delay: 1500ms; }
+      .approval[data-state] #approval-text { animation: arrive var(--enter) both; }
+      @keyframes arrive { from { opacity: 0; transform: translateY(8px); } }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .deploy .dot { animation: none !important; }
+      .btn:active, .choices button:active, .cmd button:active { transform: none; }
+    }
+    @media (prefers-reduced-transparency: reduce) {
+      .bar { background: var(--canvas); -webkit-backdrop-filter: none; backdrop-filter: none; }
+    }
+    @media (prefers-contrast: more) {
+      :root { --ink-2: #d4d4da; --hairline: rgb(255 255 255 / 28%); --hairline-strong: rgb(255 255 255 / 48%); }
+      .bar { background: var(--canvas); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 1px 0 var(--hairline-strong); }
+      .bar::after { display: none; }
+    }
+
+    @media (max-width: 860px) {
+      .nav { display: none; }
+      .hero-text, .split, .brief { grid-template-columns: minmax(0, 1fr); }
+      .abilities { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .lead { margin-bottom: 32px; }
+    }
+    @media (max-width: 560px) {
+      .wrap { width: calc(100% - 32px); }
+      .app img { -webkit-mask-image: linear-gradient(to right, #000 85%, transparent); mask-image: linear-gradient(to right, #000 85%, transparent); }
+      .abilities { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+      .limits div { grid-template-columns: minmax(0, 1fr); }
+      .status div { grid-template-columns: minmax(0, 1fr); }
+      .top { column-gap: 16px; }
+      .deploy { font-size: 0.6875rem; white-space: normal; }
+      .coming { font-size: 21vw; }
+    }
   </style>
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
 
-  <div class="wrap">
-    <header class="top">
+  <header class="bar">
+    <div class="wrap top">
       <a class="brand" href="#">
-        <img src="assets/fire.svg" alt="" width="22" height="22" onerror="this.onerror=null; this.src='public/assets/fire.svg';">
+        <img src="assets/fire.svg" alt="" width="20" height="20">
         Agni Bot
       </a>
       <ul class="nav">
         <li><a href="#bots">Bots</a></li>
-        <li><a href="#speed">Speed</a></li>
-        <li><a href="#yours">Yours to run</a></li>
-        <li><a href="#run">Run it</a></li>
+        <li><a href="#brief">Morning brief</a></li>
+        <li><a href="#control">Approvals</a></li>
+        <li><a href="#run">Install</a></li>
       </ul>
-    </header>
+      <a class="deploy" id="deploy" href="https://github.com/NachikethReddyY/agni-bot/actions" target="_blank" rel="noopener" aria-live="polite">
+        <span class="dot"></span><span id="deploy-text">Checking deploy</span>
+      </a>
+    </div>
+  </header>
 
+  <div class="wrap">
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">
-        <div>
-          <a class="deploy" id="deploy" href="https://github.com/NachikethReddyY/agni-bot/actions" target="_blank" rel="noopener" aria-live="polite">
-            <span class="dot"></span><span id="deploy-text">Checking deploy…</span>
-          </a>
+        <div class="hero-text">
           <h1 id="hero-title">Message the bots that do the work.</h1>
-          <p class="lede">Each bot has its own name, its own job, and its own memory. You talk to them the way you would message a friend. The server runs on your machine, and speed comes before polish.</p>
-          <div class="actions">
-            <a class="btn" href="#run">Run it locally</a>
-            <a class="link" href="#bots">Meet the bots</a>
-          </div>
-        </div>
-
-        <div>
-          <div class="thread">
-            <div class="thread-head">
-              <span>New Bot</span>
-              <small>one conversation, it never resets</small>
-            </div>
-
-            <div class="msg you">
-              <div class="who">You</div>
-              <p>What are the rules on rent increases for our lease?</p>
-            </div>
-
-            <div class="msg">
-              <div class="who"><span class="dot" style="background: var(--dot-research)"></span>Researcher</div>
-              <p>Found the city housing rule and two tenant guides. The summary links each claim to its source.</p>
-            </div>
-
-            <div class="msg">
-              <div class="who"><span class="dot" style="background: var(--dot-new)"></span>New Bot</div>
-              <p>Rent can rise once every twelve months, with 60 days' written notice. Want me to draft a reply to the landlord?</p>
-            </div>
-
-            <div class="approval">
-              <p class="ask"><b>Needs your approval:</b> send this reply from your Gmail to the landlord.</p>
-              <div class="choices">
-                <span class="pill primary">Approve</span>
-                <span class="pill">Not now</span>
-              </div>
+          <div>
+            <p class="lede">Each bot has its own name, its own job and its own memory. You text them like a friend, and the server runs on your own machine.</p>
+            <div class="actions">
+              <a class="btn" href="#run">Install Agni Bot</a>
+              <a class="link" href="#bots">Meet the bots</a>
             </div>
           </div>
-          <p class="sample-note">An illustrative thread. The bots and replies are examples.</p>
         </div>
+        <figure class="app">
+          <picture>
+            <source media="(max-width: 560px)" srcset="assets/agni-home-phone.jpg" width="438" height="432">
+            <img src="assets/agni-home.jpg" width="1280" height="504" fetchpriority="high" alt="The Agni Bot web app: a list of bots on the left, and a conversation with a bot named Akshay on the right, ending with that day's morning brief.">
+          </picture>
+        </figure>
       </section>
 
-      <section class="section" id="bots" aria-labelledby="bots-title">
-        <h2 id="bots-title">One bot for each kind of job</h2>
-        <div class="body">
-          <p>Bots are specialists. The front desk takes your message and hands the heavy work to the bot that does it, then gives you the answer. You can add more bots, and each keeps its own memory.</p>
+      <section class="turn" id="bots" aria-labelledby="bots-ask">
+        <h2 class="ask" id="bots-ask">Who am I actually talking to?</h2>
+        <div class="who"><span class="dot" style="--c: var(--bot-new)"></span>New Bot</div>
+        <p class="lead">One bot for each kind of job.</p>
+        <div class="split">
+          <div>
+            <p class="prose">You message the front desk. It answers what it can and hands the heavy work to the bot built for it, then brings the answer back.</p>
+            <p class="prose">Rename any of them, or put two or more in one room and use <code>@name</code> to choose who replies. Each keeps its own memory.</p>
+          </div>
           <ul class="roster">
-            <li>
-              <span class="name"><span class="dot" style="background: var(--dot-new)"></span>New Bot</span>
-              <p class="role">Front desk. Replies fast, hands work to specialists, and brings their answers back to you.</p>
-            </li>
-            <li>
-              <span class="name"><span class="dot" style="background: var(--dot-research)"></span>Researcher</span>
-              <p class="role">Finds sources on the open web and returns a short brief with links.</p>
-            </li>
-            <li>
-              <span class="name"><span class="dot" style="background: var(--dot-code)"></span>Coder</span>
-              <p class="role">Reads, changes, and runs code in the workspace you give it, then reports what changed.</p>
-            </li>
-            <li>
-              <span class="name"><span class="dot" style="background: var(--dot-analyst)"></span>Analyst</span>
-              <p class="role">Compares options, names the trade-offs, and recommends one.</p>
-            </li>
+            <li><span class="avatar" style="--c: var(--bot-new)" aria-hidden="true">N</span><div><b>New Bot</b><p>Front desk. Replies fast, decides who should do the work, and brings the answers back.</p></div></li>
+            <li><span class="avatar" style="--c: var(--bot-researcher)" aria-hidden="true">R</span><div><b>Researcher</b><p>Finds sources on the open web and returns a brief with links.</p></div></li>
+            <li><span class="avatar" style="--c: var(--bot-coder)" aria-hidden="true">C</span><div><b>Coder</b><p>Reads, writes and runs code in the workspace.</p></div></li>
+            <li><span class="avatar" style="--c: var(--bot-analyst)" aria-hidden="true">A</span><div><b>Analyst</b><p>Compares options, names the trade-offs, and recommends one.</p></div></li>
+            <li><span class="avatar add" aria-hidden="true">+</span><div><b>Your next bot</b><p>Name it, describe its job, and pick the model it runs on.</p></div></li>
           </ul>
         </div>
       </section>
 
-      <section class="section" id="speed" aria-labelledby="speed-title">
-        <h2 id="speed-title">Speed is the spec</h2>
-        <div class="body">
-          <p>A quick question should get a quick answer. The server keeps two separate paths, and each has its own limits.</p>
-          <dl class="ledger">
-            <dt>Quick questions</dt>
-            <dd>One model call and no tools. The prompt holds at most 16 earlier messages and 6 facts the bot has kept.</dd>
-            <dt>Longer work</dt>
-            <dd>A separate task run that can use tools, capped at 16 tool calls and 16,000 tokens per run.</dd>
-            <dt>Provider failover</dt>
-            <dd>Switches provider only before the first token. A stream that dies mid-answer ends with an error, and it never repeats text from another provider.</dd>
-            <dt>Timeouts</dt>
-            <dd>First token within 30 seconds, and a whole turn within 2 minutes. Either limit ends the turn with an error.</dd>
-            <dt>The gate</dt>
-            <dd>The <span class="inline-code">agni bench</span> check fails if the quick-question p50 goes above 1.5 seconds.</dd>
-          </dl>
+      <section class="turn" id="brief" aria-labelledby="brief-ask">
+        <h2 class="ask" id="brief-ask">What did I miss while I was asleep?</h2>
+        <div class="who"><span class="dot" style="--c: var(--bot-new)"></span>New Bot</div>
+        <p class="lead">Your own morning brief, every day.</p>
+        <div class="split brief">
+          <div>
+            <p class="prose">At 07:55 your time, one message lands in your chat with your open tasks, the links you saved and what your bot remembers. You get a notification, and nothing else to open.</p>
+            <div class="bubble">
+              <p>Morning brief</p>
+              <p>Tasks<span>Renew the lease, due Friday</span></p>
+              <p>Recently saved links<span>City housing rules</span></p>
+              <p>Recent memories<span>You prefer replies before 10:00</span></p>
+            </div>
+            <p class="note">The brief as it arrives today, with example content.</p>
+          </div>
+          <figure class="sheet">
+            <img src="assets/agni-express.jpg" width="1082" height="1118" loading="lazy" alt="The Agni Express, a newspaper-style morning brief. A painting of a harbour at sunrise sits under the masthead, with the words: Start with the light, and the rest follows.">
+            <figcaption>Coming next: The Agni Express, the same brief as a newspaper. This is a design preview.</figcaption>
+          </figure>
         </div>
       </section>
 
-      <section class="section" id="yours" aria-labelledby="yours-title">
-        <h2 id="yours-title">Yours to run</h2>
-        <div class="body">
-          <p>The server runs as a background process on your Mac. Clients pair with it over Tailscale, and it listens only on loopback or your Tailscale address. Nothing is exposed to the public internet.</p>
-          <p>Model keys stay in the server's own <span class="inline-code">.env</span>. Clients and model prompts never see them. Free tiers from Groq, Cerebras, NVIDIA NIM, Gemini, OpenRouter, and a local LM Studio can all serve a bot, and so can your ChatGPT plan.</p>
-          <p>Some actions wait for you: shell commands, file writes outside scratch space, and any email sent from an account other than the bot's own mailbox.</p>
-        </div>
+      <section class="turn" id="more" aria-labelledby="more-ask">
+        <h2 class="ask" id="more-ask">What happens when I close the tab?</h2>
+        <div class="who"><span class="dot" style="--c: var(--bot-analyst)"></span>Analyst</div>
+        <p class="lead">The work keeps going, and you hear about it.</p>
+        <dl class="abilities">
+          <div><dt>Background jobs</dt><dd>Ask for something long and it runs on the server, not in your browser.</dd></div>
+          <div><dt>Routines</dt><dd>Recurring checks on a schedule. If nothing changed, the model is never called.</dd></div>
+          <div><dt>Handoffs</dt><dd>Bots pass work to each other, and you can see who did what.</dd></div>
+          <div><dt>Tasks and reminders</dt><dd>Your bots track what is open, and remind you at the time you set.</dd></div>
+          <div><dt>Push notifications</dt><dd>The web app can alert you even when the tab is closed.</dd></div>
+          <div><dt>Bot debugger</dt><dd>See every turn, every tool call, and why a run stopped.</dd></div>
+        </dl>
       </section>
 
-      <section class="section" aria-labelledby="connections-title">
-        <h2 id="connections-title">Connections</h2>
-        <div class="body">
-          <div class="two">
-            <div>
-              <h3>Working now</h3>
-              <ul>
-                <li>Gmail: search, read, draft, and send, with approval rules</li>
-                <li>Firecrawl: web search and page reading</li>
-              </ul>
+      <section class="turn" id="control" aria-labelledby="control-ask">
+        <h2 class="ask" id="control-ask">Will it do things without asking me?</h2>
+        <div class="who"><span class="dot" style="--c: var(--bot-coder)"></span>Coder</div>
+        <p class="lead">Not the things that matter.</p>
+        <div class="split">
+          <div>
+            <p class="prose">Risky actions stop and wait for you. Press a button on the right to see how it feels.</p>
+            <ul class="gated">
+              <li>Shell commands</li>
+              <li>Writing files outside its scratch space</li>
+              <li>Sending email from your account, or changing your calendar</li>
+              <li>Payments</li>
+            </ul>
+          </div>
+          <div>
+            <div class="thread" id="thread">
+              <div class="msg you"><p>What are the rules on rent increases for our lease?</p></div>
+              <div class="msg"><div class="name"><span class="dot" style="--c: var(--bot-researcher)"></span>Researcher</div><p>Found the city housing rule and two tenant guides. Each claim links to its source.</p></div>
+              <div class="msg"><div class="name"><span class="dot" style="--c: var(--bot-new)"></span>New Bot</div><p>Rent can rise once every twelve months, with 60 days' written notice. I drafted a reply to your landlord.</p></div>
+              <div class="approval" id="approval">
+                <p id="approval-text" aria-live="polite"><b>Needs your approval:</b> send this reply from your Gmail.</p>
+                <div class="choices" id="choices">
+                  <button class="yes" type="button" data-choice="approved">Approve</button>
+                  <button type="button" data-choice="declined">Not now</button>
+                </div>
+                <button class="again" id="again" type="button" hidden>Start over</button>
+              </div>
             </div>
-            <div>
-              <h3>Set up, not wired yet</h3>
-              <ul>
-                <li class="planned">Calendar, Drive, Notion, and Granola</li>
-              </ul>
-              <h3 class="later">Planned</h3>
-              <ul>
-                <li class="planned">Slack</li>
-                <li class="planned">Discord</li>
-              </ul>
-            </div>
+            <p class="note">An example thread. Nothing here is really sent.</p>
           </div>
         </div>
       </section>
 
-      <section class="section" id="run" aria-labelledby="run-title">
-        <h2 id="run-title">Run it</h2>
-        <div class="body">
-          <p>You need Bun and at least one free model key. The steps below start the server and open a chat in your terminal. The browser client is in <span class="inline-code">apps/web</span>.</p>
-          <ol class="steps">
-            <li>
-              <div>
-                <h3>Install and configure</h3>
-                <p>Add at least one free provider key to <span class="inline-code">.env</span>.</p>
-                <div class="cmd"><span>bun install && cp .env.example .env</span><button type="button" data-copy="bun install && cp .env.example .env">Copy</button></div>
-              </div>
-            </li>
-            <li>
-              <div>
-                <h3>Start the server</h3>
-                <p>The daemon runs in the background and reports success once its health check answers.</p>
-                <div class="cmd"><span>bun run migrate && bun run daemon start</span><button type="button" data-copy="bun run migrate && bun run daemon start">Copy</button></div>
-              </div>
-            </li>
-            <li>
-              <div>
-                <h3>Pair a client</h3>
-                <p>The token prints once. Save it.</p>
-                <div class="cmd"><span>bun run pair --name Mac</span><button type="button" data-copy="bun run pair --name Mac">Copy</button></div>
-              </div>
-            </li>
-            <li>
-              <div>
-                <h3>Talk to a bot</h3>
-                <p>Type <span class="inline-code">/help</span> for the list of commands.</p>
-                <div class="cmd"><span>bun run chat</span><button type="button" data-copy="bun run chat">Copy</button></div>
-              </div>
-            </li>
-          </ol>
+      <section class="turn" id="speed" aria-labelledby="speed-ask">
+        <h2 class="ask" id="speed-ask">Will it keep me waiting?</h2>
+        <div class="who"><span class="dot" style="--c: var(--bot-analyst)"></span>Analyst</div>
+        <p class="lead">Speed comes before polish.</p>
+        <dl class="limits">
+          <div><dt>1.5 s</dt><dd><b>The target for a typical reply.</b> The <code>agni bench</code> check fails if the median goes above it.</dd></div>
+          <div><dt>30 s</dt><dd><b>The wait for a first word.</b> Replies stream in as they are written. If a model stays silent, Agni tries the next provider you set up.</dd></div>
+          <div><dt>2 min</dt><dd><b>The limit for one turn.</b> Longer work can run as a background job.</dd></div>
+          <div><dt>16</dt><dd><b>Recent messages sent with each prompt.</b> Older ones are summarised, so requests stay small.</dd></div>
+          <div><dt>0</dt><dd><b>Repeated words when a provider fails.</b> It only switches provider before the first token. If a stream dies mid-answer, you get an error.</dd></div>
+        </dl>
+      </section>
+
+      <section class="turn" id="yours" aria-labelledby="yours-ask">
+        <h2 class="ask" id="yours-ask">Where does all my stuff live?</h2>
+        <div class="who"><span class="dot" style="--c: var(--bot-coder)"></span>Coder</div>
+        <p class="lead">On your machine, in one folder.</p>
+        <div class="split">
+          <div>
+            <p class="prose">Your chats, memory and settings stay in <code>~/.agni</code>. The server starts when you log in and listens only on your own machine by default. A one-time code pairs your browser.</p>
+            <p class="prose">Model keys stay on the server and never reach the apps. What you ask does go to the model provider you pick, unless you run a local one with LM Studio.</p>
+          </div>
+          <dl class="status">
+            <div><dt>Models</dt><dd>Groq, Cerebras, NVIDIA NIM, Gemini, OpenRouter and LM Studio, or your ChatGPT plan. Each bot can use its own.</dd></div>
+            <div><dt>Connected</dt><dd>Gmail, Google Calendar, Google Drive, Firecrawl for web search, and Granola, Notion or other MCP servers.</dd></div>
+            <div><dt>Planned</dt><dd>Slack and Discord. Not built yet.</dd></div>
+          </dl>
         </div>
       </section>
+
+      <section class="turn" id="run" aria-labelledby="run-ask">
+        <h2 class="ask" id="run-ask">How do I start?</h2>
+        <div class="who"><span class="dot" style="--c: var(--bot-new)"></span>New Bot</div>
+        <p class="lead">Two commands, then say hi.</p>
+        <ol class="steps">
+          <li><div>
+            <p><b>Install it.</b> You need <a class="link" href="https://bun.sh">Bun 1.3 or newer</a>, on macOS or Linux.</p>
+            <div class="cmd"><span>npm i -g agni-bot</span><button type="button" data-copy="npm i -g agni-bot">Copy</button></div>
+          </div></li>
+          <li><div>
+            <p><b>Set it up.</b> This creates <code>~/.agni</code>, installs the login service, and opens the app already paired.</p>
+            <div class="cmd"><span>agni setup</span><button type="button" data-copy="agni setup">Copy</button></div>
+          </div></li>
+          <li><div>
+            <p><b>Give it a model.</b> Open Settings, then Models &amp; providers. Add a free key or connect your ChatGPT plan, and your first bot is ready.</p>
+          </div></li>
+        </ol>
+      </section>
+      <p class="coming">Coming in 2027</p>
     </main>
 
     <footer>
-      <p><b>Agni Bot</b> is source-available, not open source. License terms are coming soon.</p>
+      <p>Agni Bot is source-available, not open source. License terms are coming soon.</p>
+      <a class="link" href="https://github.com/NachikethReddyY/agni-bot">Source on GitHub</a>
     </footer>
   </div>
 
   <script>
     document.querySelectorAll("[data-copy]").forEach((button) => {
       button.addEventListener("click", async () => {
-        const text = button.getAttribute("data-copy");
         try {
-          await navigator.clipboard.writeText(text);
+          await navigator.clipboard.writeText(button.dataset.copy);
           button.textContent = "Copied";
         } catch {
           button.textContent = "Select to copy";
@@ -604,8 +428,46 @@
       });
     });
 
+    // The approval demo: same words the buttons promise, nothing leaves the page.
+    const approvalCopy = {
+      approved: "<b>Approved.</b> The reply went out from your Gmail.",
+      declined: "<b>Not sent.</b> The bot will not send it unless you ask again.",
+    };
+    const approval = document.getElementById("approval");
+    const approvalText = document.getElementById("approval-text");
+    const choices = document.getElementById("choices");
+    const again = document.getElementById("again");
+    const approvalAsk = approvalText.innerHTML;
+    choices.querySelectorAll("button").forEach((button) => {
+      button.addEventListener("click", () => {
+        approval.dataset.state = button.dataset.choice;
+        approvalText.innerHTML = approvalCopy[button.dataset.choice];
+        choices.hidden = true;
+        again.hidden = false;
+        again.focus({ preventScroll: true });
+      });
+    });
+    again.addEventListener("click", () => {
+      delete approval.dataset.state;
+      approvalText.innerHTML = approvalAsk;
+      choices.hidden = false;
+      again.hidden = true;
+      choices.querySelector("button").focus({ preventScroll: true });
+    });
+
+    // Play the thread once, when it first comes into view.
+    const thread = document.getElementById("thread");
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver((entries, observer) => {
+        if (!entries[0].isIntersecting) return;
+        thread.classList.add("playing");
+        observer.disconnect();
+      }, { threshold: 0.3 }).observe(thread);
+    }
+
     // Deploy status: latest CI run on main, from GitHub's public API (60 requests/hour per visitor).
     async function checkDeploy() {
+      if (document.hidden) return;
       const pill = document.getElementById("deploy");
       const text = document.getElementById("deploy-text");
       try {
@@ -615,9 +477,10 @@
         if (!run) { text.textContent = "No deploys yet"; return; }
         const state = run.status !== "completed" ? "wait" : run.conclusion === "success" ? "ok" : "bad";
         const label = { ok: "Deployed", wait: "Deploying", bad: "Deploy failed" }[state];
+        const when = new Date(run.head_commit?.timestamp ?? run.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short" });
         pill.dataset.state = state;
         pill.href = run.html_url;
-        text.textContent = `${label} · ${run.head_sha.slice(0, 7)} · ${new Date(run.head_commit.timestamp).toLocaleDateString()}`;
+        text.textContent = `${label} ${run.head_sha.slice(0, 7)}, ${when}`;
       } catch {
         delete pill.dataset.state;
         text.textContent = "Deploy status unavailable";
